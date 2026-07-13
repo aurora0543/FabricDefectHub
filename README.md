@@ -1,77 +1,240 @@
 # FabricDefectHub
 
-An open-source benchmarking platform for fabric defect detection, designed for real industry evaluation.
+面向真实布匹质检场景的统一缺陷检测 Benchmark 平台。
 
----
+> [!IMPORTANT]
+> 项目目前处于设计与早期开发阶段。README 描述的是目标架构和实施路线，接口与目录会随着首个可运行闭环逐步稳定。
 
-## 📢 Project Status: Under Development 🚀
+## 项目愿景
 
-> **Note:** This project is currently in its active initial planning and development phase. The core architecture, unified interfaces, and data pipelines are being actively built by the research team at Beijing Institute of Technology (BIT). Features and APIs are subject to change.
+FabricDefectHub 不重新实现所有模型，而是在统一的数据、模型、评测和端侧性能接口之上，整合三类缺陷检测范式：
 
----
+| 后端 | 代表模型 | 适用场景 |
+| --- | --- | --- |
+| `ultralytics` | YOLOv8n/v8s、YOLO11n | 有缺陷标注，追求端侧实时检测 |
+| `mmdetection` | Faster R-CNN、Cascade R-CNN、Mask R-CNN、DETR、DINO | 有标注条件下的全面监督检测对比 |
+| `anomalib` | PatchCore、PaDiM、RD4AD、EfficientAD、SuperSimpleNet | 缺陷样本少，只有正常样本或少量异常样本 |
 
-## 📌 Overview
+项目的主要工作集中在：
 
-**FabricDefectHub** aims to be a unified, fair, and comprehensive benchmarking platform for automated textile surface inspection. In real-world manufacturing, defect detection methods vary drastically—ranging from standard supervised object detection to unsupervised anomaly localization approaches. 
+- 统一适配不同数据集、任务和算法框架；
+- 标准化准确率与工业指标评测；
+- 对 PyTorch、ONNX Runtime、TensorRT 等推理后端进行公平测试；
+- 支持真实布匹产线中的设备、工况和欠检/过检分析；
+- 用统一结果契约连接实验后端与可视化前端。
 
-This platform bridges these architectural divides by providing a centralized top-level abstraction layer over three state-of-the-art computer vision ecosystems, allowing industrial engineers and researchers to benchmark models under identical hardware constraints and standardized data pipelines.
+## 开发原则
 
----
+项目采用“前端原型先行，但尽快打通真实闭环”的方式推进：
 
-## ⚙️ Core Architecture & Backends
+1. 使用 mock 数据完成可点击的前端原型，同时确定数据契约；
+2. 打通 `YOLOv8n + 一个数据集 + PC 推理 + 结果 JSON` 的最小闭环；
+3. 让前端读取真实实验 JSON，验证契约是否合理；
+4. 再依次接入 Anomalib、MMDetection、ONNX/TensorRT 和端侧设备测试。
 
-FabricDefectHub integrates three distinct deep learning frameworks into a unified execution engine, catering to different industrial production scenarios:
+前端服务于统一 Benchmark 设计，不作为一个脱离真实训练、推理和评测流程的独立项目长期开发。
 
-1. **YOLO Backend (`ultralytics`)**
-   * Targeted for high-throughput, edge-device deployments requiring single-stage real-time object detection (e.g., YOLOv8, YOLOv10, YOLOv11).
-2. **OpenMMLab Backend (`mmdetection`)**
-   * Reserved for comprehensive supervised learning evaluations, covering classic two-stage detectors, anchor-free models, and modern Transformer-based architectures (e.g., Faster R-CNN, Cascade R-CNN, DETR, DINO).
-3. **Anomaly Lab Backend (`anomalib`)**
-   * Dedicated to unsupervised and one-class anomaly detection methods, optimized for scenarios where negative (defective) training samples are extremely scarce.
+## 前端原型
 
----
+第一阶段使用 mock 数据实现以下页面：
 
-## 🗺️ Repository Directory Structure
+- **数据集页**：数据集名称、任务类型、样本数、类别、标注格式和工况信息；
+- **模型页**：YOLO、MMDetection、Anomalib 模型卡片，展示任务能力、参数量和端侧导出支持；
+- **实验配置页**：选择数据集、模型、设备、输入尺寸和精度模式；
+- **结果页**：按 mAP/AUROC、P50 延迟、FPS、内存、功耗和模型大小生成排行榜；
+- **实验详情页**：展示混淆矩阵、PR 曲线、缺陷可视化和逐样本预测结果。
 
-The project is organized into distinct physical folders separating configurations, raw data processing, core logic, and deployment utilities:
+Mock 数据必须遵循与真实后端相同的接口，避免后续接入模型时重写页面。
 
-*   **`configs/`** — Houses all top-level YAML configuration files for managing global environments, datasets, and specific model training/evaluation hyperparameters.
-*   **`data/`** — Local storage for datasets (Git-ignored). Includes separate folders for raw downloads (e.g., AITEX, TILDA) and standardized, processed formats (COCO and MVTec structures).
-*   **`src/`** — The core source code directory. It contains the unified execution entry point, data format converters, and the abstract engine wrappers that manage the three underlying frameworks.
-*   **`tools/`** — Auxiliary scripts for automation, data visualization, and model export (e.g., converting checkpoints to ONNX or TensorRT).
-*   **`tests/`** — Unit and integration tests to ensure framework stability and metric calculation accuracy.
+## 核心架构
 
----
+```text
+DatasetAdapter
+  不同公开数据集、企业数据 -> 统一内部样本描述
 
-## 📊 Industrial Evaluation Metrics
+ModelAdapter
+  Ultralytics / MMDetection / Anomalib -> 统一 train、predict、export 接口
 
-Unlike purely academic benchmarks that solely focus on mAP, FabricDefectHub emphasizes **"Real Industry Evaluation"** by reporting a holistic metric board directly measured at the unified runtime:
+Evaluator
+  根据任务与模型能力 -> mAP、F1、AUROC、AUPRO、mIoU 等指标
 
-*   **Accuracy Metrics:** mAP@0.5, mAP@0.5:0.95, Dice Score, F1-Score, and Under-kill/Over-kill rates.
-*   **Efficiency Metrics:** Inference Latency (ms), Frames Per Second (FPS), and FLOPs.
-*   **Hardware Profiles:** Peak RAM utilization, VRAM footprint, and model parameter scale across target devices.
+BackendProfiler
+  PyTorch / ONNX Runtime / TensorRT -> 延迟、FPS、内存、功耗、模型大小
+```
 
----
+### DatasetAdapter
 
-## 🛠️ Upcoming Roadmap
+不同数据集共享统一的 `Sample` 元信息，但保留各任务原生所需的标签语义，不把所有数据强制转换成同一种标注格式：
 
-- [ ] Core Abstract Engine implementation.
-- [ ] Automated dataset alignment scripts (Raw data $\rightarrow$ unified COCO & MVTec structures).
-- [ ] Integration of the `ultralytics` YOLO inference pipeline.
-- [ ] Integration of the `mmdetection` model zoo.
-- [ ] Integration of the `anomalib` unsupervised pipelines.
-- [ ] Standardized logging and export module (supporting TensorBoard, WandB, and Excel exports).
+| 任务 | 标签字段 |
+| --- | --- |
+| 目标检测 | `boxes`、`labels` |
+| 实例/语义分割 | `masks`、`labels` |
+| 异常检测 | `is_anomalous`、可选 `anomaly_mask` |
 
----
+概念结构如下：
 
-## 📄 License
+```json
+{
+  "id": "sample-0001",
+  "image_path": "data/images/0001.jpg",
+  "task": "detection",
+  "annotations": {
+    "boxes": [[120, 64, 238, 180]],
+    "labels": ["broken_end"]
+  },
+  "metadata": {
+    "fabric_type": "cotton",
+    "lighting": "line_scan"
+  }
+}
+```
 
-This project is licensed under the **Apache License 2.0**. It provides a robust, legally secure framework that allows industrial commercialization and research experimentation while protecting intellectual property and patent rights. 
+### ModelAdapter
 
-*(Please note: Third-party datasets benchmarks hosted or referenced by this repository are subject to their respective original licenses).*
+各模型后端通过统一生命周期接入，但允许后端保留自己的配置：
 
----
+```text
+train(config) -> Artifact
+predict(samples, artifact) -> list[Prediction]
+export(artifact, target) -> ExportedArtifact
+```
 
-## 👥 Contact & Affiliation
+统一 `Prediction` 由可选字段组成：
 
-Developed with pride by the Joint Research Team at **Beijing Institute of Technology (BIT)**. For inquiries regarding collaboration, corporate benchmark submissions, or academic extensions, please open an Issue or contact the repository maintainers.
+```json
+{
+  "sample_id": "sample-0001",
+  "boxes": [[121, 66, 236, 178]],
+  "labels": ["broken_end"],
+  "scores": [0.93],
+  "masks": null,
+  "anomaly_score": null,
+  "anomaly_map": null
+}
+```
+
+YOLO 和 Faster R-CNN 填充 `boxes`、`labels`、`scores`；Mask R-CNN 额外填充 `masks`；PatchCore、PaDiM 等填充 `anomaly_score` 和 `anomaly_map`。
+
+### Evaluator
+
+评测器根据数据任务、标签可用性和模型能力选择指标，而不是使用单一的 `accuracy`：
+
+| 类型 | 建议指标 |
+| --- | --- |
+| 目标检测 | mAP@0.5、mAP@0.5:0.95、Precision、Recall、F1 |
+| 分割 | mIoU、Dice、像素级 F1 |
+| 异常检测 | 图像级/像素级 AUROC、AUPRO、F1 |
+| 工业质检 | 欠检率、过检率、单位布长告警数 |
+
+### BackendProfiler
+
+性能测试记录运行环境和统计口径，保证不同模型结果可比较：
+
+- P50/P95 延迟、吞吐量和 FPS；
+- 峰值 RAM/VRAM、功耗和模型文件大小；
+- 设备、运行时、精度模式、输入尺寸、批大小和预热次数；
+- PyTorch、ONNX Runtime、TensorRT 等运行时信息。
+
+## 统一实验结果契约
+
+训练、推理、评测和性能测试最终汇总为统一的 `ExperimentResult`。以下为最小示例，正式 Schema 将随首个闭环固化：
+
+```json
+{
+  "experiment_id": "exp-2026-001",
+  "model": {
+    "name": "yolov8n",
+    "backend": "ultralytics",
+    "task": "detection"
+  },
+  "dataset": {
+    "name": "fabric-demo",
+    "split": "test"
+  },
+  "runtime": {
+    "device": "Jetson Orin Nano",
+    "engine": "TensorRT",
+    "precision": "fp16",
+    "input_size": [640, 640]
+  },
+  "metrics": {
+    "map50": 0.81,
+    "latency_ms_p50": 12.4,
+    "fps": 80.6
+  },
+  "artifacts": {
+    "predictions": "artifacts/exp-2026-001/predictions.json",
+    "model": "artifacts/exp-2026-001/model.engine"
+  }
+}
+```
+
+新增后端时，只要能够生成符合契约的预测与实验结果，前端和排行榜就无需针对框架重写。
+
+## 计划中的目录结构
+
+以下目录会随对应阶段逐步创建，目前并不代表均已实现：
+
+```text
+FabricDefectHub/
+├── frontend/              # 数据集、模型、实验和结果可视化
+├── configs/               # 数据集、模型、运行时和实验配置
+├── data/                  # 本地数据（默认不纳入版本控制）
+├── schemas/               # Sample、Prediction、ExperimentResult Schema
+├── src/fabric_defect_hub/
+│   ├── datasets/          # DatasetAdapter 与数据集实现
+│   ├── models/            # ModelAdapter 与三类框架后端
+│   ├── evaluation/        # 任务指标与工业指标
+│   └── profiling/         # 多运行时、端侧性能测试
+├── tools/                 # 数据转换、导出和可视化工具
+└── tests/                 # 单元测试与最小闭环集成测试
+```
+
+## 路线图
+
+### Phase 0：契约与可点击原型
+
+- [ ] 定义 `Sample`、`Prediction`、`ExperimentResult` JSON Schema；
+- [ ] 使用同一套 mock 契约完成五个核心页面；
+- [ ] 明确检测、分割、异常检测的能力与指标映射。
+
+### Phase 1：最小真实闭环
+
+- [ ] 接入一个公开或脱敏布匹数据集；
+- [ ] 完成 Ultralytics `YOLOv8n` 的 PC 推理；
+- [ ] 输出真实预测与实验结果 JSON；
+- [ ] 在前端展示真实排行榜和实验详情。
+
+### Phase 2：统一算法 Benchmark
+
+- [ ] 接入 Anomalib 代表模型与异常检测指标；
+- [ ] 接入 MMDetection 代表模型与检测/分割指标；
+- [ ] 完成统一训练、预测、评测和制品管理流程。
+
+### Phase 3：部署与工业评测
+
+- [ ] 支持 ONNX Runtime、TensorRT 和精度模式切换；
+- [ ] 在 PC 与 Jetson 等目标设备上进行可复现性能测试；
+- [ ] 加入功耗、模型大小、欠检率和过检率；
+- [ ] 支持真实工况元信息和企业数据适配。
+
+## 公平评测要求
+
+提交或发布 Benchmark 结果时，至少同时记录：
+
+- 数据集版本、划分方式和预处理流程；
+- 模型版本、权重来源、训练配置和随机种子；
+- 硬件、软件栈、推理引擎和精度模式；
+- 输入尺寸、批大小、预热次数和统计样本数；
+- 指标实现、阈值和后处理参数。
+
+缺少上述上下文的单一 mAP、AUROC 或 FPS 数值不应直接用于模型排名。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。第三方框架、模型权重和数据集仍遵循各自的许可证与使用条款。
+
+## 联系方式
+
+项目由北京理工大学相关研究团队发起并处于持续开发中。合作、数据集适配或 Benchmark 提交建议请通过 Issue 与维护者联系。
