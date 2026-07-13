@@ -1,0 +1,31 @@
+[project]
+name = "fabric-defect-hub"
+version = "0.0.1"
+description = "Unified benchmark platform for fabric defect detection across Ultralytics, torchvision and Anomalib backends."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.optional-dependencies]
+ultralytics = ["ultralytics", "pillow", "pyyaml"]
+torchvision = ["torchvision", "torchmetrics", "pycocotools", "pillow", "pyyaml", "onnxscript"]
+anomalib = ["anomalib", "scikit-learn", "scikit-image"]
+# BackendProfiler runtimes (profiling/pytorch.py needs only torch itself,
+# already pulled in by any of the extras above).
+profiling-onnxruntime = ["onnxruntime", "psutil"]
+# NVIDIA-only: requires a CUDA-capable GPU + matching CUDA toolkit, hence
+# split out from `profiling-onnxruntime`. Not installable/verifiable on
+# this project's dev machine (Apple Silicon) — see profiling/tensorrt.py.
+profiling-tensorrt = ["tensorrt", "pycuda"]
+dev = ["pytest", "jsonschema"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

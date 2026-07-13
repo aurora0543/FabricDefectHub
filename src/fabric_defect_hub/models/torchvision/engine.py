@@ -1,0 +1,232 @@
+"""The actual training/evaluation loop for the torchvision detection
+backend. `torchvision.models.detection` ships architectures and losses but,
+unlike Ultralytics or Lightning-based anomalib, no `Trainer` — the loop
+below is ours to write.
+
+Structure follows torchvision's own official reference training script
+(`torchvision/references/detection/{engine,train}.py`, the canonical
+"how to actually train these models" source): per-batch forward returns a
+loss dict in train mode (verified live — see `presets.py` docstring), which
+we sum and backprop; a linear LR warmup covers the first `warmup_epochs`
+(large early gradients from a freshly swapped head can otherwise diverge);
+gradient norm clipping guards against the same instability on small
+batches. `evaluate()` accumulates predictions into `torchmetrics`' COCO-
+style `MeanAveragePrecision` rather than hand-rolling COCO-mAP matching.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+
+@dataclass
+class EpochLog:
+    epoch: int
+    train_loss: float
+    train_loss_components: dict[str, float]
+    lr: float
+    val_metrics: dict[str, float] = field(default_factory=dict)
+
+
+def build_optimizer(model, name: str, lr: float, momentum: float, weight_decay: float):
+    import torch
+
+    params = [p for p in model.parameters() if p.requires_grad]
+    if name == "sgd":
+        return torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+    if name == "adamw":
+        return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+    raise ValueError(f"unknown optimizer {name!r}; expected 'sgd' or 'adamw'.")
+
+
+def build_lr_scheduler(optimizer, name: str, epochs: int, step_size: int, gamma: float):
+    import torch
+
+    if name == "none":
+        return None
+    if name == "step":
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    if name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(epochs, 1))
+    raise ValueError(f"unknown lr_scheduler {name!r}; expected 'none', 'step', or 'cosine'.")
+
+
+def _build_warmup_scheduler(optimizer, warmup_iters: int):
+    import torch
+
+    if warmup_iters <= 0:
+        return None
+    warmup_factor = 1.0 / 1000
+    return torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=warmup_factor, total_iters=warmup_iters
+    )
+
+
+def train_one_epoch(
+    model,
+    optimizer,
+    data_loader,
+    device,
+    epoch: int,
+    warmup_scheduler=None,
+    grad_clip_norm: float | None = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> tuple[float, dict[str, float]]:
+    """One training epoch. Returns (mean total loss, mean per-component losses)."""
+
+    import torch
+
+    model.train()
+    loss_sums: dict[str, float] = {}
+    total_loss_sum = 0.0
+    num_batches = 0
+
+    for images, targets in data_loader:
+        images = [img.to(device) for img in images]
+        targets = [{k: v.to(device) if hasattr(v, "to") else v for k, v in t.items()} for t in targets]
+
+        loss_dict = model(images, targets)
+        total_loss = sum(loss_dict.values())
+
+        loss_value = float(total_loss)
+        if not math.isfinite(loss_value):
+            if log_fn:
+                log_fn(f"[epoch {epoch}] non-finite loss ({loss_value}); skipping batch.")
+            continue
+
+        optimizer.zero_grad()
+        total_loss.backward()
+        if grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in model.parameters() if p.requires_grad], grad_clip_norm
+            )
+        optimizer.step()
+        if warmup_scheduler is not None:
+            warmup_scheduler.step()
+
+        for k, v in loss_dict.items():
+            loss_sums[k] = loss_sums.get(k, 0.0) + float(v)
+        total_loss_sum += loss_value
+        num_batches += 1
+
+    if num_batches == 0:
+        return float("nan"), {}
+    mean_components = {k: v / num_batches for k, v in loss_sums.items()}
+    return total_loss_sum / num_batches, mean_components
+
+
+def evaluate(model, data_loader, device, with_masks: bool = False) -> dict[str, float]:
+    """Run inference over `data_loader` and compute COCO-style mAP via
+    `torchmetrics.detection.MeanAveragePrecision` (pycocotools backend).
+    Returns a flat metrics dict (`map`, `map_50`, `map_75`, `mar_100`, ...).
+    """
+
+    import torch
+    from torchmetrics.detection import MeanAveragePrecision
+
+    model.eval()
+    iou_types = ("bbox", "segm") if with_masks else ("bbox",)
+    metric = MeanAveragePrecision(iou_type=list(iou_types) if len(iou_types) > 1 else iou_types[0])
+
+    with torch.no_grad():
+        for images, targets in data_loader:
+            images = [img.to(device) for img in images]
+            outputs = model(images)
+
+            preds = []
+            for out in outputs:
+                entry = {
+                    "boxes": out["boxes"].detach().cpu(),
+                    "scores": out["scores"].detach().cpu(),
+                    "labels": out["labels"].detach().cpu(),
+                }
+                if with_masks:
+                    entry["masks"] = (out["masks"].detach().cpu() > 0.5).squeeze(1).to(torch.uint8)
+                preds.append(entry)
+
+            gts = []
+            for t in targets:
+                entry = {
+                    "boxes": t["boxes"].detach().cpu() if hasattr(t["boxes"], "detach") else t["boxes"],
+                    "labels": t["labels"].detach().cpu() if hasattr(t["labels"], "detach") else t["labels"],
+                }
+                if with_masks:
+                    entry["masks"] = t["masks"].detach().cpu().to(torch.uint8)
+                gts.append(entry)
+
+            metric.update(preds, gts)
+
+    result = metric.compute()
+    flat: dict[str, float] = {}
+    for key, value in result.items():
+        if hasattr(value, "numel") and value.numel() == 1:
+            flat[key] = float(value)
+    return flat
+
+
+def run_training(
+    model,
+    train_loader,
+    val_loader,
+    device,
+    epochs: int,
+    optimizer_name: str,
+    lr: float,
+    momentum: float,
+    weight_decay: float,
+    lr_scheduler_name: str,
+    step_size: int,
+    gamma: float,
+    warmup_epochs: int,
+    grad_clip_norm: float | None,
+    patience: int,
+    with_masks: bool,
+    on_epoch_end: Callable[[EpochLog], None] | None = None,
+) -> list[EpochLog]:
+    """Full multi-epoch loop with warmup, LR scheduling, and mAP-based early
+    stopping. Returns the per-epoch log; the caller (`adapter.py`) is
+    responsible for checkpointing on each `on_epoch_end` call, since only it
+    knows where model artifacts should be written.
+    """
+
+    optimizer = build_optimizer(model, optimizer_name, lr, momentum, weight_decay)
+    scheduler = build_lr_scheduler(optimizer, lr_scheduler_name, epochs, step_size, gamma)
+
+    warmup_iters = 0
+    if warmup_epochs > 0:
+        warmup_iters = min(len(train_loader), len(train_loader) * warmup_epochs)
+
+    logs: list[EpochLog] = []
+    best_map = -1.0
+    epochs_without_improvement = 0
+
+    for epoch in range(epochs):
+        warmup_scheduler = _build_warmup_scheduler(optimizer, warmup_iters) if epoch == 0 else None
+        train_loss, components = train_one_epoch(
+            model, optimizer, train_loader, device, epoch,
+            warmup_scheduler=warmup_scheduler, grad_clip_norm=grad_clip_norm,
+        )
+        if scheduler is not None and epoch > 0:
+            scheduler.step()
+
+        val_metrics = evaluate(model, val_loader, device, with_masks=with_masks) if val_loader is not None else {}
+        current_lr = optimizer.param_groups[0]["lr"]
+        log = EpochLog(epoch=epoch, train_loss=train_loss, train_loss_components=components, lr=current_lr, val_metrics=val_metrics)
+        logs.append(log)
+
+        if on_epoch_end is not None:
+            on_epoch_end(log)
+
+        current_map = val_metrics.get("map", None)
+        if current_map is not None and current_map > best_map:
+            best_map = current_map
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if patience > 0 and epochs_without_improvement >= patience:
+            break
+
+    return logs

@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# FabricDefectHub local data and artifacts
+/data/*
+!/data/.gitkeep
+/artifacts/
+node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store

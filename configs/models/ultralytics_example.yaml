@@ -1,0 +1,87 @@
+# ============================================================================
+# Ultralytics (YOLOv8n / YOLOv8s / YOLO11n) 实验配置示例
+#
+# 使用方式（配置化，而非命令行）：
+#     from fabric_defect_hub.models.ultralytics import run_from_yaml
+#     result = run_from_yaml("configs/models/ultralytics_example.yaml")
+#     print(result.metrics)          # {'map50': ..., 'precision': ...}
+#     print(result.registered_artifact.path)  # 训练好的模型稳定存储路径
+#
+# 只需写你想改的项；未写的项自动回落到 fabric 预设
+# (models/ultralytics/presets.py) 与 ultralytics 自身默认值。
+# ============================================================================
+
+# ---- 模型：变体与初始权重 ----
+model:
+  variant: yolov8n        # yolov8n | yolov8s | yolo11n
+  pretrained: true        # true=加载 COCO 预训练做迁移学习；false=从零训练
+  # weights: null         # 指定则从该 checkpoint 微调（覆盖 pretrained）
+  task: detect
+
+# ---- 数据：走 DatasetAdapter 运行时转换（无需预先落盘 YOLO 数据集）----
+data:
+  dataset: zju-leaper
+  dataset_root: /Volumes/SSD/anomaly-detection-challenges/datasets/ZJU-Leaper
+  class_names: ["defect"]
+  train_selection:        # 传给 ZJULeaperDataset 的构造参数
+    split: train
+    pattern: pattern1
+    num_samples: 300
+    defect_ratio: 1.0     # 检测任务：训练集全部使用缺陷图（含 bbox）
+    task: detection
+    seed: 0
+  val_selection:
+    split: test
+    pattern: pattern1
+    num_samples: 100
+    defect_ratio: 1.0
+    task: detection
+    seed: 0
+  # 或者：直接给已有的 YOLO data.yaml（与 dataset 二选一）
+  # data_yaml: /path/to/data.yaml
+
+# ---- 训练超参（仅列常改项；其余见 presets.COMMON_FABRIC_TRAIN_DEFAULTS）----
+train:
+  enabled: true
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  patience: 30
+  optimizer: auto
+  lr0: 0.01
+  cos_lr: true
+  single_cls: true
+  # device: 0             # "cpu" / 0 / "0,1"；省略则自动选择
+  resume: false
+  extra: {}               # 任意其它 ultralytics train() 参数原样透传
+
+# ---- 验证 / 指标提取（用 YOLO 原生 val）----
+val:
+  enabled: true
+  split: val
+  conf: 0.001
+  iou: 0.6
+
+# ---- 推理默认值（UltralyticsAdapter.predict 使用）----
+predict:
+  conf: 0.25
+  iou: 0.7
+  max_det: 300
+  augment: false
+
+# ---- 导出（训练后可选，多格式）----
+export:
+  enabled: false
+  formats: [onnx]         # onnx | engine | torchscript | openvino ...
+  half: false
+  dynamic: false
+  simplify: true
+  # opset: 12
+  # imgsz: 640
+
+# ---- 运行目录 / 模型注册 ----
+checkpoint:
+  project: runs/fabric_defect_hub
+  name: yolov8n_pattern1
+  registry_dir: artifacts/models   # 训练好的 best.pt 稳定拷贝到这里
+  exist_ok: false
