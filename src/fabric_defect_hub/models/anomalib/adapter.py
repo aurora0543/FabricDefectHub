@@ -14,6 +14,7 @@ Requires the `anomalib` extra: `pip install -e ".[anomalib]"`.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +175,58 @@ class AnomalibAdapter(ModelAdapter):
         engine = Engine()
         exported_path = engine.export(model=model, export_type=target)
         return ExportedArtifact(path=str(exported_path), target=target)
+
+    # ------------------------------------------------------------------ #
+    # Model registry: persist / reload trained models
+    # ------------------------------------------------------------------ #
+    def register_trained_model(
+        self, artifact: Artifact, registry_dir: str, model_name: str | None = None
+    ) -> Artifact:
+        """Copy a trained checkpoint out of `Engine`'s versioned working
+        directory (`<default_root_dir>/<ModelClass>/<name>/v{N}/weights/
+        lightning/model.ckpt`) into a stable, named location so it can be
+        reloaded later independent of that version path.
+
+        Unlike `UltralyticsAdapter.register_trained_model`, the destination
+        filename doesn't need to embed a run-directory name to disambiguate
+        runs: `artifact.metadata['model_class']` already uniquely identifies
+        which of the five algorithms produced the checkpoint, so the default
+        filename is just `<model_class>.ckpt`. Pass `model_name` explicitly
+        if you're registering more than one run of the *same* model and want
+        to keep both.
+        """
+
+        src = Path(artifact.path)
+        if not src.exists():
+            raise FileNotFoundError(f"cannot register missing checkpoint: {src}")
+
+        registry = Path(registry_dir)
+        registry.mkdir(parents=True, exist_ok=True)
+        model_class = artifact.metadata.get("model_class", self.resolved_class_name)
+        filename = model_name or f"{model_class}.ckpt"
+        dst = registry / filename
+        shutil.copy2(src, dst)
+
+        metadata = dict(artifact.metadata)
+        metadata["registered_from"] = str(src)
+        return Artifact(path=str(dst), backend=self.backend, metadata=metadata)
+
+    def load_trained_model(self, artifact_or_path: Artifact | str) -> Artifact:
+        """Load a previously registered/trained checkpoint back into this
+        adapter. Unlike `predict()`/`export()`, which resolve the model
+        class from `artifact.metadata['model_class']` internally, this just
+        validates the checkpoint exists — model-class resolution still
+        happens lazily, at the point `predict()`/`export()` actually needs it.
+        """
+
+        path = artifact_or_path.path if isinstance(artifact_or_path, Artifact) else artifact_or_path
+        if not Path(path).exists():
+            raise FileNotFoundError(f"cannot load missing checkpoint: {path}")
+        if isinstance(artifact_or_path, Artifact):
+            return artifact_or_path
+        return Artifact(
+            path=str(path), backend=self.backend, metadata={"model_class": self.resolved_class_name}
+        )
 
 
 def _load_checkpoint(model_cls, path: str):

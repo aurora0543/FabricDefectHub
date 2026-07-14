@@ -1,11 +1,11 @@
 """Name-based registries so the loader can resolve datasets and models by
 string name/backend instead of importing every framework eagerly.
 
-Framework-specific packages (`models/ultralytics`, `models/mmdetection`,
+Framework-specific packages (`models/ultralytics`, `models/torchvision`,
 `models/anomalib`, individual `datasets/*` modules) register themselves via
 the decorators below when imported. Optional backends are only imported on
-demand inside `loader.py`, so a machine without, say, MMDetection installed
-can still use the Ultralytics or Anomalib paths.
+demand inside `loader.py`, so a machine without, say, Anomalib installed
+can still use the Ultralytics or torchvision paths.
 """
 
 from __future__ import annotations

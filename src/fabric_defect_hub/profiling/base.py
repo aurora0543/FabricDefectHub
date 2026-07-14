@@ -60,7 +60,7 @@ def summarize_latencies(latencies_ms: list[float], batch_size: int, peak_memory_
     import statistics
 
     sorted_latencies = sorted(latencies_ms)
-    mean_latency = statistics.fmean(sorted_latencies)
+    mean_latency = statistics.fmean(sorted_latencies) if sorted_latencies else 0.0
     return {
         "latency_ms_mean": mean_latency,
         "latency_ms_p50": _percentile(sorted_latencies, 50),
