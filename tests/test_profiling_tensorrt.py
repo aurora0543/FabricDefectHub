@@ -64,3 +64,29 @@ def test_engine_builder_rejects_non_onnx_before_needing_tensorrt(tmp_path):
             ExportedArtifact(path=str(tmp_path / "model.pt"), target="torchscript"),
             tmp_path / "model.engine",
         )
+
+
+def test_engine_builder_rejects_int8_without_a_calibrator(tmp_path):
+    onnx_path = tmp_path / "model.onnx"
+    onnx_path.write_bytes(b"not a real onnx file")
+    with pytest.raises(ValueError, match="calibrator"):
+        build_tensorrt_engine(
+            ExportedArtifact(path=str(onnx_path), target="onnx"),
+            tmp_path / "model.engine",
+            config=TensorRTBuildConfig(precision="int8"),
+        )
+
+
+def test_engine_builder_with_int8_and_a_calibrator_reaches_the_tensorrt_import(tmp_path):
+    # Proves the calibrator-supplied path clears validation and only fails
+    # on the missing tensorrt dependency, same pattern as the profiler tests
+    # above — validation happens before the import, not after.
+    onnx_path = tmp_path / "model.onnx"
+    onnx_path.write_bytes(b"not a real onnx file")
+    with pytest.raises(ModuleNotFoundError):
+        build_tensorrt_engine(
+            ExportedArtifact(path=str(onnx_path), target="onnx"),
+            tmp_path / "model.engine",
+            config=TensorRTBuildConfig(precision="int8"),
+            calibrator=object(),
+        )

@@ -30,14 +30,16 @@ Concretely unverified/undisclaimed here:
   uses Jetson's `tegrastats` board-input reading here (rather than this
   profiler's device-buffer lower bound). Inspect the generated `power.json`
   for source, scope, sample count, and any permission/sensor failure.
-* **No engine-building path**: this profiler only loads and runs a
-  pre-built `.engine`/`.plan` file. No `ModelAdapter.export()` in this
-  codebase currently produces `target == "tensorrt"` — building one (via
-  `trtexec` or the ONNX->TensorRT builder API) is out of scope here and has
-  to happen outside this project first.
-* Not handled: multiple model outputs, INT8 calibration, dynamic-batch
-  optimization-profile selection (`set_optimization_profile_async`), DLA
-  cores, custom plugins.
+* **Engine building** (`build_tensorrt_engine`, below) parses an ONNX export
+  via TensorRT's own `OnnxParser` and supports fp32/fp16/INT8 precision.
+  INT8 requires a real `IInt8Calibrator` (see
+  `quantization.tensorrt_calibration.build_int8_calibrator`) — it is
+  rejected outright otherwise, same reasoning as the module docstring
+  there. `ModelAdapter.export()` itself still never produces
+  `target == "tensorrt"` directly; this function is the ONNX -> TensorRT
+  step callers run afterwards (see `tools/export_model.py`).
+* Not handled: multiple model outputs, dynamic-batch optimization-profile
+  selection (`set_optimization_profile_async`), DLA cores, custom plugins.
 
 Requires the `profiling-tensorrt` extra (`pip install -e ".[profiling-tensorrt]"`)
 — `tensorrt` + `pycuda` — on a CUDA-capable machine.
@@ -124,14 +126,20 @@ class TensorRTBuildConfig:
 
 
 def build_tensorrt_engine(
-    artifact: ExportedArtifact, output_path: str | Path, config: TensorRTBuildConfig | None = None
+    artifact: ExportedArtifact,
+    output_path: str | Path,
+    config: TensorRTBuildConfig | None = None,
+    calibrator=None,
 ) -> ExportedArtifact:
     """Build a deployable TensorRT engine from an ONNX artifact.
 
     Dynamic ONNX inputs receive an optimization profile from ``config``.
-    INT8 engine creation is intentionally rejected here because a calibrated
-    dataset-specific ``IInt8Calibrator`` is required; silently enabling INT8
-    without calibration would produce an untrustworthy deployment artifact.
+
+    ``precision="int8"`` requires ``calibrator`` (an ``IInt8Calibrator``,
+    e.g. from ``quantization.tensorrt_calibration.build_int8_calibrator``) —
+    building an INT8 engine without a calibrated, dataset-specific
+    calibrator would produce an untrustworthy deployment artifact, so this
+    is rejected rather than silently falling back to meaningless scales.
     """
 
     if artifact.target != "onnx":
@@ -140,10 +148,11 @@ def build_tensorrt_engine(
     if not onnx_path.is_file():
         raise FileNotFoundError(f"ONNX artifact does not exist: {onnx_path}")
     config = config or TensorRTBuildConfig()
-    if config.precision == "int8":
+    if config.precision == "int8" and calibrator is None:
         raise ValueError(
             "INT8 TensorRT builds require a dataset-specific calibrator and are not implicit. "
-            "Use fp16/fp32 until a calibrated build is supplied."
+            "Pass calibrator= (see quantization.tensorrt_calibration.build_int8_calibrator), "
+            "or use fp16/fp32 if no calibration data is available."
         )
 
     import tensorrt as trt
@@ -163,6 +172,11 @@ def build_tensorrt_engine(
         if not builder.platform_has_fast_fp16:
             raise RuntimeError("This TensorRT platform does not support fast FP16 engine builds.")
         build_config.set_flag(trt.BuilderFlag.FP16)
+    if config.precision == "int8":
+        if not builder.platform_has_fast_int8:
+            raise RuntimeError("This TensorRT platform does not support fast INT8 engine builds.")
+        build_config.set_flag(trt.BuilderFlag.INT8)
+        build_config.int8_calibrator = calibrator
 
     profile = builder.create_optimization_profile()
     has_dynamic_input = False

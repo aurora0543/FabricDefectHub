@@ -60,10 +60,22 @@ from local deployment validation without maintaining temporary test scripts.
 | macOS | privileged `powermetrics` SMC | Package | Code available; requires sudo policy |
 | Raspberry Pi | INA219/INA226 sysfs | Sensor rail | Cannot execute without sensor hardware |
 | TensorRT | ONNX builder + runtime profiler | Engine/device | Cannot execute without TensorRT/CUDA |
+| TensorRT INT8 calibration | `quantization/tensorrt_calibration.py` | Engine build | Cannot execute without TensorRT/CUDA |
 
 Unavailable platform runs are expected. They do not reduce code completion.
 When a platform is available, use `power_mode: required` so missing permissions,
 drivers, or sensors fail explicitly instead of producing an incomplete result.
+
+## Quantization validation
+
+`quantization/onnx_quant.py` (fp16, INT8 dynamic, INT8 static) is CPU-only
+and fully executable on any host: `tests/test_quantization.py` runs all
+three levels end to end against a real (small, hand-built) ONNX model with
+`onnx`/`onnxruntime`/`onnxconverter-common` — part of the default `[dev]`
+suite, no hardware dependency. TensorRT INT8 calibration
+(`quantization/tensorrt_calibration.py`) shares the same status as the rest
+of `profiling/tensorrt.py`: written against the documented API, not
+executable without a CUDA/TensorRT host — see that module's docstring.
 
 ## Expected artifacts
 
