@@ -276,7 +276,7 @@ class UltralyticsAdapter(ModelAdapter):
         pretrained checkpoint) is used.
         """
 
-        if artifact is not None:
+        if artifact is not None and self._loaded_from != artifact.path:
             self.load_weights(artifact.path)
 
         cfg = dict(config or {})
@@ -336,6 +336,12 @@ class UltralyticsAdapter(ModelAdapter):
         if isinstance(artifact_or_path, Artifact):
             return artifact_or_path
         return Artifact(path=str(path), backend=self.backend, metadata={"variant": self._safe_variant()})
+
+    def unload(self) -> None:
+        """Release the resident Ultralytics model for an interactive session."""
+
+        self._model = None
+        self._loaded_from = None
 
     # ------------------------------------------------------------------ #
     # Export

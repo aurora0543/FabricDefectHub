@@ -18,6 +18,21 @@ The default suite covers contracts, configuration, orchestration, evaluation,
 reports, tools, offline pre-flight checks, checkpoint validation, power-source
 assessment, and CPU-capable profiler paths. Slow real-backend tests are skipped.
 
+## Gradio workspace validation
+
+Install the UI dependency before rendering the application:
+
+```bash
+python -m pip install -e ".[ui]"
+fdh-ui
+```
+
+The Gradio-specific build test is intentionally skipped until `gradio` is
+installed. Once available, verify the Single Image Detection tab by setting
+`ZJU_LEAPER_ROOT`, loading random images, browsing with both navigation
+buttons, and running a configured checkpoint or pretrained model. The
+Benchmark tab is an explicit placeholder and is not part of this UI phase.
+
 ## Real backend lifecycle
 
 The validation code is already present in `tests/test_backend_integration.py`.

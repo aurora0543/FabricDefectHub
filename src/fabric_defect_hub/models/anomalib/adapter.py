@@ -45,6 +45,8 @@ class AnomalibAdapter(ModelAdapter):
         super().__init__(name=name, **kwargs)
         # Fail fast on an unknown model name rather than at train() time.
         self.resolved_class_name = resolve_model_class_name(name)
+        self._model = None
+        self._loaded_path: str | None = None
 
     def _model_cls(self):
         return resolve_model_class(self.name)
@@ -144,14 +146,17 @@ class AnomalibAdapter(ModelAdapter):
         from anomalib.data import PredictDataset
         from anomalib.engine import Engine
 
-        model_cls = resolve_model_class(artifact.metadata.get("model_class", self.name))
-        model = _load_checkpoint(model_cls, artifact.path)
-        engine = Engine()
+        model = self._load_artifact(artifact)
 
         maps_dir = None
         if output_dir is not None:
             maps_dir = Path(output_dir)
             maps_dir.mkdir(parents=True, exist_ok=True)
+        # Keep Lightning's predict logs beside the requested runtime output,
+        # rather than allowing its default ``results/`` directory to appear
+        # at the repository root during an interactive UI prediction.
+        engine_root = maps_dir.parent if maps_dir is not None else Path(artifact.path).parent
+        engine = Engine(default_root_dir=str(engine_root))
 
         predictions = []
         for sample in samples:
@@ -163,11 +168,17 @@ class AnomalibAdapter(ModelAdapter):
                     f"({sample.image_path})."
                 )
             score = None
+            predicted_label = None
             anomaly_map_path = None
             if batches:
                 batch = batches[0]
                 if batch.pred_score is not None:
                     score = float(batch.pred_score[0])
+                raw_label = getattr(batch, "pred_label", None)
+                if raw_label is not None:
+                    value = raw_label[0]
+                    value = value.item() if hasattr(value, "item") else value
+                    predicted_label = "anomaly" if int(value) else "normal"
                 raw_map = getattr(batch, "anomaly_map", None)
                 if maps_dir is not None and raw_map is not None:
                     arr = raw_map[0]
@@ -180,7 +191,12 @@ class AnomalibAdapter(ModelAdapter):
                     f"Anomalib prediction for sample {sample.id!r} has no anomaly score."
                 )
             predictions.append(
-                Prediction(sample_id=sample.id, anomaly_score=score, anomaly_map=anomaly_map_path)
+                Prediction(
+                    sample_id=sample.id,
+                    labels=[predicted_label] if predicted_label is not None else None,
+                    anomaly_score=score,
+                    anomaly_map=anomaly_map_path,
+                )
             )
         return predictions
 
@@ -249,16 +265,34 @@ class AnomalibAdapter(ModelAdapter):
         if isinstance(artifact_or_path, Artifact):
             if not artifact_or_path.metadata.get("trusted", False):
                 raise ValueError("Anomalib artifact is not marked as trusted.")
+            self._load_artifact(artifact_or_path)
             return artifact_or_path
         if not allow_unsafe_checkpoint:
             raise ValueError(
                 "Loading a raw Anomalib checkpoint requires allow_unsafe_checkpoint=True because "
                 "Lightning checkpoints can deserialize arbitrary Python objects."
             )
-        return Artifact(
+        artifact = Artifact(
             path=str(path), backend=self.backend,
             metadata={"model_class": self.resolved_class_name, "trusted": True},
         )
+        self._load_artifact(artifact)
+        return artifact
+
+    def unload(self) -> None:
+        """Release the resident Lightning module for an interactive session."""
+
+        self._model = None
+        self._loaded_path = None
+
+    def _load_artifact(self, artifact: Artifact):
+        if not artifact.metadata.get("trusted", False):
+            raise ValueError("Refusing to load an untrusted Anomalib checkpoint.")
+        if self._model is None or self._loaded_path != artifact.path:
+            model_cls = resolve_model_class(artifact.metadata.get("model_class", self.name))
+            self._model = _load_checkpoint(model_cls, artifact.path)
+            self._loaded_path = artifact.path
+        return self._model
 
 
 def _load_checkpoint(model_cls, path: str):

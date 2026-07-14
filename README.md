@@ -256,6 +256,13 @@ torchvision 在 Python 3.14+ 优先使用 `exported_program`（`.pt2`/`torch.exp
 
 完整的本机、云端后端和平台功耗验证方式见 [VALIDATION.md](VALIDATION.md)。
 
+## Gradio 工作区
+
+安装 `ui` extra 后运行 `fdh-ui`，或在 Hugging Face Spaces 使用根目录
+`app.py`。首个 **Single Image Detection** 标签页支持从 ZJU-Leaper 随机抽样、
+左右切换图片、选择模型/权重，并展示 bbox、mask 或 anomaly-map 推理结果。
+详细说明见 [frontend/README.md](frontend/README.md)。
+
 ### 跨平台功耗测量
 
 Profiling 默认自动研判可用电源传感器，并把 `power_w_mean`、`power_w_peak`、

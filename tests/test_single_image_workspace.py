@@ -1,0 +1,137 @@
+from pathlib import Path
+
+from fabric_defect_hub.core.serialization import sample_to_dict
+from fabric_defect_hub.core.types import Annotations, Prediction, Sample
+from fabric_defect_hub.web import single_image as workspace
+from fabric_defect_hub.web.single_image import (
+    ALL_TEXTURES,
+    DEFECT_ONLY,
+    NORMAL_ONLY,
+    build_gallery_state,
+    current_image,
+    default_dataset_root,
+    detect_loaded_model,
+    detect_current,
+    empty_gallery_state,
+    move_image,
+    texture_choices,
+)
+
+
+def _samples(tmp_path):
+    paths = []
+    for name in ("first.jpg", "second.jpg", "third.jpg"):
+        path = tmp_path / name
+        path.write_bytes(b"not-an-image-but-present")
+        paths.append(path)
+    return [
+        Sample(path.stem, str(path), "detection", Annotations(is_anomalous=index == 0))
+        for index, path in enumerate(paths)
+    ]
+
+
+def test_gallery_state_is_seeded_and_bounded(tmp_path):
+    state = build_gallery_state(_samples(tmp_path), count=10, seed=7, dataset_label="ZJU-Leaper")
+    assert len(state["samples"]) == 3
+    assert state["index"] == 0
+    assert state["dataset"] == "ZJU-Leaper"
+
+
+def test_navigation_wraps_and_preserves_caption(tmp_path):
+    state = build_gallery_state(_samples(tmp_path), count=3, seed=0, dataset_label="ZJU-Leaper")
+    moved, path, caption = move_image(state, -1)
+    assert Path(path).name in {"first.jpg", "second.jpg", "third.jpg"}
+    assert moved["index"] == 2
+    assert "3 / 3" in caption
+
+
+def test_empty_state_has_clear_browsing_message():
+    path, caption = current_image(empty_gallery_state())
+    assert path is None
+    assert "No image" in caption
+
+
+def test_dataset_root_prefers_the_configured_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZJU_LEAPER_ROOT", str(tmp_path))
+    assert default_dataset_root() == str(tmp_path.resolve())
+
+
+def test_texture_choices_are_safe_when_the_dataset_is_not_connected(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZJU_LEAPER_ROOT", str(tmp_path / "missing"))
+    assert ALL_TEXTURES in texture_choices("ZJU-Leaper")
+
+
+def test_anomalib_selection_dispatches_a_trusted_artifact_and_map_directory(monkeypatch, tmp_path):
+    image = tmp_path / "fabric.jpg"
+    image.write_bytes(b"placeholder")
+    sample = Sample("fabric", str(image), "detection", Annotations())
+    state = {"samples": [sample_to_dict(sample)], "index": 0, "dataset": "ZJU-Leaper"}
+    captured = {}
+
+    class FakeAnomalibModel:
+        def predict(self, samples, artifact, output_dir=None):
+            captured["artifact"] = artifact
+            captured["output_dir"] = output_dir
+            return [Prediction(sample_id=samples[0].id, anomaly_score=0.8)]
+
+    monkeypatch.setattr(workspace, "load_model", lambda backend, name: FakeAnomalibModel())
+    monkeypatch.setattr(workspace, "render_prediction", lambda image_path, prediction: "rendered")
+    monkeypatch.setattr(workspace, "model_status", lambda label: "🟢 **Ready**")
+
+    image, summary, status = detect_current(state, "PatchCore · Normal Lab trained")
+
+    assert image == "rendered"
+    assert summary["task"] == "anomaly"
+    assert status.startswith("🟢")
+    assert captured["artifact"].metadata["trusted"] is True
+    assert captured["artifact"].metadata["model_class"] == "Patchcore"
+    assert "anomaly_maps" in captured["output_dir"]
+
+
+def test_loaded_detection_uses_the_session_manager_without_creating_an_adapter(monkeypatch, tmp_path):
+    image = tmp_path / "fabric.jpg"
+    image.write_bytes(b"placeholder")
+    sample = Sample("fabric", str(image), "detection", Annotations())
+    state = {"samples": [sample_to_dict(sample)], "index": 0, "dataset": "ZJU-Leaper"}
+    captured = {}
+
+    class FakeSessionManager:
+        def predict(self, model_id, samples, **kwargs):
+            captured["model_id"] = model_id
+            captured["kwargs"] = kwargs
+            return [Prediction(sample_id=samples[0].id, boxes=[])]
+
+    monkeypatch.setattr(workspace, "render_prediction", lambda image_path, prediction: "rendered")
+
+    image, summary, status = detect_loaded_model(FakeSessionManager(), state, "YOLOv8n · Fabric trained")
+
+    assert image == "rendered"
+    assert summary["task"] == "detection"
+    assert status.startswith("🟢")
+    assert captured == {"model_id": "YOLOv8n · Fabric trained", "kwargs": {}}
+
+
+def test_image_scope_filters_defect_and_normal_samples(monkeypatch, tmp_path):
+    normal_path = tmp_path / "normal.jpg"
+    defect_path = tmp_path / "defect.jpg"
+    normal_path.write_bytes(b"normal")
+    defect_path.write_bytes(b"defect")
+    samples = [
+        Sample("normal", str(normal_path), "detection", Annotations(is_anomalous=False)),
+        Sample("defect", str(defect_path), "detection", Annotations(is_anomalous=True)),
+    ]
+
+    class FakeDataset:
+        name = "zju-leaper"
+
+        def load_samples(self):
+            return samples
+
+    monkeypatch.setattr(workspace, "default_dataset_root", lambda dataset_label="ZJU-Leaper": str(tmp_path))
+    monkeypatch.setattr(workspace, "load_dataset", lambda *args, **kwargs: FakeDataset())
+
+    defect_state, *_ = workspace.load_random_samples("ZJU-Leaper", "test", 8, seed=3, image_scope=DEFECT_ONLY)
+    normal_state, *_ = workspace.load_random_samples("ZJU-Leaper", "train", 8, seed=3, image_scope=NORMAL_ONLY)
+
+    assert defect_state["samples"][0]["annotations"]["is_anomalous"] is True
+    assert normal_state["samples"][0]["annotations"]["is_anomalous"] is False

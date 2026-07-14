@@ -9,6 +9,7 @@ dependencies = ["pyyaml"]
 
 [project.scripts]
 fdh = "fabric_defect_hub.cli:main"
+fdh-ui = "fabric_defect_hub.web.app:launch"
 
 [project.optional-dependencies]
 ultralytics = ["ultralytics", "pillow", "pyyaml"]
@@ -22,6 +23,7 @@ profiling-power-nvidia = ["nvidia-ml-py"]
 # split out from `profiling-onnxruntime`. Not installable/verifiable on
 # this project's dev machine (Apple Silicon) — see profiling/tensorrt.py.
 profiling-tensorrt = ["tensorrt", "pycuda"]
+ui = ["gradio>=5.0,<7", "pillow", "numpy", "psutil"]
 dev = [
   "pytest",
   "jsonschema",
