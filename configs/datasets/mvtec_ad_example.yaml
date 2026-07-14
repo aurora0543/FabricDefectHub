@@ -1,0 +1,30 @@
+# MVTec AD 数据集接口配置示例
+# 通过 load_dataset("mvtec-ad", root=<root>, **config) 使用。
+# root 指向包含各类别子目录（bottle/、cable/、carpet/ ...）的数据集根目录。
+# 非布匹数据集，主要用于后续跨域 zero-shot / 鲁棒性评估。
+
+# ---- 场景 A：zero-shot（不使用缺陷图，仅正常样本，用于跨域评估布匹模型）----
+zero_shot:
+  split: test
+  category: null           # null = 聚合全部 15 个类别；也可指定单一类别，如 bottle
+  num_samples: 300
+  use_defect: false
+  task: anomaly
+
+# ---- 场景 B：full-shot（单一类别，全量）----
+few_shot:
+  split: test
+  category: bottle
+  num_samples: null         # null = 使用该类别下的全部图片
+  use_defect: true
+  task: anomaly
+
+# ---- 场景 C：少样本（一次 350 张，可控缺陷占比，跨全部类别）----
+low_shot:
+  split: test
+  category: null
+  num_samples: 350
+  use_defect: true
+  defect_ratio: 0.3
+  task: anomaly
+  seed: 0

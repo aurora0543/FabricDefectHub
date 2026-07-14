@@ -76,22 +76,34 @@ MODEL_CATALOG = {
 }
 
 # Each entry names a registered DatasetAdapter plus the UI-facing metadata
-# needed to locate it on disk and adapt the sampler controls (texture filter,
-# default Sample.task) to that dataset's shape. Additional datasets can add a
-# catalog entry here without changing the page interaction contract.
+# needed to locate it on disk and adapt the sampler controls (texture/category
+# filter, default Sample.task) to that dataset's shape. `slice_kwarg` names the
+# DatasetAdapter constructor kwarg the "Texture / pattern" dropdown feeds (e.g.
+# "pattern" for ZJU-Leaper's textures, "category" for MVTec AD's object
+# classes); None means the dataset has no such subdivision. Additional
+# datasets can add a catalog entry here without changing the page interaction
+# contract, as long as `texture_choices`/`slice_value` below know how to
+# enumerate/resolve their slice_kwarg.
 DATASET_CATALOG = {
     "ZJU-Leaper": {
         "name": "zju-leaper",
         "dir": "ZJU-Leaper",
         "env": "ZJU_LEAPER_ROOT",
-        "has_texture": True,
+        "slice_kwarg": "pattern",
         "task": "detection",
     },
     "RAW-FABRID": {
         "name": "raw-fabric",
         "dir": "RAW_FABRID",
         "env": "RAW_FABRIC_ROOT",
-        "has_texture": False,
+        "slice_kwarg": None,
+        "task": "anomaly",
+    },
+    "MVTec AD": {
+        "name": "mvtec-ad",
+        "dir": "MVTec AD",
+        "env": "MVTEC_AD_ROOT",
+        "slice_kwarg": "category",
         "task": "anomaly",
     },
 }
@@ -142,37 +154,63 @@ def default_dataset_root(dataset_label: str = "ZJU-Leaper") -> str:
     return ""
 
 
-def texture_choices(dataset_label: str) -> list[str]:
-    """Discover available texture slices from the registered dataset root.
+def _mvtec_ad_categories(root: str) -> list[str]:
+    if not root:
+        return []
+    root_path = Path(root)
+    return sorted(
+        path.name
+        for path in root_path.iterdir()
+        if path.is_dir() and (path / "train" / "good").is_dir()
+    )
 
-    Datasets without a texture/pattern subdivision (per `DATASET_CATALOG`'s
-    `has_texture` flag) only ever offer the "All textures" choice.
+
+def texture_choices(dataset_label: str) -> list[str]:
+    """Discover available texture/category slices from the registered
+    dataset root. Datasets without a subdivision (`slice_kwarg` is None)
+    only ever offer the "All textures" choice.
     """
 
     choices = [ALL_TEXTURES]
     spec = DATASET_CATALOG.get(dataset_label)
-    if spec is None or not spec["has_texture"]:
+    if spec is None or spec["slice_kwarg"] is None:
         return choices
     root = default_dataset_root(dataset_label)
-    patterns = Path(root) / "ImageSets" / "Patterns" if root else None
-    if patterns is None or not patterns.is_dir():
-        return choices
-    pattern_ids = sorted(
-        (path.stem.removeprefix("pattern") for path in patterns.glob("pattern*.json")),
-        key=lambda value: int(value) if value.isdigit() else value,
-    )
-    return choices + [f"Pattern {pattern_id}" for pattern_id in pattern_ids]
+
+    if spec["name"] == "zju-leaper":
+        patterns = Path(root) / "ImageSets" / "Patterns" if root else None
+        if patterns is None or not patterns.is_dir():
+            return choices
+        pattern_ids = sorted(
+            (path.stem.removeprefix("pattern") for path in patterns.glob("pattern*.json")),
+            key=lambda value: int(value) if value.isdigit() else value,
+        )
+        return choices + [f"Pattern {pattern_id}" for pattern_id in pattern_ids]
+
+    if spec["name"] == "mvtec-ad":
+        return choices + _mvtec_ad_categories(root)
+
+    return choices
 
 
-def _pattern_value(texture_label: str) -> str | None:
+def slice_value(dataset_label: str, texture_label: str) -> str | None:
+    """Resolve the "Texture / pattern" dropdown's selection into the value
+    passed to the selected dataset's `slice_kwarg` (e.g. "pattern7" for
+    ZJU-Leaper, "bottle" for MVTec AD)."""
+
     if texture_label == ALL_TEXTURES:
         return None
-    if texture_label.lower().startswith("pattern "):
-        return f"pattern{texture_label.split()[-1]}"
-    raise ValueError(f"Unknown texture selection {texture_label!r}.")
+    spec = DATASET_CATALOG[dataset_label]
+    if spec["name"] == "zju-leaper":
+        if texture_label.lower().startswith("pattern "):
+            return f"pattern{texture_label.split()[-1]}"
+        raise ValueError(f"Unknown texture selection {texture_label!r}.")
+    if spec["name"] == "mvtec-ad":
+        return texture_label
+    raise ValueError(f"{dataset_label!r} does not support texture/category selection.")
 
 
-def _shot_regime_kwargs(shot_mode: str) -> tuple[int | None, float]:
+def shot_regime_kwargs(shot_mode: str) -> tuple[int | None, float]:
     """Map the UI's full-shot/few-shot toggle to `(num_samples, defect_ratio)`
     kwargs shared by every `DatasetAdapter` in this project."""
 
@@ -256,7 +294,7 @@ def load_random_samples(
         )
     spec = DATASET_CATALOG[dataset_label]
     actual_seed = random.SystemRandom().randrange(2**32) if seed is None else int(seed)
-    num_samples, defect_ratio = _shot_regime_kwargs(shot_mode)
+    num_samples, defect_ratio = shot_regime_kwargs(shot_mode)
     dataset_kwargs: dict[str, Any] = dict(
         root=root,
         split=split,
@@ -265,8 +303,8 @@ def load_random_samples(
         num_samples=num_samples,
         defect_ratio=defect_ratio,
     )
-    if spec["has_texture"]:
-        dataset_kwargs["pattern"] = _pattern_value(texture_label)
+    if spec["slice_kwarg"] is not None:
+        dataset_kwargs[spec["slice_kwarg"]] = slice_value(dataset_label, texture_label)
     dataset = load_dataset(spec["name"], **dataset_kwargs)
     samples = dataset.load_samples()
     if image_scope == DEFECT_ONLY:
@@ -323,7 +361,7 @@ def load_selected_model(session_manager: Any, model_label: str) -> dict[str, Any
     """Load a catalog entry through the UI-independent inference service."""
 
     spec = MODEL_CATALOG[model_label]
-    return session_manager.load(model_label, spec, _artifact_for_inference(spec))
+    return session_manager.load(model_label, spec, artifact_for_model(spec))
 
 
 def unload_selected_model(session_manager: Any) -> dict[str, Any]:
@@ -356,11 +394,11 @@ def detect_loaded_model(
 def _predict_with_model(model: Any, spec: dict[str, Any], model_label: str, sample: Sample) -> list[Prediction]:
     if spec["backend"] == "anomalib":
         maps_dir = RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label)
-        return model.predict([sample], _artifact_for_inference(spec), output_dir=str(maps_dir))
-    return model.predict([sample], _artifact_for_inference(spec))
+        return model.predict([sample], artifact_for_model(spec), output_dir=str(maps_dir))
+    return model.predict([sample], artifact_for_model(spec))
 
 
-def _artifact_for_inference(spec: dict[str, Any]) -> Artifact:
+def artifact_for_model(spec: dict[str, Any]) -> Artifact:
     return Artifact(path=str(spec["checkpoint"]), backend=spec["backend"], metadata=dict(spec["metadata"]))
 
 

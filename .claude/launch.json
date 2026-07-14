@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fdh-ui",
+      "runtimeExecutable": "/Users/boqian/miniconda3/envs/anomalib_env/bin/python",
+      "runtimeArgs": ["-c", "from fabric_defect_hub.web.app import launch; launch(server_name='127.0.0.1', server_port=7860)"],
+      "port": 7860
+    }
+  ]
+}

@@ -66,8 +66,9 @@ def test_texture_choices_are_safe_when_the_dataset_is_not_connected(monkeypatch,
 
 
 def test_raw_fabrid_is_registered_alongside_zju_leaper():
-    assert set(DATASET_CATALOG) == {"ZJU-Leaper", "RAW-FABRID"}
+    assert set(DATASET_CATALOG) == {"ZJU-Leaper", "RAW-FABRID", "MVTec AD"}
     assert DATASET_CATALOG["RAW-FABRID"]["name"] == "raw-fabric"
+    assert DATASET_CATALOG["MVTec AD"]["name"] == "mvtec-ad"
 
 
 def test_raw_fabrid_has_no_texture_subdivision(monkeypatch, tmp_path):
@@ -78,6 +79,24 @@ def test_raw_fabrid_has_no_texture_subdivision(monkeypatch, tmp_path):
 def test_raw_fabrid_root_prefers_the_configured_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("RAW_FABRIC_ROOT", str(tmp_path))
     assert default_dataset_root("RAW-FABRID") == str(tmp_path.resolve())
+
+
+def test_mvtec_ad_root_prefers_the_configured_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("MVTEC_AD_ROOT", str(tmp_path))
+    assert default_dataset_root("MVTec AD") == str(tmp_path.resolve())
+
+
+def test_mvtec_ad_texture_choices_list_categories_found_on_disk(monkeypatch, tmp_path):
+    for category in ("bottle", "cable"):
+        (tmp_path / category / "train" / "good").mkdir(parents=True)
+    monkeypatch.setenv("MVTEC_AD_ROOT", str(tmp_path))
+
+    assert texture_choices("MVTec AD") == [ALL_TEXTURES, "bottle", "cable"]
+
+
+def test_mvtec_ad_texture_choices_are_safe_when_the_dataset_is_not_connected(monkeypatch):
+    monkeypatch.setattr(workspace, "default_dataset_root", lambda dataset_label: "")
+    assert texture_choices("MVTec AD") == [ALL_TEXTURES]
 
 
 def test_dataset_root_follows_symlinks_to_the_real_storage_location(monkeypatch, tmp_path):
@@ -194,6 +213,32 @@ def test_shot_mode_controls_the_dataset_adapters_sample_count(monkeypatch, tmp_p
     workspace.load_random_samples("ZJU-Leaper", "test", 8, seed=1, shot_mode=SHOT_FEW)
     assert captured["num_samples"] == workspace.FEW_SHOT_SAMPLE_COUNT
     assert captured["defect_ratio"] == workspace.FEW_SHOT_DEFECT_RATIO
+
+
+def test_mvtec_ad_texture_selection_forwards_the_category_kwarg(monkeypatch, tmp_path):
+    normal_path = tmp_path / "normal.jpg"
+    normal_path.write_bytes(b"normal")
+    samples = [Sample("bottle/good/normal", str(normal_path), "anomaly", Annotations(is_anomalous=False))]
+    captured = {}
+
+    class FakeDataset:
+        name = "mvtec-ad"
+
+        def load_samples(self):
+            return samples
+
+    def fake_load_dataset(name, **kwargs):
+        captured.update(kwargs)
+        return FakeDataset()
+
+    monkeypatch.setattr(workspace, "default_dataset_root", lambda dataset_label="ZJU-Leaper": str(tmp_path))
+    monkeypatch.setattr(workspace, "load_dataset", fake_load_dataset)
+
+    workspace.load_random_samples("MVTec AD", "test", 8, seed=1, texture_label="bottle")
+    assert captured["category"] == "bottle"
+
+    workspace.load_random_samples("MVTec AD", "test", 8, seed=1, texture_label=ALL_TEXTURES)
+    assert captured["category"] is None
 
 
 def test_prediction_summary_is_human_readable_for_detection_and_anomaly():
