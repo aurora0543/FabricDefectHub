@@ -101,7 +101,11 @@ class AnomalibAdapter(ModelAdapter):
         return Artifact(
             path=str(ckpt_path),
             backend=self.backend,
-            metadata={"model_class": self.resolved_class_name, "model_kwargs": model_kwargs},
+            metadata={
+                "model_class": self.resolved_class_name,
+                "model_kwargs": model_kwargs,
+                "trusted": True,
+            },
         )
 
     def _validate_model_kwargs(self, model_kwargs: dict[str, Any]) -> None:
@@ -130,6 +134,12 @@ class AnomalibAdapter(ModelAdapter):
         need image-level scores.
         """
 
+        if not artifact.metadata.get("trusted", False):
+            raise ValueError(
+                "Refusing to load an untrusted Anomalib checkpoint. Use load_trained_model(..., "
+                "allow_unsafe_checkpoint=True) only for a checkpoint from a trusted source."
+            )
+
         import numpy as np
         from anomalib.data import PredictDataset
         from anomalib.engine import Engine
@@ -147,6 +157,11 @@ class AnomalibAdapter(ModelAdapter):
         for sample in samples:
             dataset = PredictDataset(path=sample.image_path)
             batches = engine.predict(model=model, dataset=dataset) or []
+            if not batches:
+                raise RuntimeError(
+                    f"Anomalib produced no prediction output for sample {sample.id!r} "
+                    f"({sample.image_path})."
+                )
             score = None
             anomaly_map_path = None
             if batches:
@@ -160,6 +175,10 @@ class AnomalibAdapter(ModelAdapter):
                     map_path = maps_dir / f"{sample.id}.npy"
                     np.save(map_path, np.squeeze(arr))
                     anomaly_map_path = str(map_path)
+            if score is None:
+                raise RuntimeError(
+                    f"Anomalib prediction for sample {sample.id!r} has no anomaly score."
+                )
             predictions.append(
                 Prediction(sample_id=sample.id, anomaly_score=score, anomaly_map=anomaly_map_path)
             )
@@ -167,6 +186,9 @@ class AnomalibAdapter(ModelAdapter):
 
     def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
         """`target` is an `anomalib.deploy.ExportType` value, e.g. 'onnx', 'openvino'."""
+
+        if not artifact.metadata.get("trusted", False):
+            raise ValueError("Refusing to export an untrusted Anomalib checkpoint.")
 
         from anomalib.engine import Engine
 
@@ -211,7 +233,9 @@ class AnomalibAdapter(ModelAdapter):
         metadata["registered_from"] = str(src)
         return Artifact(path=str(dst), backend=self.backend, metadata=metadata)
 
-    def load_trained_model(self, artifact_or_path: Artifact | str) -> Artifact:
+    def load_trained_model(
+        self, artifact_or_path: Artifact | str, allow_unsafe_checkpoint: bool = False
+    ) -> Artifact:
         """Load a previously registered/trained checkpoint back into this
         adapter. Unlike `predict()`/`export()`, which resolve the model
         class from `artifact.metadata['model_class']` internally, this just
@@ -223,9 +247,17 @@ class AnomalibAdapter(ModelAdapter):
         if not Path(path).exists():
             raise FileNotFoundError(f"cannot load missing checkpoint: {path}")
         if isinstance(artifact_or_path, Artifact):
+            if not artifact_or_path.metadata.get("trusted", False):
+                raise ValueError("Anomalib artifact is not marked as trusted.")
             return artifact_or_path
+        if not allow_unsafe_checkpoint:
+            raise ValueError(
+                "Loading a raw Anomalib checkpoint requires allow_unsafe_checkpoint=True because "
+                "Lightning checkpoints can deserialize arbitrary Python objects."
+            )
         return Artifact(
-            path=str(path), backend=self.backend, metadata={"model_class": self.resolved_class_name}
+            path=str(path), backend=self.backend,
+            metadata={"model_class": self.resolved_class_name, "trusted": True},
         )
 
 
@@ -233,9 +265,9 @@ def _load_checkpoint(model_cls, path: str):
     """`weights_only=False`: PyTorch >=2.6 defaults `torch.load` to
     `weights_only=True`, which rejects anomalib's own checkpoint globals
     (e.g. `anomalib.PrecisionType`) unless explicitly allowlisted. Safe
-    here because every `Artifact.path` this adapter loads was produced by
-    this same adapter's `train()`/`export()` — never an arbitrary
-    externally supplied checkpoint.
+    here because callers are required to pass an `Artifact` marked trusted
+    by `train()`/`register_trained_model()`, or to explicitly opt into an
+    unsafe raw-checkpoint load in `load_trained_model()`.
     """
 
     return model_cls.load_from_checkpoint(path, weights_only=False)

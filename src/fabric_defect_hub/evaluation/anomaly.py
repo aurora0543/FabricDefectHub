@@ -202,4 +202,9 @@ def _compute_aupro(pixel_pairs: list, max_images: int, seed: int, num_thresholds
     order = np.argsort(fprs)
     fprs_sorted = np.asarray(fprs)[order]
     pro_sorted = np.asarray(pro_scores)[order]
-    return float(np.trapezoid(pro_sorted, fprs_sorted))
+    return _integrate_trapezoid(np, pro_sorted, fprs_sorted)
+
+
+def _integrate_trapezoid(np_module, values, coordinates) -> float:
+    integrate = getattr(np_module, "trapezoid", None) or getattr(np_module, "trapz")
+    return float(integrate(values, coordinates))

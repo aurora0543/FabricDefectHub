@@ -50,13 +50,19 @@ class ONNXRuntimeProfiler(BackendProfiler):
 
         latencies_ms: list[float] = []
         peak_rss_bytes = 0
-        for _ in range(config.measured_runs):
-            start = time.perf_counter()
-            session.run(output_names, feed)
-            latencies_ms.append((time.perf_counter() - start) * 1000.0)
-            peak_rss_bytes = max(peak_rss_bytes, process.memory_info().rss)
+        monitor = self.start_power_monitor(config)
+        try:
+            for _ in range(config.measured_runs):
+                start = time.perf_counter()
+                session.run(output_names, feed)
+                latencies_ms.append((time.perf_counter() - start) * 1000.0)
+                peak_rss_bytes = max(peak_rss_bytes, process.memory_info().rss)
+                monitor.sample()
+        finally:
+            metrics = summarize_latencies(latencies_ms, config.batch_size, peak_rss_bytes)
+            self.finish_power_monitor(monitor, metrics)
 
-        return summarize_latencies(latencies_ms, config.batch_size, peak_rss_bytes)
+        return metrics
 
 
 def _providers_for_device(device: str) -> list[str]:

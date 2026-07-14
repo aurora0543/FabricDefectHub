@@ -29,6 +29,19 @@ class ProfileConfig:
     #   `profiling/pytorch.py`; ONNX graphs are always a fixed tensor shape
     #   regardless of the pre-export Python calling convention.
     input_style: str = "batched"
+    # auto: collect when a supported sensor is available; required: fail if
+    # power cannot be measured; disabled: do not attempt a power reading.
+    power_mode: str = "auto"
+    power_sample_interval_ms: int = 100
+    # Optional explicit Linux sysfs power sensor path, chiefly for a
+    # Raspberry Pi connected to an INA219/INA226 power monitor.
+    power_sensor_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.power_mode not in {"auto", "required", "disabled"}:
+            raise ValueError("power_mode must be 'auto', 'required', or 'disabled'.")
+        if self.power_sample_interval_ms < 1:
+            raise ValueError("power_sample_interval_ms must be at least 1.")
 
 
 class BackendProfiler(ABC):
@@ -47,6 +60,18 @@ class BackendProfiler(ABC):
             precision=config.precision,
             input_size=config.input_size,
         )
+
+    def start_power_monitor(self, config: ProfileConfig):
+        from fabric_defect_hub.profiling.power import PowerMonitor
+
+        monitor = PowerMonitor.from_profile_config(config)
+        monitor.start()
+        return monitor
+
+    def finish_power_monitor(self, monitor, metrics: dict[str, float]) -> None:
+        report = monitor.stop()
+        self.last_power_report = report
+        metrics.update(report.metrics())
 
 
 def summarize_latencies(latencies_ms: list[float], batch_size: int, peak_memory_bytes: int) -> dict[str, float]:

@@ -95,13 +95,18 @@ class UltralyticsAdapter(ModelAdapter):
         self._loaded_from = str(weights)
         return self._model
 
-    def load_pretrained(self, variant: str | None = None):
+    def load_pretrained(self, variant: str | None = None, offline: bool = False):
         """Load the COCO-pretrained checkpoint for a variant (transfer
         learning starting point). Defaults to this adapter's variant.
         """
 
         variant = variant or self.name
-        return self.load_weights(variant_weights(variant, pretrained=True))
+        weights = variant_weights(variant, pretrained=True)
+        if offline:
+            from fabric_defect_hub.core.preflight import require_cached_weight
+
+            weights = str(require_cached_weight(weights, self.backend))
+        return self.load_weights(weights)
 
     def load_scratch(self, variant: str | None = None):
         """Load the architecture spec with random init (train from scratch)."""
@@ -138,6 +143,7 @@ class UltralyticsAdapter(ModelAdapter):
         data_yaml = cfg.pop("data", None)
         weights = cfg.pop("weights", None)
         pretrained = cfg.pop("pretrained", True)
+        offline = cfg.pop("offline", False)
 
         if samples is None and data_yaml is None:
             raise ValueError(
@@ -149,7 +155,7 @@ class UltralyticsAdapter(ModelAdapter):
         if weights is not None:
             self.load_weights(weights)
         elif pretrained:
-            self.load_pretrained()
+            self.load_pretrained(offline=offline)
         else:
             self.load_scratch()
 
@@ -244,6 +250,12 @@ class UltralyticsAdapter(ModelAdapter):
                 flat["map50_95_mean"] = float(sum(maps) / len(maps))
             except (TypeError, ZeroDivisionError):
                 pass
+        if not flat:
+            available = sorted(results) if isinstance(results, dict) else []
+            raise RuntimeError(
+                "Ultralytics validation returned no recognized metrics; "
+                f"available results_dict keys: {available or '<none>'}."
+            )
         return flat
 
     # ------------------------------------------------------------------ #

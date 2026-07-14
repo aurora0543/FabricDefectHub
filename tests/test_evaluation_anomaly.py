@@ -7,7 +7,11 @@ import math
 import numpy as np
 
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
-from fabric_defect_hub.evaluation.anomaly import AnomalyEvaluator, _best_f1_threshold
+from fabric_defect_hub.evaluation.anomaly import (
+    AnomalyEvaluator,
+    _best_f1_threshold,
+    _integrate_trapezoid,
+)
 
 
 def _image_level_dataset():
@@ -59,6 +63,15 @@ def test_best_f1_threshold_single_class_shortcircuits():
     y_true = np.array([1, 1, 1])
     y_score = np.array([0.1, 0.5, 0.9])
     assert _best_f1_threshold(y_true, y_score) == 0.5
+
+
+def test_trapezoid_compatibility_falls_back_to_legacy_name():
+    class LegacyNumpy:
+        @staticmethod
+        def trapz(values, coordinates):
+            return 0.75
+
+    assert _integrate_trapezoid(LegacyNumpy, [1, 2], [0, 1]) == 0.75
 
 
 def test_best_f1_threshold_monotonic_scores():

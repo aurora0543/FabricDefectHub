@@ -76,6 +76,7 @@ def run_from_config(config: UltralyticsConfig) -> UltralyticsRunResult:
         train_config.update(config.resolved_train_kwargs())
         train_config.update(data_kwargs)
         train_config["pretrained"] = config.model.pretrained
+        train_config["offline"] = config.model.offline
         if config.model.weights:
             train_config["weights"] = config.model.weights
         if config.train.resume:

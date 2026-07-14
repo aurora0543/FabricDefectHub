@@ -1,11 +1,7 @@
 """Real round-trip and schema-validation tests for `core.serialization`.
 
-Note: `schemas/experiment_result.schema.json` restricts `model.backend` to
-`["ultralytics", "torchvision", "anomalib"]`. Tests here that exercise
-`validate_experiment_result` deliberately use one of those three real
-backend strings for `ModelInfo.backend` (the `ModelAdapter` itself can
-still be entirely fake elsewhere in the test suite — only this one string
-feeds the schema).
+The result schema keeps `model.backend` extensible so future adapters can
+participate without changing the shared contract.
 """
 
 import json
@@ -121,15 +117,21 @@ def test_validate_experiment_result_accepts_valid_result():
     validate_experiment_result(_result())  # must not raise
 
 
-def test_validate_experiment_result_rejects_unknown_backend():
-    bad = ExperimentResult(
+def test_validate_experiment_result_accepts_extensible_backend():
+    result = ExperimentResult(
         experiment_id="x",
-        model=ModelInfo(name="m", backend="fake-backend", task="detection"),
+        model=ModelInfo(name="m", backend="future-backend", task="industrial"),
         dataset=DatasetInfo(name="d", split="test"),
         runtime=RuntimeInfo(device="cpu", engine="e", precision="fp32", input_size=(1, 1)),
     )
-    with pytest.raises(jsonschema.ValidationError, match="fake-backend"):
-        validate_experiment_result(bad)
+    validate_experiment_result(result)
+
+
+def test_save_result_rejects_non_finite_json_metric(tmp_path):
+    bad = _result()
+    bad.metrics["invalid"] = float("nan")
+    with pytest.raises(ValueError):
+        save_experiment_result(bad, tmp_path / "bad.json")
 
 
 def test_validate_experiment_result_rejects_non_numeric_metric():

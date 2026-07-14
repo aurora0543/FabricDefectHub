@@ -29,8 +29,11 @@ from fabric_defect_hub.evaluation.base import Evaluator
 
 
 class SegmentationEvaluator(Evaluator):
-    """Binary mIoU / Dice / pixel-F1, averaged over samples with both a
-    ground-truth mask and a predicted mask.
+    """Binary mIoU / Dice / pixel-F1 over samples with meaningful masks.
+
+    Both-empty normal-image pairs are excluded rather than counted as a
+    perfect prediction, and are reported through ``num_skipped_empty`` when
+    at least one meaningful pair remains.
     """
 
     task = "segmentation"
@@ -39,6 +42,7 @@ class SegmentationEvaluator(Evaluator):
         pred_by_id = {p.sample_id: p for p in predictions}
 
         ious, dices, f1s = [], [], []
+        skipped_empty = 0
         for sample in samples:
             pred = pred_by_id.get(sample.id)
             if pred is None:
@@ -49,6 +53,9 @@ class SegmentationEvaluator(Evaluator):
             if gt_mask is None or pred_mask is None:
                 continue
             pred_mask = _resize_like(pred_mask, gt_mask.shape)
+            if not gt_mask.any() and not pred_mask.any():
+                skipped_empty += 1
+                continue
 
             ious.append(_iou(gt_mask, pred_mask))
             dices.append(_dice(gt_mask, pred_mask))
@@ -57,12 +64,15 @@ class SegmentationEvaluator(Evaluator):
         if not ious:
             return {}
 
-        return {
+        metrics = {
             "miou": sum(ious) / len(ious),
             "dice": sum(dices) / len(dices),
             "pixel_f1": sum(f1s) / len(f1s),
             "num_evaluated": float(len(ious)),
         }
+        if skipped_empty:
+            metrics["num_skipped_empty"] = float(skipped_empty)
+        return metrics
 
 
 def _load_binary_mask(raw: Any):

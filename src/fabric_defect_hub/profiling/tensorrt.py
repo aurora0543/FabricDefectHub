@@ -26,6 +26,10 @@ Concretely unverified/undisclaimed here:
   allocated I/O device buffer sizes — a lower bound on the engine's actual
   working set, not the validated `torch.cuda.max_memory_allocated()`-style
   peak `pytorch.py` reports. Don't treat the two as comparable numbers.
+* **Power metric has a separately reported scope**: the common power monitor
+  uses Jetson's `tegrastats` board-input reading here (rather than this
+  profiler's device-buffer lower bound). Inspect the generated `power.json`
+  for source, scope, sample count, and any permission/sensor failure.
 * **No engine-building path**: this profiler only loads and runs a
   pre-built `.engine`/`.plan` file. No `ModelAdapter.export()` in this
   codebase currently produces `target == "tensorrt"` — building one (via
@@ -40,6 +44,9 @@ Requires the `profiling-tensorrt` extra (`pip install -e ".[profiling-tensorrt]"
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
 
 from fabric_defect_hub.models.base import ExportedArtifact
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig, summarize_latencies
@@ -78,15 +85,121 @@ class TensorRTProfiler(BackendProfiler):
         start_event = cuda.Event()
         end_event = cuda.Event()
         latencies_ms: list[float] = []
-        for _ in range(config.measured_runs):
-            start_event.record(stream)
-            _execute(context, stream)
-            end_event.record(stream)
-            end_event.synchronize()
-            latencies_ms.append(start_event.time_till(end_event))
+        monitor = self.start_power_monitor(config)
+        try:
+            for _ in range(config.measured_runs):
+                start_event.record(stream)
+                _execute(context, stream)
+                end_event.record(stream)
+                end_event.synchronize()
+                latencies_ms.append(start_event.time_till(end_event))
+                monitor.sample()
+        finally:
+            peak_memory_bytes = sum(buf.nbytes for buf in io.device_buffers)
+            metrics = summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
+            self.finish_power_monitor(monitor, metrics)
 
-        peak_memory_bytes = sum(buf.nbytes for buf in io.device_buffers)
-        return summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
+        return metrics
+
+
+@dataclass
+class TensorRTBuildConfig:
+    """ONNX-to-TensorRT engine build options for one deployment target."""
+
+    precision: str = "fp32"
+    workspace_size_mb: int = 1024
+    min_shape: tuple[int, int, int, int] = (1, 3, 640, 640)
+    opt_shape: tuple[int, int, int, int] = (1, 3, 640, 640)
+    max_shape: tuple[int, int, int, int] = (1, 3, 640, 640)
+
+    def __post_init__(self) -> None:
+        if self.precision not in {"fp32", "fp16", "int8"}:
+            raise ValueError("TensorRT precision must be 'fp32', 'fp16', or 'int8'.")
+        if self.workspace_size_mb < 1:
+            raise ValueError("TensorRT workspace_size_mb must be at least 1.")
+        for name in ("min_shape", "opt_shape", "max_shape"):
+            shape = getattr(self, name)
+            if len(shape) != 4 or any(value < 1 for value in shape):
+                raise ValueError(f"TensorRT {name} must contain four positive dimensions.")
+
+
+def build_tensorrt_engine(
+    artifact: ExportedArtifact, output_path: str | Path, config: TensorRTBuildConfig | None = None
+) -> ExportedArtifact:
+    """Build a deployable TensorRT engine from an ONNX artifact.
+
+    Dynamic ONNX inputs receive an optimization profile from ``config``.
+    INT8 engine creation is intentionally rejected here because a calibrated
+    dataset-specific ``IInt8Calibrator`` is required; silently enabling INT8
+    without calibration would produce an untrustworthy deployment artifact.
+    """
+
+    if artifact.target != "onnx":
+        raise ValueError(f"TensorRT engine build requires target='onnx', got {artifact.target!r}.")
+    onnx_path = Path(artifact.path)
+    if not onnx_path.is_file():
+        raise FileNotFoundError(f"ONNX artifact does not exist: {onnx_path}")
+    config = config or TensorRTBuildConfig()
+    if config.precision == "int8":
+        raise ValueError(
+            "INT8 TensorRT builds require a dataset-specific calibrator and are not implicit. "
+            "Use fp16/fp32 until a calibrated build is supplied."
+        )
+
+    import tensorrt as trt
+
+    logger = trt.Logger(trt.Logger.WARNING)
+    builder = trt.Builder(logger)
+    flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    network = builder.create_network(flags)
+    parser = trt.OnnxParser(network, logger)
+    if not parser.parse(onnx_path.read_bytes()):
+        errors = [parser.get_error(index).desc() for index in range(parser.num_errors)]
+        raise ValueError(f"TensorRT could not parse ONNX artifact {onnx_path}: {'; '.join(errors)}")
+
+    build_config = builder.create_builder_config()
+    _set_workspace_limit(build_config, config.workspace_size_mb, trt)
+    if config.precision == "fp16":
+        if not builder.platform_has_fast_fp16:
+            raise RuntimeError("This TensorRT platform does not support fast FP16 engine builds.")
+        build_config.set_flag(trt.BuilderFlag.FP16)
+
+    profile = builder.create_optimization_profile()
+    has_dynamic_input = False
+    for index in range(network.num_inputs):
+        input_tensor = network.get_input(index)
+        shape = tuple(input_tensor.shape)
+        if any(dimension < 0 for dimension in shape):
+            has_dynamic_input = True
+            profile.set_shape(input_tensor.name, config.min_shape, config.opt_shape, config.max_shape)
+    if has_dynamic_input:
+        build_config.add_optimization_profile(profile)
+
+    serialized_engine = builder.build_serialized_network(network, build_config)
+    if serialized_engine is None:
+        raise RuntimeError("TensorRT failed to build a serialized engine.")
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(bytes(serialized_engine))
+    return ExportedArtifact(
+        path=str(output), target="tensorrt",
+        metadata={
+            "source_onnx": str(onnx_path),
+            "precision": config.precision,
+            "workspace_size_mb": config.workspace_size_mb,
+            "min_shape": list(config.min_shape),
+            "opt_shape": list(config.opt_shape),
+            "max_shape": list(config.max_shape),
+        },
+    )
+
+
+def _set_workspace_limit(build_config, workspace_size_mb: int, trt) -> None:
+    bytes_limit = workspace_size_mb * 1024 * 1024
+    if hasattr(build_config, "set_memory_pool_limit"):
+        build_config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, bytes_limit)
+    else:
+        build_config.max_workspace_size = bytes_limit
 
 
 class _IOTensors:

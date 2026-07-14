@@ -8,7 +8,7 @@ dict with no reset between tests, so pytest collecting both files into one
 process would collide on identical names.
 """
 
-from fabric_defect_hub.benchmark import BenchmarkRun, leaderboard, run_benchmark
+from fabric_defect_hub.benchmark import BenchmarkConfig, BenchmarkRun, leaderboard, run_benchmark
 from fabric_defect_hub.core.registry import register_dataset, register_model
 from fabric_defect_hub.core.types import Annotations, ModelInfo, Prediction, RuntimeInfo, Sample
 from fabric_defect_hub.datasets.base import DatasetAdapter
@@ -115,6 +115,13 @@ def test_leaderboard_drops_only_the_missing_one():
     assert [r.experiment_id for r in board] == ["exp-a"]
 
 
+def test_leaderboard_drops_nan_and_infinite_metrics():
+    results = run_benchmark(_two_runs())
+    results[0].metrics["quality"] = float("nan")
+    results[1].metrics["quality"] = float("inf")
+    assert leaderboard(results, metric="quality") == []
+
+
 def test_resolve_dataset_returns_prebuilt_dataset_as_is():
     dataset = FakeBenchDataset(root="data/fake")
     run = BenchmarkRun(
@@ -154,3 +161,32 @@ def test_run_benchmark_persists_output(tmp_path):
     for result in results:
         assert (tmp_path / result.experiment_id / "predictions.json").exists()
         assert (tmp_path / result.experiment_id / "result.json").exists()
+
+
+def test_benchmark_config_builds_and_runs_framework_free(tmp_path):
+    config = BenchmarkConfig.from_dict(
+        {
+            "output_dir": str(tmp_path / "results"),
+            "report_path": str(tmp_path / "leaderboard.md"),
+            "runs": [
+                {
+                    "experiment_id": "configured",
+                    "dataset": {"name": "fake-fabric-bench", "root": "data/fake"},
+                    "model": {
+                        "backend": "fake-backend-bench-a",
+                        "name": "model-a",
+                        "task": "detection",
+                    },
+                    "runtime": {"device": "cpu", "engine": "python"},
+                    "train": {},
+                    "evaluator": False,
+                }
+            ],
+        }
+    )
+
+    results = config.run()
+
+    assert [result.experiment_id for result in results] == ["configured"]
+    assert (tmp_path / "results" / "configured" / "result.json").exists()
+    assert (tmp_path / "leaderboard.md").read_text().startswith("| experiment_id |")

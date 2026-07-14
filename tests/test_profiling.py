@@ -77,7 +77,7 @@ def test_pytorch_profiler_batched_input(tmp_path):
 
     config = ProfileConfig(
         device="cpu", engine="pytorch", input_size=(8, 8), batch_size=2,
-        warmup_runs=1, measured_runs=3, input_style="batched",
+        warmup_runs=1, measured_runs=3, input_style="batched", power_mode="disabled",
     )
     metrics = PyTorchProfiler().profile(ExportedArtifact(path=str(path), target="torchscript"), config)
 
@@ -100,7 +100,7 @@ def test_pytorch_profiler_list_style_input(tmp_path):
 
     config = ProfileConfig(
         device="cpu", engine="pytorch", input_size=(4, 4), batch_size=3,
-        warmup_runs=1, measured_runs=2, input_style="list",
+        warmup_runs=1, measured_runs=2, input_style="list", power_mode="disabled",
     )
     metrics = PyTorchProfiler().profile(ExportedArtifact(path=str(path), target="torchscript"), config)
     assert metrics["fps"] >= 0
@@ -110,6 +110,21 @@ def test_pytorch_profiler_rejects_wrong_target():
     config = ProfileConfig(device="cpu", engine="pytorch")
     with pytest.raises(ValueError, match="torchscript"):
         PyTorchProfiler().profile(ExportedArtifact(path="x.onnx", target="onnx"), config)
+
+
+def test_pytorch_profiler_exported_program(tmp_path):
+    model = _TinyConv()
+    exported = torch.export.export(model, (torch.rand(1, 3, 8, 8),))
+    path = tmp_path / "tiny.pt2"
+    torch.export.save(exported, path)
+    config = ProfileConfig(
+        device="cpu", engine="pytorch", input_size=(8, 8), batch_size=1,
+        warmup_runs=1, measured_runs=2, power_mode="disabled",
+    )
+    metrics = PyTorchProfiler().profile(
+        ExportedArtifact(path=str(path), target="exported_program"), config
+    )
+    assert metrics["fps"] >= 0
 
 
 def test_pytorch_profiler_rejects_unknown_input_style(tmp_path):
@@ -137,7 +152,7 @@ def test_onnxruntime_profiler_dynamic_batch(tmp_path):
 
     config = ProfileConfig(
         device="cpu", engine="onnxruntime", input_size=(8, 8), batch_size=4,
-        warmup_runs=1, measured_runs=3,
+        warmup_runs=1, measured_runs=3, power_mode="disabled",
     )
     metrics = ONNXRuntimeProfiler().profile(ExportedArtifact(path=str(onnx_path), target="onnx"), config)
 

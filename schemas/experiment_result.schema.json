@@ -12,8 +12,8 @@
       "required": ["name", "backend", "task"],
       "properties": {
         "name": { "type": "string" },
-        "backend": { "type": "string", "enum": ["ultralytics", "torchvision", "anomalib"] },
-        "task": { "type": "string", "enum": ["detection", "segmentation", "anomaly"] }
+        "backend": { "type": "string", "minLength": 1 },
+        "task": { "type": "string", "enum": ["detection", "segmentation", "anomaly", "industrial"] }
       },
       "additionalProperties": false
     },

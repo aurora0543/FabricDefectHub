@@ -8,7 +8,7 @@
   "properties": {
     "id": { "type": "string" },
     "image_path": { "type": "string" },
-    "task": { "type": "string", "enum": ["detection", "segmentation", "anomaly"] },
+    "task": { "type": "string", "enum": ["detection", "segmentation", "anomaly", "industrial"] },
     "annotations": {
       "type": "object",
       "properties": {

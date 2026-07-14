@@ -151,3 +151,11 @@ def test_evaluator_cross_representation_file_path_vs_nested_list(tmp_path):
 def test_evaluator_skips_sample_missing_from_predictions():
     sample = Sample(id="a", image_path="a.jpg", task="segmentation", annotations=Annotations(masks=None))
     assert SegmentationEvaluator().evaluate([sample], []) == {}
+
+
+def test_evaluator_excludes_both_empty_masks_from_average():
+    empty = [[False, False], [False, False]]
+    sample = Sample(id="normal", image_path="normal.jpg", task="segmentation", annotations=Annotations(masks=[empty]))
+    prediction = Prediction(sample_id="normal", masks=empty)
+
+    assert SegmentationEvaluator().evaluate([sample], [prediction]) == {}
