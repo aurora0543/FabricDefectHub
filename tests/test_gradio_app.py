@@ -48,8 +48,14 @@ def test_launch_injects_the_application_stylesheet(monkeypatch):
             return "launched"
 
     monkeypatch.setattr(app_module, "create_app", lambda: FakeApp())
-    monkeypatch.setattr(app_module, "default_dataset_root", lambda: "/external/zju-leaper")
+    monkeypatch.setattr(
+        app_module,
+        "default_dataset_root",
+        lambda dataset_label: f"/external/{dataset_label}",
+    )
 
     assert app_module.launch(server_port=7860) == "launched"
     assert captured_kwargs["css"] == CSS
-    assert captured_kwargs["allowed_paths"] == ["/external/zju-leaper"]
+    assert captured_kwargs["allowed_paths"] == [
+        f"/external/{label}" for label in app_module.DATASET_CATALOG
+    ]
