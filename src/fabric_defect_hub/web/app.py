@@ -9,11 +9,14 @@ from fabric_defect_hub.web.single_image import (
     DEFECT_ONLY,
     NORMAL_ONLY,
     MODEL_CATALOG,
+    SHOT_FEW,
+    SHOT_FULL,
     checkpoint_diagnostic,
     dataset_status as dataset_availability_status,
     default_dataset_root,
     detect_loaded_model,
     empty_gallery_state,
+    format_prediction_summary,
     load_random_samples,
     model_status,
     move_image,
@@ -81,10 +84,6 @@ def create_app():
                 "<div class='fdh-nav'><div class='fdh-brand'><span class='fdh-logo'>FD</span>"
                 "FabricDefectHub</div><div class='fdh-links'>Workspace · Datasets · Models · Results</div></div>"
             )
-            gr.HTML(
-                "<div class='fdh-hero'><h1>Fabric defect intelligence workspace</h1>"
-                "<p>Explore a local dataset image by image, then run a configured model and inspect its result.</p></div>"
-            )
             with gr.Tabs():
                 with gr.Tab("Single Image Detection", id="single-image"):
                     state = gr.State(empty_gallery_state())
@@ -112,7 +111,7 @@ def create_app():
                                 next_image = gr.Button("Next →", elem_classes="fdh-nav-button")
                         with gr.Column(scale=7, elem_classes="fdh-card"):
                             result_image = gr.Image(label="Inference result", height=390, interactive=False)
-                            result_json = gr.JSON(label="Prediction summary", value={})
+                            result_summary = gr.Markdown("### Prediction summary\nNo prediction available yet.", elem_classes="fdh-status")
                             inference_status = gr.Markdown("Select an image and a ready model to begin.", elem_classes="fdh-status")
 
                     with gr.Column(elem_classes="fdh-dataset-card"):
@@ -132,24 +131,39 @@ def create_app():
                                     value=ALL_IMAGES,
                                     label="Image selection",
                                 )
+                            with gr.Column(scale=2):
+                                shot_mode = gr.Radio(
+                                    [SHOT_FULL, SHOT_FEW],
+                                    value=SHOT_FULL,
+                                    label="Sample regime",
+                                )
                             with gr.Column(scale=2, elem_classes="fdh-dataset-actions"):
                                 load_button = gr.Button("Load random images")
                         dataset_status = gr.Markdown(
                             dataset_availability_status(next(iter(DATASET_CATALOG))), elem_classes="fdh-status"
                         )
 
-                    def load_handler(dataset, texture, selected_split, count, selected_scope):
+                    def load_handler(dataset, texture, selected_split, count, selected_scope, selected_shot_mode):
                         try:
                             new_state, image, caption, status = load_random_samples(
-                                dataset, selected_split, count, texture_label=texture, image_scope=selected_scope
+                                dataset,
+                                selected_split,
+                                count,
+                                texture_label=texture,
+                                image_scope=selected_scope,
+                                shot_mode=selected_shot_mode,
                             )
-                            return new_state, image, caption, status, None, {}, "Image ready. Choose a model to run detection."
+                            return new_state, image, caption, status, None, "### Prediction summary\nNo prediction available yet.", "Image ready. Choose a model to run detection."
                         except Exception as exc:
-                            return empty_gallery_state(), None, "No image loaded yet.", f"🔴 **Dataset unavailable** — {exc}", None, {}, ""
+                            return empty_gallery_state(), None, "No image loaded yet.", f"🔴 **Dataset unavailable** — {exc}", None, "### Prediction summary\nNo prediction available yet.", ""
 
                     def move_handler(current_state, direction):
                         new_state, image, caption = move_image(current_state, direction)
-                        return new_state, image, caption, None, {}, "Image changed. Run detection again for this image."
+                        return new_state, image, caption, None, "### Prediction summary\nNo prediction available yet.", "Image changed. Run detection again for this image."
+
+                    def detect_handler(current_state, model_label):
+                        image, summary, status = detect_loaded_model(sessions, current_state, model_label)
+                        return image, format_prediction_summary(summary), status, format_session_status(sessions.status())
 
                     def load_model_handler(model_label):
                         try:
@@ -162,18 +176,18 @@ def create_app():
 
                     load_button.click(
                         load_handler,
-                        inputs=[dataset_choice, texture_choice, split, sample_count, image_scope],
-                        outputs=[state, source_image, position, dataset_status, result_image, result_json, inference_status],
+                        inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode],
+                        outputs=[state, source_image, position, dataset_status, result_image, result_summary, inference_status],
                     )
                     previous.click(
                         lambda current_state: move_handler(current_state, -1),
                         inputs=state,
-                        outputs=[state, source_image, position, result_image, result_json, inference_status],
+                        outputs=[state, source_image, position, result_image, result_summary, inference_status],
                     )
                     next_image.click(
                         lambda current_state: move_handler(current_state, 1),
                         inputs=state,
-                        outputs=[state, source_image, position, result_image, result_json, inference_status],
+                        outputs=[state, source_image, position, result_image, result_summary, inference_status],
                     )
                     model_choice.change(
                         model_status,
@@ -199,16 +213,16 @@ def create_app():
                         inputs=dataset_choice,
                         outputs=texture_choice,
                     )
-                    for selection in (texture_choice, split, image_scope):
+                    for selection in (texture_choice, split, image_scope, shot_mode):
                         selection.change(
                             load_handler,
-                            inputs=[dataset_choice, texture_choice, split, sample_count, image_scope],
-                            outputs=[state, source_image, position, dataset_status, result_image, result_json, inference_status],
+                            inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode],
+                            outputs=[state, source_image, position, dataset_status, result_image, result_summary, inference_status],
                         )
                     detect_button.click(
-                        lambda current_state, model_label: (*detect_loaded_model(sessions, current_state, model_label), format_session_status(sessions.status())),
+                        detect_handler,
                         inputs=[state, model_choice],
-                        outputs=[result_image, result_json, inference_status, runtime_state],
+                        outputs=[result_image, result_summary, inference_status, runtime_state],
                     )
 
                 with gr.Tab("Benchmark", id="benchmark"):
@@ -223,12 +237,15 @@ def create_app():
 def launch(**kwargs):
     kwargs.setdefault("css", CSS)
     # Gradio 6 only caches files below the workspace or system temp directory
-    # unless an external location is explicitly trusted.  ZJU-Leaper lives on
-    # the user's SSD, so register just its resolved root for image display.
+    # unless an external location is explicitly trusted. Every catalog
+    # dataset typically lives on external storage reached through a
+    # `data/<dir>` symlink, so register each one's *resolved* root (the real
+    # on-disk location, not the symlink) for image display.
     configured_paths = list(kwargs.pop("allowed_paths", []) or [])
-    dataset_root = default_dataset_root()
-    if dataset_root and dataset_root not in configured_paths:
-        configured_paths.append(dataset_root)
+    for dataset_label in DATASET_CATALOG:
+        dataset_root = default_dataset_root(dataset_label)
+        if dataset_root and dataset_root not in configured_paths:
+            configured_paths.append(dataset_root)
     kwargs["allowed_paths"] = configured_paths
     try:
         import gradio as gr

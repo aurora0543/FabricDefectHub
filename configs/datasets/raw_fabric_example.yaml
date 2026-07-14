@@ -1,0 +1,28 @@
+# RAW_FABRID 数据集接口配置示例
+# 通过 load_dataset("raw-fabric", root=<root>, **config) 使用。
+# root 指向包含 MVTec/ 子目录的数据集根目录（RAW_FABRID/）。
+# MVTec/ 下已是标准 MVTec-AD 目录结构：train/good, test/good, test/defect,
+# ground_truth/defect —— RawFabricDataset 直接读取该目录，无需转换。
+
+# ---- 场景 A：full-shot（全量）----
+few_shot:
+  split: test
+  num_samples: null        # null = 使用该 split 下的全部图片
+  use_defect: true
+  task: anomaly
+
+# ---- 场景 B：少样本（一次 350 张，可控缺陷占比）----
+low_shot:
+  split: test
+  num_samples: 350         # 只取 350 张
+  use_defect: true
+  defect_ratio: 0.3        # 其中 30% 为缺陷图
+  task: anomaly
+  seed: 0
+
+# ---- 场景 C：zero-shot（不使用缺陷图，仅正常样本）----
+zero_shot:
+  split: train              # MVTec/train 仅含正常样本（one-class 训练集）
+  num_samples: 300
+  use_defect: false
+  task: anomaly

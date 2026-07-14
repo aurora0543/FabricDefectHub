@@ -5,14 +5,18 @@ from fabric_defect_hub.core.types import Annotations, Prediction, Sample
 from fabric_defect_hub.web import single_image as workspace
 from fabric_defect_hub.web.single_image import (
     ALL_TEXTURES,
+    DATASET_CATALOG,
     DEFECT_ONLY,
     NORMAL_ONLY,
+    SHOT_FEW,
+    SHOT_FULL,
     build_gallery_state,
     current_image,
     default_dataset_root,
     detect_loaded_model,
     detect_current,
     empty_gallery_state,
+    format_prediction_summary,
     move_image,
     texture_choices,
 )
@@ -59,6 +63,34 @@ def test_dataset_root_prefers_the_configured_environment(monkeypatch, tmp_path):
 def test_texture_choices_are_safe_when_the_dataset_is_not_connected(monkeypatch, tmp_path):
     monkeypatch.setenv("ZJU_LEAPER_ROOT", str(tmp_path / "missing"))
     assert ALL_TEXTURES in texture_choices("ZJU-Leaper")
+
+
+def test_raw_fabrid_is_registered_alongside_zju_leaper():
+    assert set(DATASET_CATALOG) == {"ZJU-Leaper", "RAW-FABRID"}
+    assert DATASET_CATALOG["RAW-FABRID"]["name"] == "raw-fabric"
+
+
+def test_raw_fabrid_has_no_texture_subdivision(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAW_FABRIC_ROOT", str(tmp_path / "missing"))
+    assert texture_choices("RAW-FABRID") == [ALL_TEXTURES]
+
+
+def test_raw_fabrid_root_prefers_the_configured_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAW_FABRIC_ROOT", str(tmp_path))
+    assert default_dataset_root("RAW-FABRID") == str(tmp_path.resolve())
+
+
+def test_dataset_root_follows_symlinks_to_the_real_storage_location(monkeypatch, tmp_path):
+    real_root = tmp_path / "real_storage"
+    real_root.mkdir()
+    link = tmp_path / "data_link"
+    link.symlink_to(real_root)
+    monkeypatch.setenv("ZJU_LEAPER_ROOT", str(link))
+
+    resolved = default_dataset_root("ZJU-Leaper")
+
+    assert resolved == str(real_root.resolve())
+    assert "data_link" not in resolved
 
 
 def test_anomalib_selection_dispatches_a_trusted_artifact_and_map_directory(monkeypatch, tmp_path):
@@ -135,3 +167,44 @@ def test_image_scope_filters_defect_and_normal_samples(monkeypatch, tmp_path):
 
     assert defect_state["samples"][0]["annotations"]["is_anomalous"] is True
     assert normal_state["samples"][0]["annotations"]["is_anomalous"] is False
+
+
+def test_shot_mode_controls_the_dataset_adapters_sample_count(monkeypatch, tmp_path):
+    normal_path = tmp_path / "normal.jpg"
+    normal_path.write_bytes(b"normal")
+    samples = [Sample("normal", str(normal_path), "detection", Annotations(is_anomalous=False))]
+    captured = {}
+
+    class FakeDataset:
+        name = "zju-leaper"
+
+        def load_samples(self):
+            return samples
+
+    def fake_load_dataset(name, **kwargs):
+        captured.update(kwargs)
+        return FakeDataset()
+
+    monkeypatch.setattr(workspace, "default_dataset_root", lambda dataset_label="ZJU-Leaper": str(tmp_path))
+    monkeypatch.setattr(workspace, "load_dataset", fake_load_dataset)
+
+    workspace.load_random_samples("ZJU-Leaper", "test", 8, seed=1, shot_mode=SHOT_FULL)
+    assert captured["num_samples"] is None
+
+    workspace.load_random_samples("ZJU-Leaper", "test", 8, seed=1, shot_mode=SHOT_FEW)
+    assert captured["num_samples"] == workspace.FEW_SHOT_SAMPLE_COUNT
+    assert captured["defect_ratio"] == workspace.FEW_SHOT_DEFECT_RATIO
+
+
+def test_prediction_summary_is_human_readable_for_detection_and_anomaly():
+    detection = format_prediction_summary(
+        {"task": "detection", "detections": 1, "labels": ["Defect"], "scores": [0.2567], "anomaly_score": None, "has_anomaly_map": False}
+    )
+    anomaly = format_prediction_summary(
+        {"task": "anomaly", "detections": 0, "labels": ["anomaly"], "scores": [], "anomaly_score": 0.7014, "has_anomaly_map": True}
+    )
+
+    assert "Defect detected" in detection
+    assert "25.67%" in detection
+    assert "0.7014" in anomaly
+    assert "available" in anomaly

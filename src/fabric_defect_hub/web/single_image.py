@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOCAL_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "yolo"
 LOCAL_ANOMALIB_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "anomalib"
 RUNTIME_ANOMALY_MAP_ROOT = PROJECT_ROOT / "artifacts" / "runtime" / "anomaly_maps"
-ZJU_LEAPER_VOLUME_SUFFIX = Path("anomaly-detection-challenges") / "datasets" / "ZJU-Leaper"
+_SSD_VOLUME_PARENT = Path("anomaly-detection-challenges") / "datasets"
 
 # The UI deliberately exposes trained, local artifacts only.  The path remains
 # backend-owned so operators never need to paste an absolute checkpoint path.
@@ -75,46 +75,86 @@ MODEL_CATALOG = {
     },
 }
 
-# Each entry names a registered DatasetAdapter.  Additional datasets can add a
+# Each entry names a registered DatasetAdapter plus the UI-facing metadata
+# needed to locate it on disk and adapt the sampler controls (texture filter,
+# default Sample.task) to that dataset's shape. Additional datasets can add a
 # catalog entry here without changing the page interaction contract.
-DATASET_CATALOG = {"ZJU-Leaper": {"name": "zju-leaper"}}
+DATASET_CATALOG = {
+    "ZJU-Leaper": {
+        "name": "zju-leaper",
+        "dir": "ZJU-Leaper",
+        "env": "ZJU_LEAPER_ROOT",
+        "has_texture": True,
+        "task": "detection",
+    },
+    "RAW-FABRID": {
+        "name": "raw-fabric",
+        "dir": "RAW_FABRID",
+        "env": "RAW_FABRIC_ROOT",
+        "has_texture": False,
+        "task": "anomaly",
+    },
+}
 ALL_TEXTURES = "All textures"
 ALL_IMAGES = "All images"
 DEFECT_ONLY = "Defect only"
 NORMAL_ONLY = "Normal only"
+SHOT_FULL = "Full-shot"
+SHOT_FEW = "Few-shot"
+FEW_SHOT_SAMPLE_COUNT = 350
+FEW_SHOT_DEFECT_RATIO = 0.3
 
 
-def _zju_leaper_roots() -> list[Path]:
-    """Return likely local roots, including the repository's SSD convention."""
+def _dataset_roots(dataset_label: str) -> list[Path]:
+    """Return likely local roots for `dataset_label`, including the
+    repository's `data/<dir>` symlink convention and the SSD layout it
+    typically points at. Roots are returned as-given (not yet resolved) so
+    callers can decide whether to follow symlinks to the underlying storage.
+    """
 
+    spec = DATASET_CATALOG[dataset_label]
     roots: list[Path] = []
-    configured = os.getenv("ZJU_LEAPER_ROOT")
+    configured = os.getenv(spec["env"])
     if configured:
         roots.append(Path(configured).expanduser())
-    roots.extend(PROJECT_ROOT / name / "ZJU-Leaper" for name in ("data", "Data"))
+    roots.extend(PROJECT_ROOT / parent / spec["dir"] for parent in ("data", "Data"))
     volumes = Path("/Volumes")
     if volumes.is_dir():
-        roots.extend(volume / ZJU_LEAPER_VOLUME_SUFFIX for volume in volumes.iterdir())
+        roots.extend(volume / _SSD_VOLUME_PARENT / spec["dir"] for volume in volumes.iterdir())
     return roots
 
 
 def default_dataset_root(dataset_label: str = "ZJU-Leaper") -> str:
-    """Resolve the selected dataset without exposing an editable path field."""
+    """Resolve the selected dataset without exposing an editable path field.
 
-    if dataset_label != "ZJU-Leaper":
+    `data/<dir>` is expected to be a symlink onto external storage (an SSD,
+    a mounted share, ...) rather than the data itself, so every candidate is
+    resolved with `Path.resolve()` before being handed to the dataset
+    adapter or to Gradio's `allowed_paths` — both need the real on-disk
+    location, not the symlink path, to serve/read files reliably.
+    """
+
+    if dataset_label not in DATASET_CATALOG:
         raise KeyError(f"Unknown dataset selection {dataset_label!r}.")
-    for candidate in _zju_leaper_roots():
+    for candidate in _dataset_roots(dataset_label):
         if candidate.is_dir():
             return str(candidate.resolve())
     return ""
 
 
 def texture_choices(dataset_label: str) -> list[str]:
-    """Discover available texture slices from the registered dataset root."""
+    """Discover available texture slices from the registered dataset root.
 
+    Datasets without a texture/pattern subdivision (per `DATASET_CATALOG`'s
+    `has_texture` flag) only ever offer the "All textures" choice.
+    """
+
+    choices = [ALL_TEXTURES]
+    spec = DATASET_CATALOG.get(dataset_label)
+    if spec is None or not spec["has_texture"]:
+        return choices
     root = default_dataset_root(dataset_label)
     patterns = Path(root) / "ImageSets" / "Patterns" if root else None
-    choices = [ALL_TEXTURES]
     if patterns is None or not patterns.is_dir():
         return choices
     pattern_ids = sorted(
@@ -130,6 +170,17 @@ def _pattern_value(texture_label: str) -> str | None:
     if texture_label.lower().startswith("pattern "):
         return f"pattern{texture_label.split()[-1]}"
     raise ValueError(f"Unknown texture selection {texture_label!r}.")
+
+
+def _shot_regime_kwargs(shot_mode: str) -> tuple[int | None, float]:
+    """Map the UI's full-shot/few-shot toggle to `(num_samples, defect_ratio)`
+    kwargs shared by every `DatasetAdapter` in this project."""
+
+    if shot_mode == SHOT_FULL:
+        return None, 0.5
+    if shot_mode == SHOT_FEW:
+        return FEW_SHOT_SAMPLE_COUNT, FEW_SHOT_DEFECT_RATIO
+    raise ValueError(f"Unknown sample regime {shot_mode!r}.")
 
 
 def empty_gallery_state() -> dict[str, Any]:
@@ -172,7 +223,12 @@ def dataset_status(dataset_label: str) -> str:
     root = default_dataset_root(dataset_label)
     if root:
         return f"🟢 **Ready** — using the registered `{dataset_label}` dataset."
-    return "🟠 **Dataset unavailable** — connect the SSD containing ZJU-Leaper, then restart the app."
+    spec = DATASET_CATALOG[dataset_label]
+    return (
+        f"🟠 **Dataset unavailable** — connect the storage containing `{dataset_label}` "
+        f"(expected at `data/{spec['dir']}`, typically a symlink onto external storage, "
+        f"or set `${spec['env']}`), then restart the app."
+    )
 
 
 def build_gallery_state(samples: list[Sample], count: int, seed: int, dataset_label: str) -> dict[str, Any]:
@@ -191,20 +247,27 @@ def load_random_samples(
     seed: int | None = None,
     texture_label: str = ALL_TEXTURES,
     image_scope: str = ALL_IMAGES,
+    shot_mode: str = SHOT_FULL,
 ) -> tuple[dict[str, Any], str | None, str, str]:
     root = default_dataset_root(dataset_label)
     if not root:
-        raise FileNotFoundError("The ZJU-Leaper root could not be resolved from the local Data directory or SSD.")
-    dataset_name = DATASET_CATALOG[dataset_label]["name"]
+        raise FileNotFoundError(
+            f"The `{dataset_label}` root could not be resolved from the local `data/` directory or SSD."
+        )
+    spec = DATASET_CATALOG[dataset_label]
     actual_seed = random.SystemRandom().randrange(2**32) if seed is None else int(seed)
-    dataset = load_dataset(
-        dataset_name,
+    num_samples, defect_ratio = _shot_regime_kwargs(shot_mode)
+    dataset_kwargs: dict[str, Any] = dict(
         root=root,
         split=split,
-        task="detection",
+        task=spec["task"],
         use_defect=image_scope != NORMAL_ONLY,
-        pattern=_pattern_value(texture_label),
+        num_samples=num_samples,
+        defect_ratio=defect_ratio,
     )
+    if spec["has_texture"]:
+        dataset_kwargs["pattern"] = _pattern_value(texture_label)
+    dataset = load_dataset(spec["name"], **dataset_kwargs)
     samples = dataset.load_samples()
     if image_scope == DEFECT_ONLY:
         samples = [sample for sample in samples if sample.annotations.is_anomalous]
@@ -214,8 +277,8 @@ def load_random_samples(
     path, position = current_image(state)
     texture = "all textures" if texture_label == ALL_TEXTURES else texture_label
     return state, path, position, (
-        f"🟢 Loaded **{len(state['samples'])}** random `{image_scope.lower()}` from "
-        f"`{dataset.name}` / `{texture}` / `{split}`."
+        f"🟢 Loaded **{len(state['samples'])}** random `{image_scope.lower()}` "
+        f"({shot_mode.lower()}) from `{dataset.name}` / `{texture}` / `{split}`."
     )
 
 
@@ -316,6 +379,37 @@ def prediction_summary(prediction: Prediction) -> dict[str, Any]:
         "has_masks": bool(prediction.masks),
         "has_anomaly_map": prediction.anomaly_map is not None,
     }
+
+
+def format_prediction_summary(summary: dict[str, Any]) -> str:
+    """Format the unified prediction contract for a human-facing UI panel."""
+
+    if not summary:
+        return "### Prediction summary\nNo prediction available yet."
+    if summary["task"] == "anomaly":
+        label = next(iter(summary["labels"]), "unclassified")
+        score = summary["anomaly_score"]
+        score_text = "unavailable" if score is None else f"{score:.4f}"
+        map_text = "available" if summary["has_anomaly_map"] else "not available"
+        return (
+            "### Prediction summary\n"
+            f"**Result:** {label.title()}  \n"
+            f"**Anomaly score:** {score_text}  \n"
+            f"**Heatmap:** {map_text}"
+        )
+    detections = int(summary["detections"])
+    if detections == 0:
+        return "### Prediction summary\n**Result:** No defect detected."
+    details = [
+        f"{label} ({score:.2%})"
+        for label, score in zip(summary["labels"], summary["scores"])
+    ]
+    return (
+        "### Prediction summary\n"
+        "**Result:** Defect detected  \n"
+        f"**Detected regions:** {detections}  \n"
+        f"**Confidence:** {', '.join(details) or 'unavailable'}"
+    )
 
 
 def render_prediction(image_path: str, prediction: Prediction):
