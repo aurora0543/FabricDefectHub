@@ -6,6 +6,7 @@ Importing this package registers all bundled datasets.
 """
 
 from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
+from fabric_defect_hub.datasets.mvtec_ad import MVTecADDataset
 from fabric_defect_hub.datasets.raw_fabric import RawFabricDataset
 from fabric_defect_hub.datasets.yolo_bbox import build_class_map, yolo_staging_dir
 from fabric_defect_hub.datasets.zju_leaper import ZJULeaperDataset
@@ -13,6 +14,7 @@ from fabric_defect_hub.datasets.zju_leaper import ZJULeaperDataset
 __all__ = [
     "ZJULeaperDataset",
     "RawFabricDataset",
+    "MVTecADDataset",
     "yolo_staging_dir",
     "build_class_map",
     "anomalib_folder_staging_dir",

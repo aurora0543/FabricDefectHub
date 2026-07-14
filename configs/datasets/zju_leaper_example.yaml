@@ -1,36 +1,36 @@
-# ZJU-Leaper 数据集接口配置示例
-# 通过 load_dataset("zju-leaper", root=<root>, **config) 使用。
-# root 指向包含 Images/ Annotations/ ImageSets/ 的数据集根目录。
+# ZJU-Leaper dataset adapter config examples.
+# Used via load_dataset("zju-leaper", root=<root>, **config).
+# root points at the dataset directory containing Images/ Annotations/ ImageSets/.
 
-# ---- 场景 A：few-shot（全量，单一花样）----
+# ---- Scenario A: few-shot (full count, single pattern) ----
 few_shot:
-  pattern: pattern1        # 花样/纹理选择：patternN / N / 纹理名 / groupN / total(默认)
+  pattern: pattern1        # texture/pattern selector: patternN / N / texture name / groupN / total (default)
   split: test
-  num_samples: null        # null = 使用该选择下的全部图片
+  num_samples: null        # null = use every image in this selection
   use_defect: true
   task: anomaly
 
-# ---- 场景 B：少样本（一次 300~400 张，可控缺陷占比）----
+# ---- Scenario B: low-shot (300-400 images, controlled defect ratio) ----
 low_shot:
   pattern: pattern1
   split: test
-  num_samples: 350         # 只取 350 张
+  num_samples: 350         # take only 350 images
   use_defect: true
-  defect_ratio: 0.3        # 其中 30% 为缺陷图
+  defect_ratio: 0.3        # 30% of those are defective
   task: anomaly
   seed: 0
 
-# ---- 场景 C：zero-shot（不使用缺陷图，仅正常样本）----
+# ---- Scenario C: zero-shot (normal samples only, no defect images) ----
 zero_shot:
   pattern: pattern1
   split: train
   num_samples: 300
-  use_defect: false        # 不引入任何缺陷图
+  use_defect: false        # never include defective images
   task: anomaly
 
-# ---- 场景 D：按纹理名称筛选 ----
+# ---- Scenario D: filter by texture name ----
 by_texture_name:
-  pattern: Knot Pattern    # 匹配 statistic.csv 中的 p_name
+  pattern: Knot Pattern    # matched against p_name in statistic.csv
   split: test
   num_samples: 200
   defect_ratio: 0.5

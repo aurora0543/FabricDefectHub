@@ -199,7 +199,7 @@ class TorchvisionAdapter(ModelAdapter):
             `epochs`, `batch_size`, `optimizer`, `lr`, `momentum`,
             `weight_decay`, `lr_scheduler`, `step_size`, `gamma`,
             `warmup_epochs`, `grad_clip_norm`, `patience`, `num_workers`,
-            `device`, `run_dir`, `save_every_epoch`.
+            `device`, `seed`, `amp`, `resume`, `run_dir`, `save_every_epoch`.
         """
 
         from torch.utils.data import DataLoader
@@ -213,6 +213,10 @@ class TorchvisionAdapter(ModelAdapter):
         class_names = cfg.get("class_names") or ["defect"]
         with_masks = uses_masks(self.name)
 
+        seed = cfg.get("seed")
+        if seed is not None:
+            _seed_everything(seed)
+
         weights = cfg.get("weights")
         pretrained = cfg.get("pretrained", True)
         offline = cfg.get("offline", False)
@@ -221,7 +225,16 @@ class TorchvisionAdapter(ModelAdapter):
         min_size = cfg.get("min_size")
         max_size = cfg.get("max_size")
 
-        if weights:
+        run_dir = Path(cfg.get("run_dir", "runs/fabric_defect_hub_tv")) / cfg.get("name", "torchvision_exp")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        best_path = run_dir / "best.pt"
+        last_path = run_dir / "last.pt"
+        history_path = run_dir / "history.csv"
+
+        resume_state = None
+        if cfg.get("resume") and last_path.is_file():
+            resume_state = self._load_resume_checkpoint(last_path, device=device_str)
+        elif weights:
             self.load_weights(weights, device=device_str)
         elif pretrained:
             self.load_pretrained(
@@ -259,25 +272,21 @@ class TorchvisionAdapter(ModelAdapter):
             num_workers=num_workers, collate_fn=detection_collate_fn,
         )
 
-        run_dir = Path(cfg.get("run_dir", "runs/fabric_defect_hub_tv")) / cfg.get("name", "torchvision_exp")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        best_path = run_dir / "best.pt"
-        last_path = run_dir / "last.pt"
-        history_path = run_dir / "history.csv"
-
-        state = {"best_map": -1.0}
-
-        def on_epoch_end(log):
-            self._save_checkpoint(last_path, class_names)
-            current_map = log.val_metrics.get("map")
-            if current_map is not None and current_map > state["best_map"]:
-                state["best_map"] = current_map
-                self._save_checkpoint(best_path, class_names)
+        def on_epoch_end(log, optimizer, scheduler, best_map, improved):
+            self._save_checkpoint(
+                last_path, class_names, optimizer=optimizer, scheduler=scheduler,
+                epoch=log.epoch, best_map=best_map,
+            )
+            if improved:
+                self._save_checkpoint(
+                    best_path, class_names, optimizer=optimizer, scheduler=scheduler,
+                    epoch=log.epoch, best_map=best_map,
+                )
             if cfg.get("save_every_epoch"):
                 self._save_checkpoint(run_dir / f"epoch_{log.epoch:03d}.pt", class_names)
             _append_history_row(history_path, log)
 
-        logs = run_training(
+        logs, best_map = run_training(
             self.model, train_loader, val_loader, self._device,
             epochs=cfg.get("epochs", 30),
             optimizer_name=cfg.get("optimizer", "sgd"),
@@ -291,6 +300,8 @@ class TorchvisionAdapter(ModelAdapter):
             grad_clip_norm=cfg.get("grad_clip_norm", 5.0),
             patience=cfg.get("patience", 8),
             with_masks=with_masks,
+            amp=cfg.get("amp", False),
+            resume_state=resume_state,
             on_epoch_end=on_epoch_end,
         )
 
@@ -308,23 +319,77 @@ class TorchvisionAdapter(ModelAdapter):
                 "history_csv": str(history_path),
                 "class_names": class_names,
                 "epochs_run": len(logs),
-                "best_map": state["best_map"],
+                "resumed_from_epoch": resume_state["epoch"] if resume_state else None,
+                "best_map": best_map,
                 "final_val_metrics": final_metrics,
             },
         )
 
-    def _save_checkpoint(self, path: Path, class_names: list[str]) -> None:
+    def _save_checkpoint(
+        self,
+        path: Path,
+        class_names: list[str],
+        optimizer=None,
+        scheduler=None,
+        epoch: int | None = None,
+        best_map: float | None = None,
+    ) -> None:
+        """Write a checkpoint. `optimizer`/`scheduler`/`epoch`/`best_map`,
+        when given, make it resumable (see `_load_resume_checkpoint`) — the
+        extra keys are additive and never required by `_validate_checkpoint`,
+        so plain inference-only checkpoints (no optimizer passed) stay
+        loadable exactly as before.
+        """
+
         import torch
 
-        torch.save(
-            {
-                "state_dict": self._model.state_dict(),
-                "class_map": self._class_map,
-                "class_names": class_names,
-                "variant": resolve_variant(self.name),
-            },
-            path,
-        )
+        checkpoint = {
+            "state_dict": self._model.state_dict(),
+            "class_map": self._class_map,
+            "class_names": class_names,
+            "variant": resolve_variant(self.name),
+        }
+        if optimizer is not None:
+            checkpoint["optimizer_state"] = optimizer.state_dict()
+            checkpoint["scheduler_state"] = scheduler.state_dict() if scheduler is not None else None
+            checkpoint["epoch"] = epoch
+            checkpoint["best_map"] = best_map
+        torch.save(checkpoint, path)
+
+    def _load_resume_checkpoint(self, path: Path, device: str | None = None) -> dict[str, Any]:
+        """Load a checkpoint written mid-training by `_save_checkpoint`
+        (model + optimizer + scheduler + epoch + best_map) so `train()` can
+        continue exactly where a previous run left off, instead of
+        restarting fine-tuning from `weights`/`pretrained`/scratch.
+
+        Sets `self._model`/`self._class_map`/`self.name` as a side effect
+        (like `load_weights`); returns the resume state `engine.run_training`
+        expects (`optimizer_state`, `scheduler_state`, `epoch`, `best_map`).
+        """
+
+        import torch
+
+        self._device = self._resolve_device(device)
+        checkpoint = torch.load(path, map_location=self._device, weights_only=True)
+        class_map, variant, state_dict = _validate_checkpoint(checkpoint, path, self.name)
+        if "optimizer_state" not in checkpoint or "epoch" not in checkpoint:
+            raise ValueError(
+                f"Checkpoint {path} has no optimizer/epoch state to resume from "
+                "(it looks like a plain weights checkpoint, not one saved by train())."
+            )
+        self._class_map = class_map
+        num_classes = len(class_map) + 1
+        self._model = build_model(
+            variant, num_classes=num_classes, pretrained=False, backbone_weights=False,
+        ).to(self._device)
+        self._model.load_state_dict(state_dict)
+        self.name = variant
+        return {
+            "optimizer_state": checkpoint["optimizer_state"],
+            "scheduler_state": checkpoint.get("scheduler_state"),
+            "epoch": checkpoint["epoch"],
+            "best_map": checkpoint.get("best_map", -1.0),
+        }
 
     # ------------------------------------------------------------------ #
     # Validation / metrics
@@ -366,11 +431,18 @@ class TorchvisionAdapter(ModelAdapter):
         config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Run inference over `samples`. `config` overrides `score_threshold`
-        (default 0.5) and `max_detections` (default 100). If `artifact` is
-        given its weights are loaded first.
+        (default 0.5), `max_detections` (default 100), `nms_iou_threshold`
+        (None = rely solely on the model's own built-in per-class NMS at its
+        default IoU; a value applies one more class-aware NMS pass on top,
+        via `torchvision.ops.batched_nms`), and `device` (None = keep
+        whatever device the loaded weights are already on; the model is
+        moved back afterwards, so this does not affect a later `train()`
+        call on the same adapter instance). If `artifact` is given its
+        weights are loaded first.
         """
 
         import torch
+        from torchvision.ops import batched_nms
 
         if artifact is not None:
             self.load_weights(artifact.path)
@@ -378,8 +450,15 @@ class TorchvisionAdapter(ModelAdapter):
         cfg = config or {}
         score_threshold = cfg.get("score_threshold", 0.5)
         max_detections = cfg.get("max_detections", 100)
+        nms_iou_threshold = cfg.get("nms_iou_threshold")
         with_masks = uses_masks(self.name)
         id_to_label = {v: k for k, v in (self._class_map or {}).items()}
+
+        predict_device = self._device
+        requested_device = cfg.get("device")
+        if requested_device is not None:
+            predict_device = self._resolve_device(requested_device)
+            self._model.to(predict_device)
 
         dataset = SampleDetectionDataset(
             samples, class_map=self._class_map, with_masks=with_masks,
@@ -390,18 +469,29 @@ class TorchvisionAdapter(ModelAdapter):
         self.model.eval()
         with torch.no_grad():
             for sample, (image, _target) in zip(samples, dataset):
-                output = self.model([image.to(self._device)])[0]
+                output = self.model([image.to(predict_device)])[0]
                 keep = output["scores"] >= score_threshold
-                boxes = output["boxes"][keep][:max_detections].detach().cpu().tolist()
-                scores = output["scores"][keep][:max_detections].detach().cpu().tolist()
+                boxes = output["boxes"][keep]
+                scores = output["scores"][keep]
+                labels_id = output["labels"][keep]
+                masks_full = output["masks"][keep] if with_masks and "masks" in output else None
+
+                if nms_iou_threshold is not None and boxes.shape[0] > 0:
+                    extra_keep = batched_nms(boxes, scores, labels_id, nms_iou_threshold)
+                    boxes, scores, labels_id = boxes[extra_keep], scores[extra_keep], labels_id[extra_keep]
+                    if masks_full is not None:
+                        masks_full = masks_full[extra_keep]
+
+                boxes_list = boxes[:max_detections].detach().cpu().tolist()
+                scores_list = scores[:max_detections].detach().cpu().tolist()
                 labels = [
                     id_to_label.get(int(c), str(int(c)))
-                    for c in output["labels"][keep][:max_detections].detach().cpu().tolist()
+                    for c in labels_id[:max_detections].detach().cpu().tolist()
                 ]
                 masks = None
-                if with_masks and "masks" in output:
+                if masks_full is not None:
                     masks = (
-                        (output["masks"][keep][:max_detections] > 0.5)
+                        (masks_full[:max_detections] > 0.5)
                         .squeeze(1)
                         .detach()
                         .cpu()
@@ -409,8 +499,11 @@ class TorchvisionAdapter(ModelAdapter):
                         .tolist()
                     )
                 predictions.append(
-                    Prediction(sample_id=sample.id, boxes=boxes, labels=labels, scores=scores, masks=masks)
+                    Prediction(sample_id=sample.id, boxes=boxes_list, labels=labels, scores=scores_list, masks=masks)
                 )
+
+        if requested_device is not None:
+            self._model.to(self._device)
         return predictions
 
     # ------------------------------------------------------------------ #
@@ -519,6 +612,23 @@ class TorchvisionAdapter(ModelAdapter):
         raise ValueError(
             f"unsupported export target {target!r}; expected 'exported_program', 'torchscript', or 'onnx'."
         )
+
+
+def _seed_everything(seed: int) -> None:
+    """Seed every RNG this backend's training loop actually draws from:
+    `torch`'s global generator (model init, `DataLoader(shuffle=True)`'s
+    `torch.randperm`, and `torchvision.transforms.v2`'s random augmentations
+    all consume it) and the stdlib `random` module (unused directly here
+    today, but seeded for any `extra`-passed training code that might use
+    it). NumPy is not seeded: nothing on this training path draws from it.
+    """
+
+    import random
+
+    import torch
+
+    random.seed(seed)
+    torch.manual_seed(seed)
 
 
 def _append_history_row(path: Path, log) -> None:

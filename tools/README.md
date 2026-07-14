@@ -1,9 +1,9 @@
 # tools
 
-数据转换、导出和可视化脚本（非包代码，独立运行）：
+Data conversion, export, and visualization scripts (standalone, not package code):
 
-- `convert_annotations.py` — COCO detection 标注 -> `Sample` JSON。
-- `export_model.py` — 调用 `ModelAdapter.export`，也可将 ONNX 构建为 TensorRT engine。
-- `visualize_predictions.py` — 在图像上绘制 `Prediction`（框/掩码/异常热力图）。
+- `convert_annotations.py` — COCO detection annotations -> `Sample` JSON.
+- `export_model.py` — calls `ModelAdapter.export`; can also build an ONNX model into a TensorRT engine.
+- `visualize_predictions.py` — draws a `Prediction` (boxes/masks/anomaly heatmap) on an image.
 
-三个脚本都可通过 `python tools/<script>.py --help` 查看参数。
+Run any of the three scripts with `python tools/<script>.py --help` to see its arguments.

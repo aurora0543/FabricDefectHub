@@ -1,7 +1,7 @@
 """JSON (de)serialization for the unified contracts in `core/types.py`,
 matching `schemas/{sample,prediction,experiment_result}.schema.json`
-exactly — this is what closes the README's Phase 1 "输出真实预测与实验
-结果 JSON" item: every `ModelAdapter.train`/`predict` call already returns
+exactly — this is what closes the README's Phase 1 "emit real predictions
+and experiment-result JSON" item: every `ModelAdapter.train`/`predict` call already returns
 `Artifact`/`Prediction` objects; this module is what turns those into the
 actual on-disk JSON a leaderboard/frontend would read.
 

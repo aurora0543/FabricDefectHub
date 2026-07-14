@@ -184,6 +184,11 @@ class AnomalibAdapter(ModelAdapter):
                     arr = raw_map[0]
                     arr = arr.detach().cpu().numpy() if hasattr(arr, "detach") else np.asarray(arr)
                     map_path = maps_dir / f"{sample.id}.npy"
+                    # `sample.id` is an opaque identifier, not guaranteed to be a
+                    # single path segment — datasets like MVTecADDataset use
+                    # "category/defect_type/stem" ids, which need their own
+                    # subdirectories created before `np.save` can write there.
+                    map_path.parent.mkdir(parents=True, exist_ok=True)
                     np.save(map_path, np.squeeze(arr))
                     anomaly_map_path = str(map_path)
             if score is None:

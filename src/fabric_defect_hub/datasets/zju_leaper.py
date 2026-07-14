@@ -10,7 +10,7 @@ This adapter turns any user-chosen slice of that benchmark into a unified
 
 1. Sample-count control — `num_samples` (None = use everything, i.e. the
    "few-shot / full data" regime; a small number like 300-400 = the
-   "少样本 / low-shot" regime).
+   "low-shot" regime).
 2. Defect adaptation — `use_defect` (False = zero-shot / normal-only; True =
    include defective images).
 3. Texture/pattern filtering — `pattern` selects one texture pattern, one

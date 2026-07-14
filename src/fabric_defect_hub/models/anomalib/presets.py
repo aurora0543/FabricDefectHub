@@ -2,9 +2,9 @@
 commits to: PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet.
 
 We deliberately do not reimplement these algorithms (see the project's
-"不重新实现所有模型" principle in the top-level README) — `anomalib`
-already ships correct, maintained implementations. What *is* our
-responsibility, and what lives here, is:
+"don't reimplement models we can depend on" principle in the top-level
+README) — `anomalib` already ships correct, maintained implementations.
+What *is* our responsibility, and what lives here, is:
 
 1. Alias resolution: the README/paper names ("RD4AD", "EfficientAD",
    "SuperSimpleNet") don't match anomalib's class names

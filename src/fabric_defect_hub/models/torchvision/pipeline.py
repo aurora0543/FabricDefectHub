@@ -65,6 +65,14 @@ def run_from_config(config: TorchvisionConfig, adapter_factory=None) -> Torchvis
         train_config["run_dir"] = config.checkpoint.run_dir
         train_config["name"] = config.checkpoint.name
         train_config["save_every_epoch"] = config.checkpoint.save_every_epoch
+        # `device`/`seed` are excluded from `resolved_train_kwargs()` (they are
+        # pipeline-level, not native torchvision train() kwargs — see
+        # `TrainSpec._NON_PRESET`) and must be re-added explicitly here, the
+        # same way `weights`/`min_size`/... already are just above.
+        train_config["device"] = config.train.device
+        train_config["seed"] = config.train.seed
+        if config.train.resume:
+            train_config["resume"] = True
         if config.model.weights:
             train_config["weights"] = config.model.weights
 

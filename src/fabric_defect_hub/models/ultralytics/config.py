@@ -1,11 +1,11 @@
 """Config-driven experiment description for the Ultralytics backend.
 
-The design goal (per project direction: 配置化管理) is that *what a run
-does is declared in a YAML file, not in command-line flags*. A single
-`UltralyticsConfig` object captures the entire lifecycle — which model
-variant, where the data comes from, training hyperparameters, validation,
-prediction, export targets, and checkpoint/registry locations — and is
-consumed by `models/ultralytics/pipeline.py`.
+The design goal (per project direction: configuration-driven management) is
+that *what a run does is declared in a YAML file, not in command-line
+flags*. A single `UltralyticsConfig` object captures the entire lifecycle —
+which model variant, where the data comes from, training hyperparameters,
+validation, prediction, export targets, and checkpoint/registry locations —
+and is consumed by `models/ultralytics/pipeline.py`.
 
 Layering of hyperparameters (lowest priority first):
     1. Ultralytics' own DEFAULT_CFG_DICT (implicit, inside ultralytics)

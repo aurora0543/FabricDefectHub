@@ -93,6 +93,7 @@ COMMON_FABRIC_TRAIN_DEFAULTS: dict[str, Any] = {
     # prepared Linux/CUDA training host.
     "num_workers": 0,
     "trainable_backbone_layers": 3,  # of 5; freeze the earliest (most generic) ResNet stages
+    "amp": False,  # mixed precision; only actually engaged on CUDA, see engine.run_training
     # --- augmentation, retuned for small texture defects (see build_transforms) ---
     "hflip_prob": 0.5,
     "vflip_prob": 0.5,
@@ -199,6 +200,25 @@ def build_model(
         _replace_head(model, num_classes, with_mask=uses_masks(variant))
     else:
         no_download_kwargs: dict[str, Any] = {} if backbone_weights else {"weights_backbone": None}
+        if not backbone_weights and trainable_backbone_layers is not None:
+            # Verified live against torchvision 0.28: with no backbone weights
+            # at all (no ImageNet init), the factory silently ignores
+            # `trainable_backbone_layers` and trains all 5 stages instead —
+            # freezing part of a randomly-initialised backbone would leave
+            # it unable to learn features in the first place, so this is the
+            # correct outcome, but it silently diverges from the fabric
+            # preset/config value. Surfaced here (rather than left to
+            # torchvision's own generic internal warning) so it is
+            # attributable and traceable in benchmark logs.
+            import warnings
+
+            warnings.warn(
+                f"trainable_backbone_layers={trainable_backbone_layers} has no effect without "
+                "backbone weights (pretrained=False, offline=True, or a checkpoint reload): "
+                "torchvision trains all 5 backbone stages in that case.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         model = factory(
             weights=None,
             num_classes=num_classes,

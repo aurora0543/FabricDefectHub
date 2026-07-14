@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fabric_defect_hub.inference.session import InferenceSessionManager, format_session_status
+from fabric_defect_hub.web.benchmark import compatible_models, run_benchmark
 from fabric_defect_hub.web.single_image import (
     DATASET_CATALOG,
     ALL_IMAGES,
@@ -57,6 +58,9 @@ body.dark .fdh-hero p { color: #c4d0e0; }
 body.dark .fdh-card, body.dark .fdh-control-card, body.dark .fdh-dataset-card { border: 1px solid #293b54; background: #101c2d; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 body.dark .fdh-card label, body.dark .fdh-card .wrap, body.dark .fdh-card .prose, body.dark .fdh-control-card label, body.dark .fdh-control-card .wrap, body.dark .fdh-dataset-card label { color: #dce7f5 !important; }
 body.dark .fdh-card input, body.dark .fdh-card textarea, body.dark .fdh-card button.secondary, body.dark .fdh-control-card input, body.dark .fdh-control-card button.secondary, body.dark .fdh-dataset-card input, body.dark .fdh-dataset-card button.secondary { background: #0a1524 !important; color: #e5edf8 !important; border-color: #30445f !important; }
+body.dark .fdh-card label.selected, body.dark .fdh-control-card label.selected, body.dark .fdh-dataset-card label.selected { background: #ea6e18 !important; border-color: #fb923c !important; color: #fff !important; }
+body.dark .fdh-card button.secondary:hover, body.dark .fdh-control-card button.secondary:hover, body.dark .fdh-dataset-card button.secondary:hover { background: #16283f !important; border-color: #3d5776 !important; }
+body.dark .fdh-card button.secondary:active, body.dark .fdh-control-card button.secondary:active, body.dark .fdh-dataset-card button.secondary:active { background: #1d3552 !important; border-color: #fb923c !important; }
 body.dark .fdh-status { background: #182a3d; border: 1px solid #36516d; color: #dbeafe; }
 body.dark .fdh-caption, body.dark .fdh-placeholder { color: #bdcbe0; }
 body:not(.dark) .fdh-brand { color: #172033; }
@@ -66,6 +70,9 @@ body:not(.dark) .fdh-hero p { color: #52627a; }
 body:not(.dark) .fdh-card, body:not(.dark) .fdh-control-card, body:not(.dark) .fdh-dataset-card { border: 1px solid #d7e0ec; background: #ffffff; box-shadow: 0 6px 18px rgba(15,23,42,.07); }
 body:not(.dark) .fdh-card label, body:not(.dark) .fdh-card .wrap, body:not(.dark) .fdh-card .prose, body:not(.dark) .fdh-control-card label, body:not(.dark) .fdh-control-card .wrap, body:not(.dark) .fdh-dataset-card label { color: #172033 !important; }
 body:not(.dark) .fdh-card input, body:not(.dark) .fdh-card textarea, body:not(.dark) .fdh-card button.secondary, body:not(.dark) .fdh-control-card input, body:not(.dark) .fdh-control-card button.secondary, body:not(.dark) .fdh-dataset-card input, body:not(.dark) .fdh-dataset-card button.secondary { background: #ffffff !important; color: #172033 !important; border-color: #cbd5e1 !important; }
+body:not(.dark) .fdh-card label.selected, body:not(.dark) .fdh-control-card label.selected, body:not(.dark) .fdh-dataset-card label.selected { background: #ea6e18 !important; border-color: #ea6e18 !important; color: #fff !important; }
+body:not(.dark) .fdh-card button.secondary:hover, body:not(.dark) .fdh-control-card button.secondary:hover, body:not(.dark) .fdh-dataset-card button.secondary:hover { background: #f4f7fb !important; border-color: #94a3b8 !important; }
+body:not(.dark) .fdh-card button.secondary:active, body:not(.dark) .fdh-control-card button.secondary:active, body:not(.dark) .fdh-dataset-card button.secondary:active { background: #e9edf3 !important; border-color: #ea6e18 !important; }
 body:not(.dark) .fdh-status { background: #f8fafc; border: 1px solid #cbd5e1; color: #24344d; }
 body:not(.dark) .fdh-caption, body:not(.dark) .fdh-placeholder { color: #52627a; }
 """
@@ -226,10 +233,61 @@ def create_app():
                     )
 
                 with gr.Tab("Benchmark", id="benchmark"):
-                    gr.HTML(
-                        "<div class='fdh-placeholder'><h2>Dataset benchmark workspace</h2>"
-                        "<p>The benchmark view will reuse the saved ExperimentResult and leaderboard contracts. "
-                        "It is intentionally kept separate while the single-image workflow is finalized.</p></div>"
+                    gr.Markdown(
+                        "### Dataset benchmark workspace\n"
+                        "Runs the test split end to end (no heatmaps or boxes) and reports the "
+                        "standard metrics for the task — image AUROC/F1 for anomaly datasets, "
+                        "mAP/precision/recall for detection datasets."
+                    )
+                    with gr.Row():
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            bench_dataset = gr.Dropdown(
+                                list(DATASET_CATALOG), value=next(iter(DATASET_CATALOG)), label="Dataset"
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            bench_texture = gr.Dropdown(
+                                texture_choices(next(iter(DATASET_CATALOG))), value="All textures",
+                                label="Texture / pattern",
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            bench_shot_mode = gr.Radio(
+                                [SHOT_FULL, SHOT_FEW], value=SHOT_FULL,
+                                label="Sample regime (test split)",
+                            )
+                    with gr.Row():
+                        with gr.Column(scale=7, elem_classes="fdh-control-card"):
+                            bench_models = gr.CheckboxGroup(
+                                compatible_models(next(iter(DATASET_CATALOG))),
+                                label="Models to benchmark",
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card fdh-action-run"):
+                            bench_run_button = gr.Button("Run benchmark", variant="primary", elem_classes="fdh-primary")
+                    bench_status = gr.Markdown(
+                        "Select a dataset, a sample regime, and one or more models to begin.",
+                        elem_classes="fdh-status",
+                    )
+                    bench_results = gr.Dataframe(label="Leaderboard", interactive=False, wrap=True)
+
+                    def bench_dataset_change_handler(dataset_label):
+                        return (
+                            gr.Dropdown(choices=texture_choices(dataset_label), value="All textures"),
+                            gr.CheckboxGroup(choices=compatible_models(dataset_label), value=[]),
+                        )
+
+                    def bench_run_handler(dataset_label, texture_label, shot_mode, model_labels):
+                        columns, rows, status = run_benchmark(dataset_label, texture_label, shot_mode, model_labels)
+                        table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
+                        return table, status
+
+                    bench_dataset.change(
+                        bench_dataset_change_handler,
+                        inputs=bench_dataset,
+                        outputs=[bench_texture, bench_models],
+                    )
+                    bench_run_button.click(
+                        bench_run_handler,
+                        inputs=[bench_dataset, bench_texture, bench_shot_mode, bench_models],
+                        outputs=[bench_results, bench_status],
                     )
     return app
 
