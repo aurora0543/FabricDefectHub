@@ -18,7 +18,7 @@ point of view:
 
 1. Sample-count control — `num_samples` (None = use everything, i.e. the
    "few-shot / full data" regime; a small number like 300-400 = the
-   "少样本 / low-shot" regime).
+   "low-shot" regime).
 2. Defect adaptation — `use_defect` (False = zero-shot / normal-only; True =
    include defective images).
 3. Category filtering — `category` selects one MVTec AD category (e.g.

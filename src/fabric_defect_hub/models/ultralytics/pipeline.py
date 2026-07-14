@@ -1,6 +1,7 @@
 """Config-driven end-to-end runner for the Ultralytics backend.
 
-This is the payoff of 配置化管理: give it an `UltralyticsConfig` (typically
+This is the payoff of configuration-driven management: give it an
+`UltralyticsConfig` (typically
 `UltralyticsConfig.from_yaml("configs/models/ultralytics_*.yaml")`) and it
 executes the whole declared lifecycle — resolve data, train, validate,
 register the trained model, export — with no command-line flags. Each stage

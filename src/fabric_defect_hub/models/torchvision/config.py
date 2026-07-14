@@ -94,6 +94,14 @@ class TrainSpec:
     """Training hyperparameters. Named fields with `None` fall back to the
     fabric preset (see `presets.COMMON_FABRIC_TRAIN_DEFAULTS`); anything
     else goes in `extra`.
+
+    `amp`: mixed-precision training (`torch.autocast` + `GradScaler`); only
+        actually engaged on CUDA (see `engine.run_training`), a no-op
+        elsewhere.
+    `resume`: continue from `checkpoint.run_dir`'s `last.pt` (optimizer/
+        scheduler state, epoch count and best val-mAP included), instead of
+        starting again from `weights`/`pretrained`/scratch. Silently falls
+        back to a fresh run if no `last.pt` exists yet.
     """
 
     enabled: bool = True
@@ -112,9 +120,11 @@ class TrainSpec:
     num_workers: int | None = None
     device: str | None = None
     seed: int = 0
+    amp: bool | None = None
+    resume: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
-    _NON_PRESET = {"enabled", "device", "seed", "extra"}
+    _NON_PRESET = {"enabled", "device", "seed", "resume", "extra"}
 
     def as_overrides(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -134,7 +144,6 @@ class ValSpec:
     enabled: bool = True
     batch_size: int | None = None
     num_workers: int | None = None
-    score_threshold: float = 0.0  # keep all detections for mAP's own thresholding
 
 
 @dataclass

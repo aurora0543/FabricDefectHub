@@ -1,7 +1,7 @@
 """Cross-backend benchmark orchestration: run the same (or different)
 dataset(s) through several models — any mix of Ultralytics/torchvision/
 Anomalib backends — and produce a sorted leaderboard, closing the README's
-Phase 2 "完成统一训练、预测、评测和制品管理流程" item.
+Phase 2 "unified train/predict/evaluate/artifact-management pipeline" item.
 
 `loader.run_experiment` already runs one (dataset, model, evaluator) triple
 end to end and can persist its `ExperimentResult`. What was still missing

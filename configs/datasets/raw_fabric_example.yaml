@@ -1,28 +1,28 @@
-# RAW_FABRID 数据集接口配置示例
-# 通过 load_dataset("raw-fabric", root=<root>, **config) 使用。
-# root 指向包含 MVTec/ 子目录的数据集根目录（RAW_FABRID/）。
-# MVTec/ 下已是标准 MVTec-AD 目录结构：train/good, test/good, test/defect,
-# ground_truth/defect —— RawFabricDataset 直接读取该目录，无需转换。
+# RAW_FABRID dataset adapter config examples.
+# Used via load_dataset("raw-fabric", root=<root>, **config).
+# root points at the dataset directory containing the MVTec/ subdirectory (RAW_FABRID/).
+# MVTec/ is already a standard MVTec-AD directory layout: train/good, test/good,
+# test/defect, ground_truth/defect — RawFabricDataset reads it directly, no conversion needed.
 
-# ---- 场景 A：full-shot（全量）----
+# ---- Scenario A: full-shot (all images) ----
 few_shot:
   split: test
-  num_samples: null        # null = 使用该 split 下的全部图片
+  num_samples: null        # null = use every image in this split
   use_defect: true
   task: anomaly
 
-# ---- 场景 B：少样本（一次 350 张，可控缺陷占比）----
+# ---- Scenario B: low-shot (350 images, controlled defect ratio) ----
 low_shot:
   split: test
-  num_samples: 350         # 只取 350 张
+  num_samples: 350         # take only 350 images
   use_defect: true
-  defect_ratio: 0.3        # 其中 30% 为缺陷图
+  defect_ratio: 0.3        # 30% of those are defective
   task: anomaly
   seed: 0
 
-# ---- 场景 C：zero-shot（不使用缺陷图，仅正常样本）----
+# ---- Scenario C: zero-shot (normal samples only, no defect images) ----
 zero_shot:
-  split: train              # MVTec/train 仅含正常样本（one-class 训练集）
+  split: train              # MVTec/train contains only normal samples (one-class training set)
   num_samples: 300
   use_defect: false
   task: anomaly

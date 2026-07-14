@@ -72,9 +72,18 @@ def train_one_epoch(
     epoch: int,
     warmup_scheduler=None,
     grad_clip_norm: float | None = None,
+    amp: bool = False,
+    scaler=None,
     log_fn: Callable[[str], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
-    """One training epoch. Returns (mean total loss, mean per-component losses)."""
+    """One training epoch. Returns (mean total loss, mean per-component losses).
+
+    `amp`/`scaler`: mixed-precision forward (`torch.autocast`) and loss
+    scaling (`torch.amp.GradScaler`) for CUDA training. `run_training`
+    already resolves `amp` to `False` outside CUDA before calling this, and
+    a `GradScaler(enabled=False)` is a documented no-op passthrough, so the
+    scale/unscale/step calls below are unconditional and safe on CPU/MPS.
+    """
 
     import torch
 
@@ -87,8 +96,9 @@ def train_one_epoch(
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) if hasattr(v, "to") else v for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
-        total_loss = sum(loss_dict.values())
+        with torch.autocast(device_type=device.type, enabled=amp):
+            loss_dict = model(images, targets)
+            total_loss = sum(loss_dict.values())
 
         loss_value = float(total_loss)
         if not math.isfinite(loss_value):
@@ -97,12 +107,14 @@ def train_one_epoch(
             continue
 
         optimizer.zero_grad()
-        total_loss.backward()
+        scaler.scale(total_loss).backward()
         if grad_clip_norm is not None:
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad], grad_clip_norm
             )
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         if warmup_scheduler is not None:
             warmup_scheduler.step()
 
@@ -183,30 +195,61 @@ def run_training(
     grad_clip_norm: float | None,
     patience: int,
     with_masks: bool,
-    on_epoch_end: Callable[[EpochLog], None] | None = None,
-) -> list[EpochLog]:
+    amp: bool = False,
+    resume_state: dict[str, Any] | None = None,
+    on_epoch_end: Callable[[EpochLog, Any, Any, float, bool], None] | None = None,
+) -> tuple[list[EpochLog], float]:
     """Full multi-epoch loop with warmup, LR scheduling, and mAP-based early
-    stopping. Returns the per-epoch log; the caller (`adapter.py`) is
-    responsible for checkpointing on each `on_epoch_end` call, since only it
-    knows where model artifacts should be written.
+    stopping. Returns `(per-epoch logs, final best val-mAP)`; the caller
+    (`adapter.py`) is responsible for checkpointing on each `on_epoch_end`
+    call, since only it knows where model artifacts should be written.
+
+    `amp` requests mixed precision; it is only actually enabled on CUDA (no
+    numerically-stable half-precision kernel path exists for these detection
+    ops on CPU/MPS, so it is silently treated as disabled there rather than
+    erroring — this is the one thing this function decides on the caller's
+    behalf instead of trusting the flag literally).
+
+    `resume_state`, if given (as produced by
+    `TorchvisionAdapter._load_resume_checkpoint`), restores optimizer/
+    scheduler state and continues from `resume_state['epoch'] + 1` instead
+    of epoch 0, with `best_map` carried over. Early-stopping's own
+    "epochs without improvement" counter always restarts at 0 on resume —
+    tracking it across a resume would require persisting one more counter
+    for a rarely-hit edge case (resuming right as patience was about to
+    trigger), so it is intentionally not carried over.
     """
+
+    import torch
 
     optimizer = build_optimizer(model, optimizer_name, lr, momentum, weight_decay)
     scheduler = build_lr_scheduler(optimizer, lr_scheduler_name, epochs, step_size, gamma)
+
+    start_epoch = 0
+    best_map = -1.0
+    if resume_state is not None:
+        optimizer.load_state_dict(resume_state["optimizer_state"])
+        if scheduler is not None and resume_state.get("scheduler_state") is not None:
+            scheduler.load_state_dict(resume_state["scheduler_state"])
+        start_epoch = resume_state["epoch"] + 1
+        best_map = resume_state.get("best_map", -1.0)
+
+    effective_amp = amp and device.type == "cuda"
+    scaler = torch.amp.GradScaler(device="cuda", enabled=effective_amp)
 
     warmup_iters = 0
     if warmup_epochs > 0:
         warmup_iters = min(len(train_loader), len(train_loader) * warmup_epochs)
 
     logs: list[EpochLog] = []
-    best_map = -1.0
     epochs_without_improvement = 0
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         warmup_scheduler = _build_warmup_scheduler(optimizer, warmup_iters) if epoch == 0 else None
         train_loss, components = train_one_epoch(
             model, optimizer, train_loader, device, epoch,
             warmup_scheduler=warmup_scheduler, grad_clip_norm=grad_clip_norm,
+            amp=effective_amp, scaler=scaler,
         )
         if scheduler is not None and epoch > 0:
             scheduler.step()
@@ -216,17 +259,18 @@ def run_training(
         log = EpochLog(epoch=epoch, train_loss=train_loss, train_loss_components=components, lr=current_lr, val_metrics=val_metrics)
         logs.append(log)
 
-        if on_epoch_end is not None:
-            on_epoch_end(log)
-
         current_map = val_metrics.get("map", None)
-        if current_map is not None and current_map > best_map:
+        improved = current_map is not None and current_map > best_map
+        if improved:
             best_map = current_map
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
 
+        if on_epoch_end is not None:
+            on_epoch_end(log, optimizer, scheduler, best_map, improved)
+
         if patience > 0 and epochs_without_improvement >= patience:
             break
 
-    return logs
+    return logs, best_map

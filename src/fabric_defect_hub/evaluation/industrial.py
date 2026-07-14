@@ -1,8 +1,8 @@
-"""Industrial-inspection `Evaluator`: under-detection rate (欠检率),
-over-detection rate (过检率), and — when fabric length is known — alarms
-per unit length. Works across both the anomaly and detection tasks by
-reducing each sample to a single positive/negative call, so the same
-evaluator scores an Anomalib PatchCore run and a YOLO/Faster R-CNN run.
+"""Industrial-inspection `Evaluator`: under-detection rate (missed-defect
+rate), over-detection rate (false-alarm rate), and — when fabric length is
+known — alarms per unit length. Works across both the anomaly and detection
+tasks by reducing each sample to a single positive/negative call, so the
+same evaluator scores an Anomalib PatchCore run and a YOLO/Faster R-CNN run.
 
 The threshold-selection idea (`recall_first_threshold`) is adapted from a
 pattern seen in a sibling internal project's `TargetRecallThreshold`
@@ -26,7 +26,9 @@ from fabric_defect_hub.evaluation.base import Evaluator
 
 
 class IndustrialEvaluator(Evaluator):
-    """欠检率 / 过检率 / (optional) 单位布长告警数, at a recall-first threshold."""
+    """Under-detection rate / over-detection rate / (optional) alarms per
+    unit fabric length, at a recall-first threshold.
+    """
 
     task = "industrial"
 

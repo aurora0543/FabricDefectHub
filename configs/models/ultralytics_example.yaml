@@ -1,35 +1,36 @@
 # ============================================================================
-# Ultralytics (YOLOv8n / YOLOv8s / YOLO11n) 实验配置示例
+# Ultralytics (YOLOv8n / YOLOv8s / YOLO11n) experiment config example.
 #
-# 使用方式（配置化，而非命令行）：
+# Usage (configuration-driven, not command-line flags):
 #     from fabric_defect_hub.models.ultralytics import run_from_yaml
 #     result = run_from_yaml("configs/models/ultralytics_example.yaml")
 #     print(result.metrics)          # {'map50': ..., 'precision': ...}
-#     print(result.registered_artifact.path)  # 训练好的模型稳定存储路径
+#     print(result.registered_artifact.path)  # stable storage path of the trained model
 #
-# 只需写你想改的项；未写的项自动回落到 fabric 预设
-# (models/ultralytics/presets.py) 与 ultralytics 自身默认值。
+# Only write the fields you want to change; anything you don't set falls
+# back to the fabric preset (models/ultralytics/presets.py) and ultralytics'
+# own defaults.
 # ============================================================================
 
-# ---- 模型：变体与初始权重 ----
+# ---- Model: variant and initial weights ----
 model:
   variant: yolov8n        # yolov8n | yolov8s | yolo11n
-  pretrained: true        # true=加载 COCO 预训练做迁移学习；false=从零训练
-  offline: false           # true=禁止隐式下载，权重缺失时在训练前报错
-  # weights: null         # 指定则从该 checkpoint 微调（覆盖 pretrained）
+  pretrained: true        # true = load COCO-pretrained weights for transfer learning; false = train from scratch
+  offline: false           # true = forbid implicit downloads, error before training if weights are missing
+  # weights: null         # if set, fine-tune from this checkpoint (overrides pretrained)
   task: detect
 
-# ---- 数据：走 DatasetAdapter 运行时转换（无需预先落盘 YOLO 数据集）----
+# ---- Data: converted at runtime via DatasetAdapter (no need to pre-stage a YOLO dataset on disk) ----
 data:
   dataset: zju-leaper
   # Set ZJU_LEAPER_ROOT to your local dataset directory before running.
   dataset_root: ${ZJU_LEAPER_ROOT}
   class_names: ["defect"]
-  train_selection:        # 传给 ZJULeaperDataset 的构造参数
+  train_selection:        # constructor kwargs passed to ZJULeaperDataset
     split: train
     pattern: pattern1
     num_samples: 300
-    defect_ratio: 1.0     # 检测任务：训练集全部使用缺陷图（含 bbox）
+    defect_ratio: 1.0     # detection task: training set uses only defective images (with bboxes)
     task: detection
     seed: 0
   val_selection:
@@ -39,10 +40,10 @@ data:
     defect_ratio: 1.0
     task: detection
     seed: 0
-  # 或者：直接给已有的 YOLO data.yaml（与 dataset 二选一）
+  # Alternative: point directly at an existing YOLO data.yaml (mutually exclusive with dataset)
   # data_yaml: /path/to/data.yaml
 
-# ---- 训练超参（仅列常改项；其余见 presets.COMMON_FABRIC_TRAIN_DEFAULTS）----
+# ---- Training hyperparameters (only the commonly-changed ones are listed; see presets.COMMON_FABRIC_TRAIN_DEFAULTS for the rest) ----
 train:
   enabled: true
   epochs: 100
@@ -53,25 +54,25 @@ train:
   lr0: 0.01
   cos_lr: true
   single_cls: true
-  # device: 0             # "cpu" / 0 / "0,1"；省略则自动选择
+  # device: 0             # "cpu" / 0 / "0,1"; omit to auto-select
   resume: false
-  extra: {}               # 任意其它 ultralytics train() 参数原样透传
+  extra: {}               # any other ultralytics train() kwargs, passed through as-is
 
-# ---- 验证 / 指标提取（用 YOLO 原生 val）----
+# ---- Validation / metric extraction (native YOLO val) ----
 val:
   enabled: true
   split: val
   conf: 0.001
   iou: 0.6
 
-# ---- 推理默认值（UltralyticsAdapter.predict 使用）----
+# ---- Inference defaults (used by UltralyticsAdapter.predict) ----
 predict:
   conf: 0.25
   iou: 0.7
   max_det: 300
   augment: false
 
-# ---- 导出（训练后可选，多格式）----
+# ---- Export (optional, after training; multiple formats) ----
 export:
   enabled: false
   formats: [onnx]         # onnx | engine | torchscript | openvino ...
@@ -81,9 +82,9 @@ export:
   # opset: 12
   # imgsz: 640
 
-# ---- 运行目录 / 模型注册 ----
+# ---- Run directory / model registry ----
 checkpoint:
   project: runs/fabric_defect_hub
   name: yolov8n_pattern1
-  registry_dir: artifacts/models   # 训练好的 best.pt 稳定拷贝到这里
+  registry_dir: artifacts/models   # the trained best.pt is copied here as a stable file
   exist_ok: false

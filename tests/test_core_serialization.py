@@ -37,13 +37,13 @@ from fabric_defect_hub.core.types import (
 def _sample() -> Sample:
     return Sample(
         id="s1", image_path="images/s1.jpg", task="detection",
-        annotations=Annotations(boxes=[[1.0, 2.0, 3.0, 4.0]], labels=["破洞"]),
+        annotations=Annotations(boxes=[[1.0, 2.0, 3.0, 4.0]], labels=["défaut"]),
         metadata={"fabric_type": "cotton"},
     )
 
 
 def _prediction() -> Prediction:
-    return Prediction(sample_id="s1", boxes=[[1.0, 2.0, 3.0, 4.0]], labels=["破洞"], scores=[0.9])
+    return Prediction(sample_id="s1", boxes=[[1.0, 2.0, 3.0, 4.0]], labels=["défaut"], scores=[0.9])
 
 
 def _result() -> ExperimentResult:
@@ -72,7 +72,7 @@ def test_save_load_samples_preserves_non_ascii_unescaped(tmp_path):
     save_samples([_sample()], path)
 
     raw_text = path.read_text(encoding="utf-8")
-    assert "破洞" in raw_text  # ensure_ascii=False actually took effect
+    assert "défaut" in raw_text  # ensure_ascii=False actually took effect
     assert "\\u" not in raw_text
 
     reloaded = load_samples(path)

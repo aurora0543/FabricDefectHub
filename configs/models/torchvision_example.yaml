@@ -1,41 +1,43 @@
 # ============================================================================
-# torchvision (Faster R-CNN / Mask R-CNN) 实验配置示例
+# torchvision (Faster R-CNN / Mask R-CNN) experiment config example.
 #
-# 使用方式（配置化，而非命令行）：
+# Usage (configuration-driven, not command-line flags):
 #     from fabric_defect_hub.models.torchvision import run_from_yaml
 #     result = run_from_yaml("configs/models/torchvision_example.yaml")
 #     print(result.metrics)                    # {'map': ..., 'map_50': ...}
-#     print(result.registered_artifact.path)    # 训练好的模型稳定存储路径
+#     print(result.registered_artifact.path)    # stable storage path of the trained model
 #
-# 只需写你想改的项；未写的项自动回落到 fabric 预设
-# (models/torchvision/presets.py) 与 torchvision 自身默认值。
+# Only write the fields you want to change; anything you don't set falls
+# back to the fabric preset (models/torchvision/presets.py) and torchvision's
+# own defaults.
 #
-# torchvision 取代了原计划的 mmdetection 后端：mmdetection 依赖的 mmcv
-# 在 macOS arm64 上没有预编译包，在 Python 3.14 上也无法从源码构建
-# （已实测确认），而 torchvision 是纯 PyTorch 实现，装到哪都能跑。
-# 代价是舍弃了 Cascade R-CNN / DETR / DINO——只保留 Faster R-CNN 和
-# Mask R-CNN 这两个经典两阶段检测器。
+# torchvision replaces the originally-planned mmdetection backend:
+# mmdetection's mmcv dependency has no prebuilt wheel on macOS arm64 and
+# cannot be built from source on Python 3.14 (confirmed by a real install
+# attempt), while torchvision is a pure PyTorch implementation that installs
+# anywhere torch does. The tradeoff is dropping Cascade R-CNN / DETR / DINO —
+# only Faster R-CNN and Mask R-CNN (the two classic two-stage detectors) remain.
 # ============================================================================
 
-# ---- 模型：变体与初始权重 ----
+# ---- Model: variant and initial weights ----
 model:
   variant: fasterrcnn_resnet50_fpn   # fasterrcnn_resnet50_fpn[_v2] | maskrcnn_resnet50_fpn[_v2]
-  pretrained: true                    # true=加载 COCO 预训练权重并替换分类头做迁移学习
-  offline: false                       # true=禁止隐式下载，权重缺失时在训练前报错
-  # weights: null                     # 指定则从该 checkpoint 微调（覆盖 pretrained）
-  trainable_backbone_layers: 3        # ResNet 5 个 stage 中可训练的层数，其余冻结
+  pretrained: true                    # true = load COCO-pretrained weights and replace the classifier head for transfer learning
+  offline: false                       # true = forbid implicit downloads, error before training if weights are missing
+  # weights: null                     # if set, fine-tune from this checkpoint (overrides pretrained)
+  trainable_backbone_layers: 3        # how many of the 5 ResNet stages stay trainable; the rest are frozen
 
-# ---- 数据：直接读取 Sample 对象，无需落盘（torchvision Dataset 原生支持内存对象）----
+# ---- Data: read Sample objects directly, no on-disk staging (torchvision Dataset natively supports in-memory objects) ----
 data:
   dataset: zju-leaper
   # Set ZJU_LEAPER_ROOT to your local dataset directory before running.
   dataset_root: ${ZJU_LEAPER_ROOT}
   class_names: ["defect"]
-  train_selection:        # 传给 ZJULeaperDataset 的构造参数
+  train_selection:        # constructor kwargs passed to ZJULeaperDataset
     split: train
     pattern: pattern1
     num_samples: 300
-    defect_ratio: 1.0      # 检测任务：训练集全部使用缺陷图（含 bbox）
+    defect_ratio: 1.0      # detection task: training set uses only defective images (with bboxes)
     task: detection
     seed: 0
   val_selection:
@@ -46,7 +48,7 @@ data:
     task: detection
     seed: 0
 
-# ---- 训练超参（仅列常改项；其余见 presets.COMMON_FABRIC_TRAIN_DEFAULTS）----
+# ---- Training hyperparameters (only the commonly-changed ones are listed; see presets.COMMON_FABRIC_TRAIN_DEFAULTS for the rest) ----
 train:
   enabled: true
   epochs: 30
@@ -58,31 +60,36 @@ train:
   lr_scheduler: cosine     # none | step | cosine
   warmup_epochs: 1
   grad_clip_norm: 5.0
-  patience: 8              # 验证集 mAP 连续多少轮不提升就早停
-  num_workers: 0             # macOS 安全默认；Linux/CUDA 服务器可按需提高
-  # device: cuda            # 省略则自动选择 cuda > mps > cpu
-  extra: {}                 # 任意其它训练参数原样透传
+  patience: 8              # early stop after this many epochs with no val-mAP improvement
+  num_workers: 0             # safe default on macOS; raise on a prepared Linux/CUDA host
+  # device: cuda            # omit to auto-select cuda > mps > cpu
+  # seed: 0                 # RNG seed for reproducible weight init / shuffling / augmentation
+  # amp: true                # mixed precision; only actually engaged on CUDA (no-op on CPU/MPS)
+  # resume: true             # continue from checkpoint.run_dir's last.pt (optimizer/scheduler/epoch state included) instead of starting over
+  extra: {}                 # any other training kwargs, passed through as-is
 
-# ---- 验证 / 指标提取（torchmetrics 原生 COCO-style mAP）----
+# ---- Validation / metric extraction (native torchmetrics COCO-style mAP) ----
 val:
   enabled: true
   batch_size: 4
   num_workers: 0
 
-# ---- 推理默认值（TorchvisionAdapter.predict 使用）----
+# ---- Inference defaults (used by TorchvisionAdapter.predict) ----
 predict:
   score_threshold: 0.5
   max_detections: 100
+  # nms_iou_threshold: 0.5   # null = rely solely on the model's own built-in per-class NMS; a value applies one more NMS pass on top
+  # device: cpu               # null = keep whatever device the loaded weights are already on
 
-# ---- 导出（训练后可选）----
+# ---- Export (optional, after training) ----
 export:
   enabled: false
-  formats: [exported_program]  # exported_program（推荐）| torchscript（兼容）| onnx
+  formats: [exported_program]  # exported_program (recommended) | torchscript (compatibility) | onnx
   opset: 17
 
-# ---- 运行目录 / 模型注册 ----
+# ---- Run directory / model registry ----
 checkpoint:
   run_dir: runs/fabric_defect_hub_tv
   name: fasterrcnn_pattern1
-  registry_dir: artifacts/models   # 训练好的最佳 checkpoint 稳定拷贝到这里
+  registry_dir: artifacts/models   # the best trained checkpoint is copied here as a stable file
   save_every_epoch: false

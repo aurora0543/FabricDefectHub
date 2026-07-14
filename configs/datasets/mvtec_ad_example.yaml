@@ -1,25 +1,26 @@
-# MVTec AD 数据集接口配置示例
-# 通过 load_dataset("mvtec-ad", root=<root>, **config) 使用。
-# root 指向包含各类别子目录（bottle/、cable/、carpet/ ...）的数据集根目录。
-# 非布匹数据集，主要用于后续跨域 zero-shot / 鲁棒性评估。
+# MVTec AD dataset adapter config examples.
+# Used via load_dataset("mvtec-ad", root=<root>, **config).
+# root points at the dataset directory containing one subdirectory per category
+# (bottle/, cable/, carpet/, ...). Not a fabric dataset — mainly used for
+# cross-domain zero-shot / robustness evaluation.
 
-# ---- 场景 A：zero-shot（不使用缺陷图，仅正常样本，用于跨域评估布匹模型）----
+# ---- Scenario A: zero-shot (normal samples only, for cross-domain evaluation of fabric models) ----
 zero_shot:
   split: test
-  category: null           # null = 聚合全部 15 个类别；也可指定单一类别，如 bottle
+  category: null           # null = aggregate all 15 categories; or specify a single category, e.g. bottle
   num_samples: 300
   use_defect: false
   task: anomaly
 
-# ---- 场景 B：full-shot（单一类别，全量）----
+# ---- Scenario B: full-shot (single category, all images) ----
 few_shot:
   split: test
   category: bottle
-  num_samples: null         # null = 使用该类别下的全部图片
+  num_samples: null         # null = use every image in this category
   use_defect: true
   task: anomaly
 
-# ---- 场景 C：少样本（一次 350 张，可控缺陷占比，跨全部类别）----
+# ---- Scenario C: low-shot (350 images, controlled defect ratio, across all categories) ----
 low_shot:
   split: test
   category: null
