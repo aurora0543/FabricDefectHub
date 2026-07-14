@@ -23,6 +23,11 @@ profiling-power-nvidia = ["nvidia-ml-py"]
 # split out from `profiling-onnxruntime`. Not installable/verifiable on
 # this project's dev machine (Apple Silicon) — see profiling/tensorrt.py.
 profiling-tensorrt = ["tensorrt", "pycuda"]
+# Post-training ONNX quantization for edge deployment (quantization/onnx_quant.py):
+# fp16 conversion + INT8 dynamic/static. TensorRT INT8 calibration
+# (quantization/tensorrt_calibration.py) reuses onnx/pillow/numpy from here
+# but needs the profiling-tensorrt extra too for tensorrt/pycuda themselves.
+quantization = ["onnx", "onnxruntime", "onnxconverter-common", "pillow", "numpy"]
 ui = ["gradio>=5.0,<7", "pillow", "numpy", "psutil"]
 dev = [
   "pytest",
@@ -35,8 +40,10 @@ dev = [
   "torchvision",
   "torchmetrics",
   "pycocotools",
+  "onnx",
   "onnxruntime",
   "onnxscript",
+  "onnxconverter-common",
   "psutil",
 ]
 
