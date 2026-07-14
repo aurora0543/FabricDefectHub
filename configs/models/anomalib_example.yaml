@@ -1,0 +1,89 @@
+# ============================================================================
+# Anomalib（PatchCore / PaDiM / RD4AD / EfficientAD / SuperSimpleNet）实验配置示例
+#
+# 使用方式（配置化，而非命令行）：
+#     from fabric_defect_hub.models.anomalib import run_from_yaml
+#     result = run_from_yaml("configs/models/anomalib_example.yaml")
+#     print(result.metrics)                    # {'image_auroc': ..., 'pixel_aupro': ...}
+#     print(result.registered_artifact.path)    # 训练好的 checkpoint 稳定存储路径
+#
+# 只需写你想改的项；train.model_kwargs 未写的键自动回落到 fabric 预设
+# (models/anomalib/presets.py::MODEL_PRESETS)。
+#
+# 跟 ultralytics_example.yaml / torchvision_example.yaml 的两处结构性差异
+# （不是疏漏，是这个后端本身的形状决定的，见 models/anomalib/config.py
+# 模块 docstring）：
+#   1. data 下是 train_selection / test_selection，不是 train/val——
+#      anomalib 自己的 Folder 数据结构就是 train/good + test/{good,defect}，
+#      没有"验证集"这个概念。
+#   2. 没有 val.batch_size 之类的原生指标提取——AnomalibAdapter 没有
+#      `.validate()`，这里的"验证"是 predict() 出结果后再喂给
+#      evaluation.anomaly.AnomalyEvaluator，两步拼起来的。
+# ============================================================================
+
+# ---- 模型：五选一 ----
+model:
+  name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet（大小写不敏感）
+
+# ---- 数据：运行时从 ZJULeaperDataset 读取并临时暂存为 MVTec 风格目录 ----
+# 下面的 dataset_root 是本机开发环境的实际路径，换机器需要改成你自己的
+# ZJU-Leaper 数据集位置（Images/ Annotations/ ImageSets/ 所在目录）。
+data:
+  dataset: zju-leaper
+  dataset_root: /Volumes/SSD/anomaly-detection-challenges/datasets/ZJU-Leaper
+  train_selection:        # 训练只用正常样本（PatchCore 等都是单类训练）
+    split: train
+    pattern: pattern1
+    num_samples: 300
+    use_defect: false      # 关键：训练集不引入任何缺陷图
+    task: anomaly
+    seed: 0
+  test_selection:          # 测试集正常+缺陷混合，用来算 AUROC/AUPRO
+    split: test
+    pattern: pattern1
+    num_samples: 100
+    use_defect: true
+    defect_ratio: 0.5
+    task: anomaly
+    seed: 0
+  # 或者：已有现成 MVTec 风格数据集时，用 datamodule_kwargs 代替 dataset
+  # （此时 val 阶段的指标计算会被跳过，因为没有 Sample 列表可评测——
+  #  见 pipeline.py 里的说明）
+  # datamodule_kwargs:
+  #   root: /path/to/mvtec/bottle
+  #   normal_dir: train/good
+  #   normal_test_dir: test/good
+  #   abnormal_dir: test/defect
+  #   mask_dir: ground_truth/defect
+
+# ---- 训练：model_kwargs 覆盖 fabric 预设，engine_kwargs 传给 anomalib Engine ----
+train:
+  enabled: true
+  model_kwargs: {}          # 例如 PatchCore: {coreset_sampling_ratio: 0.1, num_neighbors: 9}
+  engine_kwargs:
+    max_epochs: 1            # PatchCore/PaDiM 不需要梯度训练，1 个 epoch 足够跑完 fit
+    accelerator: cpu         # 省略则 anomalib 自动选择；本机无 CUDA 时显式写 cpu 更稳妥
+  num_workers: 0              # 见 config.py 里的说明：暂存目录是临时符号链接，worker 子进程有关闭竞态
+
+# ---- 验证：predict() + AnomalyEvaluator（不是原生 .validate()）----
+val:
+  enabled: true
+  output_dir: artifacts/anomaly_maps/patchcore_pattern1   # 存像素级 anomaly_map，用于算 pixel AUROC/AUPRO；不需要像素指标可设为 null
+  max_pixels: 1000000
+  max_aupro_images: 50
+  seed: 0
+
+# ---- 推理默认值（AnomalibAdapter.predict 使用）----
+predict:
+  output_dir: null   # 只要图像级分数、不需要像素热力图时留空
+
+# ---- 导出（训练后可选）----
+export:
+  enabled: false
+  formats: [torch]   # torch | onnx | openvino（anomalib.deploy.ExportType）
+
+# ---- 运行目录 / 模型注册 ----
+checkpoint:
+  default_root_dir: results/fabric_defect_hub_anomalib   # anomalib Engine 自己的工作目录
+  name: patchcore_pattern1
+  registry_dir: artifacts/models   # 训练好的 checkpoint 稳定拷贝到这里，文件名为 <model_class>.ckpt
