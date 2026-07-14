@@ -15,13 +15,15 @@
 model:
   variant: yolov8n        # yolov8n | yolov8s | yolo11n
   pretrained: true        # true=加载 COCO 预训练做迁移学习；false=从零训练
+  offline: false           # true=禁止隐式下载，权重缺失时在训练前报错
   # weights: null         # 指定则从该 checkpoint 微调（覆盖 pretrained）
   task: detect
 
 # ---- 数据：走 DatasetAdapter 运行时转换（无需预先落盘 YOLO 数据集）----
 data:
   dataset: zju-leaper
-  dataset_root: /Volumes/SSD/anomaly-detection-challenges/datasets/ZJU-Leaper
+  # Set ZJU_LEAPER_ROOT to your local dataset directory before running.
+  dataset_root: ${ZJU_LEAPER_ROOT}
   class_names: ["defect"]
   train_selection:        # 传给 ZJULeaperDataset 的构造参数
     split: train

@@ -87,6 +87,7 @@ class TorchvisionAdapter(ModelAdapter):
         device: str | None = None,
         min_size: int | None = None,
         max_size: int | None = None,
+        offline: bool = False,
     ):
         """Load COCO-pretrained detection weights with the classifier head
         swapped for `class_names` (transfer learning starting point).
@@ -100,6 +101,7 @@ class TorchvisionAdapter(ModelAdapter):
             variant, num_classes=num_classes, pretrained=True,
             trainable_backbone_layers=trainable_backbone_layers,
             min_size=min_size, max_size=max_size,
+            offline=offline,
         ).to(self._device)
         return self._model
 
@@ -111,6 +113,7 @@ class TorchvisionAdapter(ModelAdapter):
         device: str | None = None,
         min_size: int | None = None,
         max_size: int | None = None,
+        offline: bool = False,
     ):
         """Load an ImageNet-pretrained-backbone-only model with a
         random-init detection head (train from scratch).
@@ -124,10 +127,13 @@ class TorchvisionAdapter(ModelAdapter):
             variant, num_classes=num_classes, pretrained=False,
             trainable_backbone_layers=trainable_backbone_layers,
             min_size=min_size, max_size=max_size,
+            backbone_weights=not offline,
         ).to(self._device)
         return self._model
 
-    def load_weights(self, path: str, device: str | None = None):
+    def load_weights(
+        self, path: str, device: str | None = None, allow_unsafe_pickle: bool = False
+    ):
         """Load a checkpoint previously produced by `register_trained_model`
         (contains `state_dict`, `class_map`, `variant`).
 
@@ -140,15 +146,33 @@ class TorchvisionAdapter(ModelAdapter):
 
         import torch
 
+        checkpoint_path = Path(path)
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f"Torchvision checkpoint does not exist: {checkpoint_path}")
         self._device = self._resolve_device(device)
-        checkpoint = torch.load(path, map_location=self._device, weights_only=False)
-        self._class_map = checkpoint["class_map"]
-        variant = checkpoint.get("variant", self.name)
+        try:
+            checkpoint = torch.load(
+                checkpoint_path, map_location=self._device, weights_only=not allow_unsafe_pickle
+            )
+        except Exception as exc:
+            mode = "unsafe pickle mode" if allow_unsafe_pickle else "safe weights-only mode"
+            raise ValueError(
+                f"Could not load Torchvision checkpoint {checkpoint_path} in {mode}. "
+                "Only set allow_unsafe_pickle=True for a checkpoint from a trusted source."
+            ) from exc
+        class_map, variant, state_dict = _validate_checkpoint(checkpoint, checkpoint_path, self.name)
+        self._class_map = class_map
         num_classes = len(self._class_map) + 1
         self._model = build_model(
             variant, num_classes=num_classes, pretrained=False, backbone_weights=False,
         ).to(self._device)
-        self._model.load_state_dict(checkpoint["state_dict"])
+        try:
+            self._model.load_state_dict(state_dict)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} is incompatible with Torchvision variant {variant!r} "
+                f"and class map {self._class_map!r}."
+            ) from exc
         self.name = variant
         return self._model
 
@@ -191,6 +215,7 @@ class TorchvisionAdapter(ModelAdapter):
 
         weights = cfg.get("weights")
         pretrained = cfg.get("pretrained", True)
+        offline = cfg.get("offline", False)
         device_str = cfg.get("device")
         tbl = cfg.get("trainable_backbone_layers")
         min_size = cfg.get("min_size")
@@ -201,12 +226,12 @@ class TorchvisionAdapter(ModelAdapter):
         elif pretrained:
             self.load_pretrained(
                 class_names, trainable_backbone_layers=tbl, device=device_str,
-                min_size=min_size, max_size=max_size,
+                min_size=min_size, max_size=max_size, offline=offline,
             )
         else:
             self.load_scratch(
                 class_names, trainable_backbone_layers=tbl, device=device_str,
-                min_size=min_size, max_size=max_size,
+                min_size=min_size, max_size=max_size, offline=offline,
             )
 
         class_map = self._class_map
@@ -224,7 +249,7 @@ class TorchvisionAdapter(ModelAdapter):
             transforms=build_transforms(train=False),
         )
 
-        num_workers = cfg.get("num_workers", 2)
+        num_workers = cfg.get("num_workers", 0)
         train_loader = DataLoader(
             train_ds, batch_size=cfg.get("batch_size", 4), shuffle=True,
             num_workers=num_workers, collate_fn=detection_collate_fn,
@@ -327,7 +352,7 @@ class TorchvisionAdapter(ModelAdapter):
         )
         loader = DataLoader(
             dataset, batch_size=cfg.get("batch_size", 4), shuffle=False,
-            num_workers=cfg.get("num_workers", 2), collate_fn=detection_collate_fn,
+            num_workers=cfg.get("num_workers", 0), collate_fn=detection_collate_fn,
         )
         return run_evaluate(self.model, loader, self._device, with_masks=with_masks)
 
@@ -426,11 +451,10 @@ class TorchvisionAdapter(ModelAdapter):
     # Export
     # ------------------------------------------------------------------ #
     def export(self, artifact: Artifact, target: str, config: dict[str, Any] | None = None) -> ExportedArtifact:
-        """`target`: 'torchscript' (primary, officially supported by
-        torchvision's Faster/Mask R-CNN) or 'onnx' (best-effort — see class
-        docstring; a caveat is attached to `metadata['warning']` if the
-        export raises and is caught, but you should still smoke-test the
-        result).
+        """`target`: 'exported_program' (`torch.export`, preferred for
+        Python 3.14+), 'torchscript' (legacy compatibility), or 'onnx'.
+        Export failures raise immediately so callers never receive a
+        fake-success path.
         """
 
         import torch
@@ -440,6 +464,25 @@ class TorchvisionAdapter(ModelAdapter):
 
         run_dir = Path(artifact.metadata.get("run_dir", "runs/fabric_defect_hub_tv"))
         run_dir.mkdir(parents=True, exist_ok=True)
+
+        if target == "exported_program":
+            cfg = config or {}
+            height, width = cfg.get("input_size", (800, 800))
+            dummy = [torch.rand(3, height, width, device=self._device)]
+            out_path = run_dir / "model.pt2"
+            try:
+                exported = torch.export.export(self.model, (dummy,), strict=False)
+                torch.export.save(exported, out_path)
+            except Exception as exc:
+                out_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "Torchvision torch.export failed. The selected model or installed PyTorch "
+                    "version may contain detection operators not yet supported by torch.export."
+                ) from exc
+            return ExportedArtifact(
+                path=str(out_path), target=target,
+                metadata={"source_weights": artifact.path, "input_size": [height, width]},
+            )
 
         if target == "torchscript":
             scripted = torch.jit.script(self.model)
@@ -452,22 +495,30 @@ class TorchvisionAdapter(ModelAdapter):
             opset = cfg.get("opset", 17)
             out_path = run_dir / "model.onnx"
             dummy = [torch.rand(3, 800, 800, device=self._device)]
-            metadata: dict[str, Any] = {"source_weights": artifact.path, "opset": opset}
             try:
                 torch.onnx.export(
                     self.model, (dummy,), str(out_path),
                     input_names=["images"], output_names=["boxes", "labels", "scores"],
                     opset_version=opset, dynamic_axes={"images": {0: "batch"}},
                 )
-            except Exception as exc:  # torchvision detection ONNX export is best-effort (see docstring)
-                metadata["warning"] = (
-                    f"ONNX export raised {type(exc).__name__}: {exc}. Faster/Mask R-CNN's "
-                    "internal NMS/RoIAlign ops have inconsistent ONNX opset coverage across "
-                    "torch versions; prefer target='torchscript' for a supported export path."
-                )
-            return ExportedArtifact(path=str(out_path), target=target, metadata=metadata)
+            except Exception as exc:
+                out_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "Torchvision ONNX export failed. Faster/Mask R-CNN internal NMS/RoIAlign "
+                    "support varies across torch versions; use target='torchscript' or a "
+                    "compatible torch/onnx stack."
+                ) from exc
+            if not out_path.is_file() or out_path.stat().st_size == 0:
+                out_path.unlink(missing_ok=True)
+                raise RuntimeError("Torchvision ONNX export completed without producing a valid file.")
+            return ExportedArtifact(
+                path=str(out_path), target=target,
+                metadata={"source_weights": artifact.path, "opset": opset},
+            )
 
-        raise ValueError(f"unsupported export target {target!r}; expected 'torchscript' or 'onnx'.")
+        raise ValueError(
+            f"unsupported export target {target!r}; expected 'exported_program', 'torchscript', or 'onnx'."
+        )
 
 
 def _append_history_row(path: Path, log) -> None:
@@ -479,3 +530,29 @@ def _append_history_row(path: Path, log) -> None:
         writer.writerow(
             [log.epoch, f"{log.train_loss:.6f}", f"{log.lr:.8f}", *(f"{log.val_metrics[k]:.6f}" for k in sorted(log.val_metrics))]
         )
+
+
+def _validate_checkpoint(checkpoint: object, path: Path, fallback_variant: str) -> tuple[dict[str, int], str, dict]:
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Checkpoint {path} must be a dictionary produced by TorchvisionAdapter.")
+    missing = {"state_dict", "class_map"} - set(checkpoint)
+    if missing:
+        raise ValueError(f"Checkpoint {path} is missing required keys: {sorted(missing)}.")
+    class_map = checkpoint["class_map"]
+    if not isinstance(class_map, dict) or not class_map:
+        raise ValueError(f"Checkpoint {path} has an invalid non-empty 'class_map'.")
+    if not all(isinstance(label, str) and isinstance(index, int) and index > 0 for label, index in class_map.items()):
+        raise ValueError(f"Checkpoint {path} class_map must map non-empty labels to positive integer ids.")
+    if len(set(class_map.values())) != len(class_map):
+        raise ValueError(f"Checkpoint {path} class_map contains duplicate class ids.")
+    variant = checkpoint.get("variant", fallback_variant)
+    if not isinstance(variant, str):
+        raise ValueError(f"Checkpoint {path} has an invalid 'variant'.")
+    try:
+        variant = resolve_variant(variant)
+    except KeyError as exc:
+        raise ValueError(f"Checkpoint {path} requests unsupported Torchvision variant {variant!r}.") from exc
+    state_dict = checkpoint["state_dict"]
+    if not isinstance(state_dict, dict) or not state_dict:
+        raise ValueError(f"Checkpoint {path} has an invalid empty 'state_dict'.")
+    return class_map, variant, state_dict

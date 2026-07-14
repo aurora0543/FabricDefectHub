@@ -20,13 +20,7 @@ the Ultralytics backend:
 * `pipeline.py` — `run_from_config` / `run_from_yaml`, the end-to-end runner.
 """
 
-from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
 from fabric_defect_hub.models.torchvision.config import TorchvisionConfig
-from fabric_defect_hub.models.torchvision.pipeline import (
-    TorchvisionRunResult,
-    run_from_config,
-    run_from_yaml,
-)
 from fabric_defect_hub.models.torchvision.presets import list_supported_variants
 
 __all__ = [
@@ -37,3 +31,15 @@ __all__ = [
     "run_from_yaml",
     "list_supported_variants",
 ]
+
+
+def __getattr__(name: str):
+    if name == "TorchvisionAdapter":
+        from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
+
+        return TorchvisionAdapter
+    if name in {"TorchvisionRunResult", "run_from_config", "run_from_yaml"}:
+        from fabric_defect_hub.models.torchvision import pipeline
+
+        return getattr(pipeline, name)
+    raise AttributeError(name)

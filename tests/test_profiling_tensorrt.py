@@ -14,7 +14,7 @@ import pytest
 
 from fabric_defect_hub.models.base import ExportedArtifact
 from fabric_defect_hub.profiling.base import ProfileConfig
-from fabric_defect_hub.profiling.tensorrt import TensorRTProfiler
+from fabric_defect_hub.profiling.tensorrt import TensorRTBuildConfig, TensorRTProfiler, build_tensorrt_engine
 
 
 def test_rejects_wrong_target_without_needing_tensorrt_installed():
@@ -49,3 +49,18 @@ def test_runtime_info_maps_config_fields():
     assert info.engine == "tensorrt"
     assert info.precision == "fp16"
     assert info.input_size == (512, 512)
+
+
+def test_build_config_rejects_implicit_int8_and_invalid_shapes():
+    with pytest.raises(ValueError, match="precision"):
+        TensorRTBuildConfig(precision="bf16")
+    with pytest.raises(ValueError, match="four positive"):
+        TensorRTBuildConfig(min_shape=(1, 3, 0, 640))
+
+
+def test_engine_builder_rejects_non_onnx_before_needing_tensorrt(tmp_path):
+    with pytest.raises(ValueError, match="target='onnx'"):
+        build_tensorrt_engine(
+            ExportedArtifact(path=str(tmp_path / "model.pt"), target="torchscript"),
+            tmp_path / "model.engine",
+        )

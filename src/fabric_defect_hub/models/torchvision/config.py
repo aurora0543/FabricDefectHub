@@ -14,6 +14,7 @@ Load with `TorchvisionConfig.from_yaml(path)` or `.from_dict(mapping)`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ class ModelSpec:
     variant: str = "fasterrcnn_resnet50_fpn"
     weights: str | None = None
     pretrained: bool = True
+    offline: bool = False
     trainable_backbone_layers: int | None = None
     min_size: int | None = None
     max_size: int | None = None
@@ -149,11 +151,8 @@ class PredictSpec:
 class ExportSpec:
     """Post-training export targets.
 
-    formats: 'torchscript' (primary — Faster/Mask R-CNN are `torch.jit.script`-
-        able and this is the officially supported export path) and/or 'onnx'
-        (best-effort: torchvision detection models' internal NMS/RoIAlign
-        ops have historically had partial ONNX opset coverage: track
-        `ExportedArtifact.metadata['warning']` on the returned artifact).
+    formats: 'exported_program' (`torch.export`, preferred for Python 3.14+),
+        'torchscript' (legacy compatibility), and/or 'onnx'.
     """
 
     enabled: bool = False
@@ -221,7 +220,7 @@ class TorchvisionConfig:
 
         with open(path) as fh:
             data = yaml.safe_load(fh) or {}
-        return cls.from_dict(data)
+        return cls.from_dict(_expand_environment_variables(data))
 
     def validate(self) -> None:
         self.model.validate()
@@ -249,3 +248,11 @@ def _build_section(spec_cls, raw: dict[str, Any], section: str):
 
 def supported_variants() -> list[str]:
     return list_supported_variants()
+
+
+def _expand_environment_variables(value):
+    if isinstance(value, dict):
+        return {key: _expand_environment_variables(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment_variables(item) for item in value]
+    return os.path.expandvars(value) if isinstance(value, str) else value

@@ -31,6 +31,7 @@ Load with `AnomalibConfig.from_yaml(path)` or `.from_dict(mapping)`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -235,7 +236,7 @@ class AnomalibConfig:
 
         with open(path) as fh:
             data = yaml.safe_load(fh) or {}
-        return cls.from_dict(data)
+        return cls.from_dict(_expand_environment_variables(data))
 
     # ------------------------------------------------------------------ #
     # Validation & resolution
@@ -275,6 +276,14 @@ def _build_section(spec_cls, raw: dict[str, Any], section: str):
             f"valid keys are {sorted(valid)}."
         )
     return spec_cls(**raw)
+
+
+def _expand_environment_variables(value):
+    if isinstance(value, dict):
+        return {key: _expand_environment_variables(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment_variables(item) for item in value]
+    return os.path.expandvars(value) if isinstance(value, str) else value
 
 
 def supported_models() -> list[str]:

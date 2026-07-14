@@ -20,6 +20,7 @@ Load with `UltralyticsConfig.from_yaml(path)` or `.from_dict(mapping)`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ class ModelSpec:
     variant: str = "yolov8n"
     weights: str | None = None
     pretrained: bool = True
+    offline: bool = False
     task: str = "detect"
 
     def initial_weights(self) -> str:
@@ -311,7 +313,7 @@ class UltralyticsConfig:
 
         with open(path) as fh:
             data = yaml.safe_load(fh) or {}
-        return cls.from_dict(data)
+        return cls.from_dict(_expand_environment_variables(data))
 
     # ------------------------------------------------------------------ #
     # Validation & resolution
@@ -352,3 +354,11 @@ def _build_section(spec_cls, raw: dict[str, Any], section: str):
 
 def supported_variants() -> list[str]:
     return list_supported_variants()
+
+
+def _expand_environment_variables(value):
+    if isinstance(value, dict):
+        return {key: _expand_environment_variables(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment_variables(item) for item in value]
+    return os.path.expandvars(value) if isinstance(value, str) else value

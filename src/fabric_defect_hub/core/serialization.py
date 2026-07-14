@@ -50,7 +50,9 @@ def sample_from_dict(data: dict) -> Sample:
 def save_samples(samples: list[Sample], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([sample_to_dict(s) for s in samples], indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps([sample_to_dict(s) for s in samples], indent=2, ensure_ascii=False, allow_nan=False)
+    )
     return path
 
 
@@ -73,7 +75,9 @@ def prediction_from_dict(data: dict) -> Prediction:
 def save_predictions(predictions: list[Prediction], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([prediction_to_dict(p) for p in predictions], indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps([prediction_to_dict(p) for p in predictions], indent=2, ensure_ascii=False, allow_nan=False)
+    )
     return path
 
 
@@ -109,7 +113,9 @@ def experiment_result_from_dict(data: dict) -> ExperimentResult:
 def save_experiment_result(result: ExperimentResult, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(experiment_result_to_dict(result), indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps(experiment_result_to_dict(result), indent=2, ensure_ascii=False, allow_nan=False)
+    )
     return path
 
 

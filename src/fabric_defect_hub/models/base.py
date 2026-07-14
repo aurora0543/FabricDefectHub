@@ -1,5 +1,5 @@
 """ModelAdapter: unifies train/predict/export across Ultralytics,
-MMDetection and Anomalib, while letting each backend keep its native config.
+torchvision and Anomalib, while letting each backend keep its native config.
 """
 
 from __future__ import annotations

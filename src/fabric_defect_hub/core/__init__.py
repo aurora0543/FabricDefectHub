@@ -17,6 +17,7 @@ from fabric_defect_hub.core.serialization import (
     save_samples,
     validate_experiment_result,
 )
+from fabric_defect_hub.core.preflight import require_cached_weight, resolve_cached_weight
 
 __all__ = [
     "sample_to_dict",
@@ -32,4 +33,6 @@ __all__ = [
     "save_experiment_result",
     "load_experiment_result",
     "validate_experiment_result",
+    "resolve_cached_weight",
+    "require_cached_weight",
 ]

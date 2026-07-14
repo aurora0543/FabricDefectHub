@@ -23,6 +23,7 @@ live before this module was written.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 # Friendly variant name -> torchvision factory function name + weights enum
@@ -87,7 +88,10 @@ COMMON_FABRIC_TRAIN_DEFAULTS: dict[str, Any] = {
     "warmup_epochs": 1,  # linear LR warmup within the first epoch, per torchvision's reference recipe
     "grad_clip_norm": 5.0,
     "patience": 8,  # early stop on no val-mAP improvement
-    "num_workers": 2,
+    # Sample-backed datasets can be staged from transient local paths; zero
+    # workers is the portable default on macOS and can be overridden for a
+    # prepared Linux/CUDA training host.
+    "num_workers": 0,
     "trainable_backbone_layers": 3,  # of 5; freeze the earliest (most generic) ResNet stages
     # --- augmentation, retuned for small texture defects (see build_transforms) ---
     "hflip_prob": 0.5,
@@ -131,6 +135,7 @@ def build_model(
     min_size: int | None = None,
     max_size: int | None = None,
     backbone_weights: bool = True,
+    offline: bool = False,
 ):
     """Construct the torchvision detection model for `name`, sized for
     `num_classes` foreground classes + background (i.e. pass
@@ -173,8 +178,21 @@ def build_model(
 
     if pretrained:
         weights_enum = getattr(tv_detection, spec["weights_enum"])
+        weights = weights_enum.DEFAULT
+        if offline:
+            from fabric_defect_hub.core.preflight import require_cached_weight
+            import torch
+
+            checkpoint_dir = Path(torch.hub.get_dir()) / "checkpoints"
+            cached = require_cached_weight(weights.url, "torchvision", [checkpoint_dir])
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            expected_path = checkpoint_dir / Path(weights.url).name
+            if cached != expected_path and not expected_path.exists():
+                import shutil
+
+                shutil.copy2(cached, expected_path)
         model = factory(
-            weights=weights_enum.DEFAULT,
+            weights=weights,
             trainable_backbone_layers=trainable_backbone_layers,
             **size_kwargs,
         )

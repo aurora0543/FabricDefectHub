@@ -14,7 +14,6 @@ from typing import Any
 from fabric_defect_hub.core.types import Sample
 from fabric_defect_hub.loader import load_dataset
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact
-from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
 from fabric_defect_hub.models.torchvision.config import TorchvisionConfig
 
 
@@ -34,11 +33,15 @@ def _load_split_samples(config: TorchvisionConfig, selection: dict[str, Any]) ->
     return dataset.load_samples()
 
 
-def run_from_config(config: TorchvisionConfig) -> TorchvisionRunResult:
+def run_from_config(config: TorchvisionConfig, adapter_factory=None) -> TorchvisionRunResult:
     """Execute the lifecycle declared in `config`."""
 
     config.validate()
-    adapter = TorchvisionAdapter(name=config.model.variant)
+    if adapter_factory is None:
+        from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
+
+        adapter_factory = TorchvisionAdapter
+    adapter = adapter_factory(name=config.model.variant)
     result = TorchvisionRunResult(config=config)
 
     train_samples = _load_split_samples(config, config.data.train_selection)
@@ -55,6 +58,7 @@ def run_from_config(config: TorchvisionConfig) -> TorchvisionRunResult:
         train_config["val_samples"] = val_samples
         train_config["class_names"] = config.data.class_names
         train_config["pretrained"] = config.model.pretrained
+        train_config["offline"] = config.model.offline
         train_config["trainable_backbone_layers"] = config.model.trainable_backbone_layers
         train_config["min_size"] = config.model.min_size
         train_config["max_size"] = config.model.max_size

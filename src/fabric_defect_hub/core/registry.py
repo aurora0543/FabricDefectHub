@@ -60,3 +60,10 @@ def list_datasets() -> list[str]:
 
 def list_models() -> list[str]:
     return sorted(_MODEL_REGISTRY)
+
+
+def clear_registries() -> None:
+    """Clear registrations for isolated tests and interactive-session resets."""
+
+    _DATASET_REGISTRY.clear()
+    _MODEL_REGISTRY.clear()

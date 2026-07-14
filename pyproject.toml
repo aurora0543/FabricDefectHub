@@ -5,7 +5,10 @@ description = "Unified benchmark platform for fabric defect detection across Ult
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = ["pyyaml"]
+
+[project.scripts]
+fdh = "fabric_defect_hub.cli:main"
 
 [project.optional-dependencies]
 ultralytics = ["ultralytics", "pillow", "pyyaml"]
@@ -14,11 +17,26 @@ anomalib = ["anomalib", "scikit-learn", "scikit-image"]
 # BackendProfiler runtimes (profiling/pytorch.py needs only torch itself,
 # already pulled in by any of the extras above).
 profiling-onnxruntime = ["onnxruntime", "psutil"]
+profiling-power-nvidia = ["nvidia-ml-py"]
 # NVIDIA-only: requires a CUDA-capable GPU + matching CUDA toolkit, hence
 # split out from `profiling-onnxruntime`. Not installable/verifiable on
 # this project's dev machine (Apple Silicon) — see profiling/tensorrt.py.
 profiling-tensorrt = ["tensorrt", "pycuda"]
-dev = ["pytest", "jsonschema"]
+dev = [
+  "pytest",
+  "jsonschema",
+  "numpy",
+  "pillow",
+  "scikit-learn",
+  "scikit-image",
+  "torch",
+  "torchvision",
+  "torchmetrics",
+  "pycocotools",
+  "onnxruntime",
+  "onnxscript",
+  "psutil",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -29,3 +47,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "slow: requires real framework dependencies, models, and dataset access",
+]

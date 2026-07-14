@@ -1,8 +1,7 @@
 """PyTorch (eager or TorchScript) `BackendProfiler` — the PC baseline every
 other runtime (ONNX Runtime, TensorRT) gets compared against.
 
-Loads a TorchScript export (`ExportedArtifact.target == 'torchscript'`,
-produced by `UltralyticsAdapter.export`/`TorchvisionAdapter.export`) and
+Loads a `torch.export` ExportedProgram or legacy TorchScript artifact and
 times repeated forward passes with proper device synchronization — a naive
 `time.perf_counter()` around a CUDA/MPS call measures kernel-launch time,
 not execution time, unless you synchronize first; this is a genuinely easy
@@ -25,16 +24,19 @@ class PyTorchProfiler(BackendProfiler):
     engine = "pytorch"
 
     def profile(self, artifact: ExportedArtifact, config: ProfileConfig) -> dict[str, float]:
-        if artifact.target != "torchscript":
+        if artifact.target not in {"torchscript", "exported_program"}:
             raise ValueError(
-                f"PyTorchProfiler expects a 'torchscript' export, got target={artifact.target!r}. "
-                "Export with e.g. UltralyticsAdapter.export(artifact, 'torchscript') first."
+                "PyTorchProfiler expects an 'exported_program' or 'torchscript' artifact, "
+                f"got target={artifact.target!r}."
             )
 
         import torch
 
         device = torch.device(config.device)
-        model = torch.jit.load(artifact.path, map_location=device)
+        if artifact.target == "exported_program":
+            model = torch.export.load(artifact.path).module().to(device)
+        else:
+            model = torch.jit.load(artifact.path, map_location=device)
         model.eval()
 
         dummy_input = _build_dummy_input(config, device)
@@ -45,15 +47,21 @@ class PyTorchProfiler(BackendProfiler):
 
             latencies_ms: list[float] = []
             peak_memory_bytes = 0
-            for _ in range(config.measured_runs):
-                _reset_peak_memory(device)
-                start = time.perf_counter()
-                model(dummy_input)
-                _synchronize(device)
-                latencies_ms.append((time.perf_counter() - start) * 1000.0)
-                peak_memory_bytes = max(peak_memory_bytes, _peak_memory_bytes(device))
+            monitor = self.start_power_monitor(config)
+            try:
+                for _ in range(config.measured_runs):
+                    _reset_peak_memory(device)
+                    start = time.perf_counter()
+                    model(dummy_input)
+                    _synchronize(device)
+                    latencies_ms.append((time.perf_counter() - start) * 1000.0)
+                    peak_memory_bytes = max(peak_memory_bytes, _peak_memory_bytes(device))
+                    monitor.sample()
+            finally:
+                metrics = summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
+                self.finish_power_monitor(monitor, metrics)
 
-        return summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
+        return metrics
 
 
 def _build_dummy_input(config: ProfileConfig, device):

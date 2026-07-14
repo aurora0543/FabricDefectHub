@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Task = Literal["detection", "segmentation", "anomaly"]
+Task = Literal["detection", "segmentation", "anomaly", "industrial"]
 
 
 @dataclass

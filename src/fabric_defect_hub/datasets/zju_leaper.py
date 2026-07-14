@@ -26,6 +26,7 @@ from __future__ import annotations
 import csv
 import json
 import random
+import warnings
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -139,11 +140,16 @@ class ZJULeaperDataset(DatasetAdapter):
     def _select_ids(self) -> tuple[list[str], list[str]]:
         """Return (normal_ids, defect_ids) chosen per the count/ratio config."""
 
-        with open(self._imageset_file()) as fh:
+        index_path = self._imageset_file()
+        with open(index_path) as fh:
             index = json.load(fh)
 
-        normal_pool = list(index["normal"][self.split])
-        defect_pool = list(index["defect"][self.split]) if self.use_defect else []
+        normal_pool = _validate_index_ids(index, "normal", self.split, index_path)
+        defect_pool = (
+            _validate_index_ids(index, "defect", self.split, index_path)
+            if self.use_defect
+            else []
+        )
 
         rng = random.Random(self.seed)
         rng.shuffle(normal_pool)
@@ -186,14 +192,20 @@ class ZJULeaperDataset(DatasetAdapter):
                 candidate = self.root_path / "Annotations" / "masks" / mask_name
                 mask_path = str(candidate) if candidate.exists() else None
             for bbox in root.findall("bbox"):
-                boxes.append(
-                    [
-                        float(bbox.findtext("xmin")),
-                        float(bbox.findtext("ymin")),
-                        float(bbox.findtext("xmax")),
-                        float(bbox.findtext("ymax")),
-                    ]
-                )
+                coordinates = [bbox.findtext(tag) for tag in ("xmin", "ymin", "xmax", "ymax")]
+                try:
+                    parsed = [float(value) for value in coordinates if value is not None]
+                except ValueError:
+                    parsed = []
+                if len(parsed) != 4:
+                    warnings.warn(
+                        f"Skipping malformed bbox in {xml_path}: expected numeric "
+                        "xmin/ymin/xmax/ymax values.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    continue
+                boxes.append(parsed)
 
         annotations = Annotations(is_anomalous=is_defect)
         if is_defect and boxes:
@@ -222,3 +234,19 @@ class ZJULeaperDataset(DatasetAdapter):
 def _text(element: ET.Element, tag: str) -> str | None:
     value = element.findtext(tag)
     return value.strip() if value is not None else None
+
+
+def _validate_index_ids(index: object, category: str, split: str, path: Path) -> list[str]:
+    if not isinstance(index, dict):
+        raise ValueError(f"Invalid ImageSets index {path}: top level must be a JSON object.")
+    category_data = index.get(category)
+    if not isinstance(category_data, dict):
+        raise ValueError(
+            f"Invalid ImageSets index {path}: '{category}' must be an object containing split lists."
+        )
+    ids = category_data.get(split)
+    if not isinstance(ids, list) or not all(isinstance(image_id, str) for image_id in ids):
+        raise ValueError(
+            f"Invalid ImageSets index {path}: '{category}.{split}' must be a list of image-id strings."
+        )
+    return list(ids)

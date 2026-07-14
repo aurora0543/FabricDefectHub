@@ -7,6 +7,7 @@ training, so they stay in the default test suite.
 
 import pytest
 
+from fabric_defect_hub.models.ultralytics.adapter import UltralyticsAdapter
 from fabric_defect_hub.models.ultralytics.config import UltralyticsConfig
 from fabric_defect_hub.models.ultralytics.presets import (
     default_train_kwargs,
@@ -79,3 +80,12 @@ def test_scratch_init_uses_architecture_yaml():
         {"model": {"variant": "yolov8n", "pretrained": False}, "data": {"data_yaml": "d.yaml"}}
     )
     assert cfg.model.initial_weights() == "yolov8n.yaml"
+
+
+def test_validation_metric_normalisation_rejects_empty_results():
+    class EmptyMetrics:
+        results_dict = {}
+        maps = None
+
+    with pytest.raises(RuntimeError, match="no recognized metrics"):
+        UltralyticsAdapter._normalise_metrics(EmptyMetrics())
