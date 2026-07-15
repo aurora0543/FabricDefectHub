@@ -112,7 +112,7 @@ def infer_backend(raw: dict[str, Any]) -> str:
     variant = str(model.get("variant", "")).lower()
     if variant.startswith("yolo"):
         return "ultralytics"
-    if variant.startswith(("fasterrcnn", "maskrcnn")):
+    if variant.startswith(("fasterrcnn", "maskrcnn", "cascadercnn", "detr", "unet", "deeplab")):
         return "torchvision"
     raise ValueError("cannot infer backend; pass backend explicitly or add a 'backend' key to the config")
 
