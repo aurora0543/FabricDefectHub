@@ -36,8 +36,10 @@ from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.models.torchvision.dataset import (
     SampleDetectionDataset,
+    SampleSegmentationDataset,
     build_class_map,
     detection_collate_fn,
+    segmentation_collate_fn,
 )
 from fabric_defect_hub.models.torchvision.presets import (
     build_model,
@@ -94,8 +96,10 @@ class TorchvisionAdapter(ModelAdapter):
         """
 
         variant = variant or self.name
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        is_seg = (variant_task(variant) == "segmentation")
         self._class_map = build_class_map([], class_names=class_names)
-        num_classes = len(class_names) + 1  # +1 for background
+        num_classes = 1 if is_seg else (len(class_names) + 1)
         self._device = self._resolve_device(device)
         self._model = build_model(
             variant, num_classes=num_classes, pretrained=True,
@@ -116,12 +120,14 @@ class TorchvisionAdapter(ModelAdapter):
         offline: bool = False,
     ):
         """Load an ImageNet-pretrained-backbone-only model with a
-        random-init detection head (train from scratch).
+        random-init head (train from scratch).
         """
 
         variant = variant or self.name
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        is_seg = (variant_task(variant) == "segmentation")
         self._class_map = build_class_map([], class_names=class_names)
-        num_classes = len(class_names) + 1
+        num_classes = 1 if is_seg else (len(class_names) + 1)
         self._device = self._resolve_device(device)
         self._model = build_model(
             variant, num_classes=num_classes, pretrained=False,
@@ -162,7 +168,9 @@ class TorchvisionAdapter(ModelAdapter):
             ) from exc
         class_map, variant, state_dict = _validate_checkpoint(checkpoint, checkpoint_path, self.name)
         self._class_map = class_map
-        num_classes = len(self._class_map) + 1
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        is_seg = (variant_task(variant) == "segmentation")
+        num_classes = 1 if is_seg else (len(self._class_map) + 1)
         self._model = build_model(
             variant, num_classes=num_classes, pretrained=False, backbone_weights=False,
         ).to(self._device)
@@ -247,29 +255,50 @@ class TorchvisionAdapter(ModelAdapter):
                 min_size=min_size, max_size=max_size, offline=offline,
             )
 
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        task = variant_task(self.name)
+        is_seg = (task == "segmentation")
+
         class_map = self._class_map
-        train_ds = SampleDetectionDataset(
-            train_samples, class_map=class_map, with_masks=with_masks,
-            transforms=build_transforms(
-                train=True,
-                hflip_prob=cfg.get("hflip_prob", 0.5),
-                vflip_prob=cfg.get("vflip_prob", 0.5),
-                color_jitter=cfg.get("color_jitter"),
-            ),
-        )
-        val_ds = SampleDetectionDataset(
-            val_samples, class_map=class_map, with_masks=with_masks,
-            transforms=build_transforms(train=False),
-        )
+        if is_seg:
+            train_ds = SampleSegmentationDataset(
+                train_samples,
+                transforms=build_transforms(
+                    train=True,
+                    hflip_prob=cfg.get("hflip_prob", 0.5),
+                    vflip_prob=cfg.get("vflip_prob", 0.5),
+                    color_jitter=cfg.get("color_jitter"),
+                ),
+            )
+            val_ds = SampleSegmentationDataset(
+                val_samples,
+                transforms=build_transforms(train=False),
+            )
+            collate = segmentation_collate_fn
+        else:
+            train_ds = SampleDetectionDataset(
+                train_samples, class_map=class_map, with_masks=with_masks,
+                transforms=build_transforms(
+                    train=True,
+                    hflip_prob=cfg.get("hflip_prob", 0.5),
+                    vflip_prob=cfg.get("vflip_prob", 0.5),
+                    color_jitter=cfg.get("color_jitter"),
+                ),
+            )
+            val_ds = SampleDetectionDataset(
+                val_samples, class_map=class_map, with_masks=with_masks,
+                transforms=build_transforms(train=False),
+            )
+            collate = detection_collate_fn
 
         num_workers = cfg.get("num_workers", 0)
         train_loader = DataLoader(
             train_ds, batch_size=cfg.get("batch_size", 4), shuffle=True,
-            num_workers=num_workers, collate_fn=detection_collate_fn,
+            num_workers=num_workers, collate_fn=collate,
         )
         val_loader = DataLoader(
             val_ds, batch_size=cfg.get("batch_size", 4), shuffle=False,
-            num_workers=num_workers, collate_fn=detection_collate_fn,
+            num_workers=num_workers, collate_fn=collate,
         )
 
         def on_epoch_end(log, optimizer, scheduler, best_map, improved):
@@ -303,6 +332,7 @@ class TorchvisionAdapter(ModelAdapter):
             amp=cfg.get("amp", False),
             resume_state=resume_state,
             on_epoch_end=on_epoch_end,
+            task=task,
         )
 
         final_path = best_path if best_path.exists() else last_path
@@ -411,15 +441,28 @@ class TorchvisionAdapter(ModelAdapter):
 
         cfg = config or {}
         with_masks = uses_masks(self.name)
-        dataset = SampleDetectionDataset(
-            samples, class_map=self._class_map, with_masks=with_masks,
-            transforms=build_transforms(train=False),
-        )
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        task = variant_task(self.name)
+        is_seg = (task == "segmentation")
+
+        if is_seg:
+            dataset = SampleSegmentationDataset(
+                samples,
+                transforms=build_transforms(train=False),
+            )
+            collate = segmentation_collate_fn
+        else:
+            dataset = SampleDetectionDataset(
+                samples, class_map=self._class_map, with_masks=with_masks,
+                transforms=build_transforms(train=False),
+            )
+            collate = detection_collate_fn
+
         loader = DataLoader(
             dataset, batch_size=cfg.get("batch_size", 4), shuffle=False,
-            num_workers=cfg.get("num_workers", 0), collate_fn=detection_collate_fn,
+            num_workers=cfg.get("num_workers", 0), collate_fn=collate,
         )
-        return run_evaluate(self.model, loader, self._device, with_masks=with_masks)
+        return run_evaluate(self.model, loader, self._device, with_masks=with_masks, task=task)
 
     # ------------------------------------------------------------------ #
     # Prediction
@@ -460,47 +503,65 @@ class TorchvisionAdapter(ModelAdapter):
             predict_device = self._resolve_device(requested_device)
             self._model.to(predict_device)
 
-        dataset = SampleDetectionDataset(
-            samples, class_map=self._class_map, with_masks=with_masks,
-            transforms=build_transforms(train=False),
-        )
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        task = variant_task(self.name)
+        is_seg = (task == "segmentation")
+
+        if is_seg:
+            dataset = SampleSegmentationDataset(
+                samples,
+                transforms=build_transforms(train=False),
+            )
+        else:
+            dataset = SampleDetectionDataset(
+                samples, class_map=self._class_map, with_masks=with_masks,
+                transforms=build_transforms(train=False),
+            )
 
         predictions: list[Prediction] = []
         self.model.eval()
         with torch.no_grad():
             for sample, (image, _target) in zip(samples, dataset):
-                output = self.model([image.to(predict_device)])[0]
-                keep = output["scores"] >= score_threshold
-                boxes = output["boxes"][keep]
-                scores = output["scores"][keep]
-                labels_id = output["labels"][keep]
-                masks_full = output["masks"][keep] if with_masks and "masks" in output else None
-
-                if nms_iou_threshold is not None and boxes.shape[0] > 0:
-                    extra_keep = batched_nms(boxes, scores, labels_id, nms_iou_threshold)
-                    boxes, scores, labels_id = boxes[extra_keep], scores[extra_keep], labels_id[extra_keep]
-                    if masks_full is not None:
-                        masks_full = masks_full[extra_keep]
-
-                boxes_list = boxes[:max_detections].detach().cpu().tolist()
-                scores_list = scores[:max_detections].detach().cpu().tolist()
-                labels = [
-                    id_to_label.get(int(c), str(int(c)))
-                    for c in labels_id[:max_detections].detach().cpu().tolist()
-                ]
-                masks = None
-                if masks_full is not None:
-                    masks = (
-                        (masks_full[:max_detections] > 0.5)
-                        .squeeze(1)
-                        .detach()
-                        .cpu()
-                        .numpy()
-                        .tolist()
+                if is_seg:
+                    logits = self.model(image.unsqueeze(0).to(predict_device))
+                    probs = torch.sigmoid(logits)[0]
+                    binary_mask = (probs > score_threshold).squeeze(0).cpu().numpy().tolist()
+                    predictions.append(
+                        Prediction(sample_id=sample.id, masks=[binary_mask])
                     )
-                predictions.append(
-                    Prediction(sample_id=sample.id, boxes=boxes_list, labels=labels, scores=scores_list, masks=masks)
-                )
+                else:
+                    output = self.model([image.to(predict_device)])[0]
+                    keep = output["scores"] >= score_threshold
+                    boxes = output["boxes"][keep]
+                    scores = output["scores"][keep]
+                    labels_id = output["labels"][keep]
+                    masks_full = output["masks"][keep] if with_masks and "masks" in output else None
+
+                    if nms_iou_threshold is not None and boxes.shape[0] > 0:
+                        extra_keep = batched_nms(boxes, scores, labels_id, nms_iou_threshold)
+                        boxes, scores, labels_id = boxes[extra_keep], scores[extra_keep], labels_id[extra_keep]
+                        if masks_full is not None:
+                            masks_full = masks_full[extra_keep]
+
+                    boxes_list = boxes[:max_detections].detach().cpu().tolist()
+                    scores_list = scores[:max_detections].detach().cpu().tolist()
+                    labels = [
+                        id_to_label.get(int(c), str(int(c)))
+                        for c in labels_id[:max_detections].detach().cpu().tolist()
+                    ]
+                    masks = None
+                    if masks_full is not None:
+                        masks = (
+                            (masks_full[:max_detections] > 0.5)
+                            .squeeze(1)
+                            .detach()
+                            .cpu()
+                            .numpy()
+                            .tolist()
+                        )
+                    predictions.append(
+                        Prediction(sample_id=sample.id, boxes=boxes_list, labels=labels, scores=scores_list, masks=masks)
+                    )
 
         if requested_device is not None:
             self._model.to(self._device)
@@ -558,19 +619,27 @@ class TorchvisionAdapter(ModelAdapter):
         run_dir = Path(artifact.metadata.get("run_dir", "runs/fabric_defect_hub_tv"))
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        from fabric_defect_hub.models.torchvision.presets import variant_task
+        is_seg = (variant_task(self.name) == "segmentation")
+
         if target == "exported_program":
             cfg = config or {}
             height, width = cfg.get("input_size", (800, 800))
-            dummy = [torch.rand(3, height, width, device=self._device)]
+            if is_seg:
+                dummy = torch.rand(1, 3, height, width, device=self._device)
+                args = (dummy,)
+            else:
+                dummy = [torch.rand(3, height, width, device=self._device)]
+                args = (dummy,)
             out_path = run_dir / "model.pt2"
             try:
-                exported = torch.export.export(self.model, (dummy,), strict=False)
+                exported = torch.export.export(self.model, args, strict=False)
                 torch.export.save(exported, out_path)
             except Exception as exc:
                 out_path.unlink(missing_ok=True)
                 raise RuntimeError(
                     "Torchvision torch.export failed. The selected model or installed PyTorch "
-                    "version may contain detection operators not yet supported by torch.export."
+                    "version may contain operators not yet supported by torch.export."
                 ) from exc
             return ExportedArtifact(
                 path=str(out_path), target=target,
@@ -587,17 +656,24 @@ class TorchvisionAdapter(ModelAdapter):
             cfg = config or {}
             opset = cfg.get("opset", 17)
             out_path = run_dir / "model.onnx"
-            dummy = [torch.rand(3, 800, 800, device=self._device)]
+            if is_seg:
+                dummy = torch.rand(1, 3, 512, 512, device=self._device)
+                args = (dummy,)
+                output_names = ["logits"]
+            else:
+                dummy = [torch.rand(3, 800, 800, device=self._device)]
+                args = (dummy,)
+                output_names = ["boxes", "labels", "scores"]
             try:
                 torch.onnx.export(
-                    self.model, (dummy,), str(out_path),
-                    input_names=["images"], output_names=["boxes", "labels", "scores"],
+                    self.model, args, str(out_path),
+                    input_names=["images"], output_names=output_names,
                     opset_version=opset, dynamic_axes={"images": {0: "batch"}},
                 )
             except Exception as exc:
                 out_path.unlink(missing_ok=True)
                 raise RuntimeError(
-                    "Torchvision ONNX export failed. Faster/Mask R-CNN internal NMS/RoIAlign "
+                    "Torchvision ONNX export failed. The selected model internal layers "
                     "support varies across torch versions; use target='torchscript' or a "
                     "compatible torch/onnx stack."
                 ) from exc

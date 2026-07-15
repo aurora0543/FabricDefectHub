@@ -75,6 +75,7 @@ def train_one_epoch(
     amp: bool = False,
     scaler=None,
     log_fn: Callable[[str], None] | None = None,
+    task: str = "detect",
 ) -> tuple[float, dict[str, float]]:
     """One training epoch. Returns (mean total loss, mean per-component losses).
 
@@ -93,14 +94,24 @@ def train_one_epoch(
     num_batches = 0
 
     for images, targets in data_loader:
-        images = [img.to(device) for img in images]
-        targets = [{k: v.to(device) if hasattr(v, "to") else v for k, v in t.items()} for t in targets]
+        if task == "segmentation":
+            images_stacked = torch.stack(images, dim=0).to(device)
+            masks_stacked = torch.stack(targets, dim=0).to(device)
 
-        with torch.autocast(device_type=device.type, enabled=amp):
-            loss_dict = model(images, targets)
-            total_loss = sum(loss_dict.values())
+            with torch.autocast(device_type=device.type, enabled=amp):
+                logits = model(images_stacked)
+                loss = torch.nn.BCEWithLogitsLoss()(logits, masks_stacked)
+                loss_dict = {"loss_seg": loss}
+                total_loss = loss
+        else:
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) if hasattr(v, "to") else v for k, v in t.items()} for t in targets]
 
-        loss_value = float(total_loss)
+            with torch.autocast(device_type=device.type, enabled=amp):
+                loss_dict = model(images, targets)
+                total_loss = sum(loss_dict.values())
+
+        loss_value = float(total_loss.detach())
         if not math.isfinite(loss_value):
             if log_fn:
                 log_fn(f"[epoch {epoch}] non-finite loss ({loss_value}); skipping batch.")
@@ -119,7 +130,7 @@ def train_one_epoch(
             warmup_scheduler.step()
 
         for k, v in loss_dict.items():
-            loss_sums[k] = loss_sums.get(k, 0.0) + float(v)
+            loss_sums[k] = loss_sums.get(k, 0.0) + float(v.detach())
         total_loss_sum += loss_value
         num_batches += 1
 
@@ -129,13 +140,58 @@ def train_one_epoch(
     return total_loss_sum / num_batches, mean_components
 
 
-def evaluate(model, data_loader, device, with_masks: bool = False) -> dict[str, float]:
+def evaluate(
+    model,
+    data_loader,
+    device,
+    with_masks: bool = False,
+    task: str = "detect",
+) -> dict[str, float]:
     """Run inference over `data_loader` and compute COCO-style mAP via
     `torchmetrics.detection.MeanAveragePrecision` (pycocotools backend).
     Returns a flat metrics dict (`map`, `map_50`, `map_75`, `mar_100`, ...).
     """
 
     import torch
+
+    if task == "segmentation":
+        from fabric_defect_hub.evaluation.segmentation import _iou, _dice, _pixel_f1
+
+        model.eval()
+        total_iou = 0.0
+        total_dice = 0.0
+        total_f1 = 0.0
+        num_eval = 0
+
+        with torch.no_grad():
+            for images, targets in data_loader:
+                images_stacked = torch.stack(images, dim=0).to(device)
+                logits = model(images_stacked)
+                probs = torch.sigmoid(logits)
+                preds = (probs > 0.5).cpu().numpy()
+
+                for pred_mask, gt_mask_tensor in zip(preds, targets):
+                    gt_mask = gt_mask_tensor.cpu().numpy() > 0.5
+
+                    val_iou = _iou(gt_mask[0], pred_mask[0])
+                    val_dice = _dice(gt_mask[0], pred_mask[0])
+                    val_f1 = _pixel_f1(gt_mask[0], pred_mask[0])
+
+                    total_iou += val_iou
+                    total_dice += val_dice
+                    total_f1 += val_f1
+                    num_eval += 1
+
+        if num_eval == 0:
+            return {}
+
+        return {
+            "miou": total_iou / num_eval,
+            "dice": total_dice / num_eval,
+            "pixel_f1": total_f1 / num_eval,
+            "map": total_iou / num_eval,  # for checkpointing compatibility
+        }
+
     from torchmetrics.detection import MeanAveragePrecision
 
     model.eval()
@@ -198,6 +254,7 @@ def run_training(
     amp: bool = False,
     resume_state: dict[str, Any] | None = None,
     on_epoch_end: Callable[[EpochLog, Any, Any, float, bool], None] | None = None,
+    task: str = "detect",
 ) -> tuple[list[EpochLog], float]:
     """Full multi-epoch loop with warmup, LR scheduling, and mAP-based early
     stopping. Returns `(per-epoch logs, final best val-mAP)`; the caller
@@ -250,11 +307,12 @@ def run_training(
             model, optimizer, train_loader, device, epoch,
             warmup_scheduler=warmup_scheduler, grad_clip_norm=grad_clip_norm,
             amp=effective_amp, scaler=scaler,
+            task=task,
         )
         if scheduler is not None and epoch > 0:
             scheduler.step()
 
-        val_metrics = evaluate(model, val_loader, device, with_masks=with_masks) if val_loader is not None else {}
+        val_metrics = evaluate(model, val_loader, device, with_masks=with_masks, task=task) if val_loader is not None else {}
         current_lr = optimizer.param_groups[0]["lr"]
         log = EpochLog(epoch=epoch, train_loss=train_loss, train_loss_components=components, lr=current_lr, val_metrics=val_metrics)
         logs.append(log)

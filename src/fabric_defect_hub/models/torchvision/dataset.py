@@ -164,3 +164,55 @@ def detection_collate_fn(batch: list[tuple[Any, dict[str, Any]]]):
     """
 
     return tuple(zip(*batch))
+
+
+class SampleSegmentationDataset(Dataset):
+    """`Sample` list -> (image_tensor, mask_tensor) for semantic segmentation.
+    Returns:
+        image: FloatTensor[3, H, W] normalized to [0, 1]
+        mask: FloatTensor[1, H, W] with binary values (0.0 or 1.0)
+    """
+
+    def __init__(self, samples: list[Sample], transforms=None):
+        self.samples = samples
+        self.transforms = transforms
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        from PIL import Image
+        from torchvision import tv_tensors
+        from torchvision.transforms.v2 import functional as F
+        import numpy as np
+
+        sample = self.samples[index]
+        with Image.open(sample.image_path) as img:
+            pil_image = img.convert("RGB")
+        width, height = pil_image.size
+
+        mask_path = sample.annotations.anomaly_mask
+        if mask_path is None and sample.annotations.masks:
+            mask_path = sample.annotations.masks[0]
+
+        if mask_path is not None:
+            with Image.open(mask_path) as m:
+                mask_arr = np.array(m.convert("L")) > 0
+            mask_tensor = torch.from_numpy(mask_arr).to(torch.float32).unsqueeze(0)
+        else:
+            mask_tensor = torch.zeros((1, height, width), dtype=torch.float32)
+
+        image = tv_tensors.Image(F.pil_to_tensor(pil_image))
+        mask = tv_tensors.Mask(mask_tensor)
+
+        if self.transforms is not None:
+            image, mask = self.transforms(image, mask)
+        else:
+            image = F.to_dtype(image, torch.float32, scale=True)
+
+        return image, mask
+
+
+def segmentation_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]]):
+    """ Collate function for segmentation: returns list of image tensors and list of mask tensors. """
+    return tuple(zip(*batch))
