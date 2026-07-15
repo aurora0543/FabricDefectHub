@@ -37,7 +37,11 @@ class PyTorchProfiler(BackendProfiler):
             model = torch.export.load(artifact.path).module().to(device)
         else:
             model = torch.jit.load(artifact.path, map_location=device)
-        model.eval()
+        if hasattr(model, "eval"):
+            try:
+                model.eval()
+            except NotImplementedError:
+                pass
 
         dummy_input = _build_dummy_input(config, device)
 
