@@ -321,9 +321,26 @@ def detect_current(state: dict[str, Any], model_label: str) -> tuple[Any, dict[s
 
 
 def load_selected_model(session_manager: Any, model_label: str) -> dict[str, Any]:
-    """Load a catalog entry through the UI-independent inference service."""
+    """Load a catalog entry through the UI-independent inference service.
+
+    Checks the checkpoint file exists *before* handing off to the adapter.
+    This isn't just a nicer error message: Ultralytics' `YOLO(path)` loader
+    treats a missing path whose filename matches a known official release
+    asset (e.g. "yolo11n.pt") as a request to auto-download that asset —
+    confirmed live, it silently downloaded generic COCO-pretrained weights
+    into this catalog's published slot for an unfinished model, which the
+    UI would then present as "Ready — Fabric trained". Failing fast here
+    keeps every catalog entry either genuinely fabric-trained or clearly
+    marked unavailable, never a substitute pretending to be the real thing.
+    """
 
     spec = MODEL_CATALOG[model_label]
+    checkpoint = Path(spec["checkpoint"])
+    if not checkpoint.is_file():
+        raise FileNotFoundError(
+            f"no trained checkpoint at {checkpoint} — train {model_label!r} "
+            f"first (see tools/train_all_models.py), nothing was loaded"
+        )
     return session_manager.load(model_label, spec, artifact_for_model(spec))
 
 

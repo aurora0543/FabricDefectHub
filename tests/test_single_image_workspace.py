@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from fabric_defect_hub.core.serialization import sample_to_dict
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
 from fabric_defect_hub.web import single_image as workspace
@@ -7,6 +9,7 @@ from fabric_defect_hub.web.single_image import (
     ALL_TEXTURES,
     DATASET_CATALOG,
     DEFECT_ONLY,
+    MODEL_CATALOG,
     NORMAL_ONLY,
     SHOT_FEW,
     SHOT_FULL,
@@ -17,6 +20,7 @@ from fabric_defect_hub.web.single_image import (
     detect_current,
     empty_gallery_state,
     format_prediction_summary,
+    load_selected_model,
     move_image,
     texture_choices,
 )
@@ -160,6 +164,42 @@ def test_loaded_detection_uses_the_session_manager_without_creating_an_adapter(m
     assert summary["task"] == "detection"
     assert status.startswith("🟢")
     assert captured == {"model_id": "YOLOv8n · Fabric trained", "kwargs": {}}
+
+
+def test_load_selected_model_refuses_a_missing_checkpoint_without_calling_session_manager(monkeypatch, tmp_path):
+    # Regression: Ultralytics' YOLO(path) loader treats a missing path whose
+    # filename matches a known official release asset (e.g. "yolo11n.pt") as
+    # a request to auto-download that asset — confirmed live, it silently
+    # pulled generic COCO-pretrained weights into this catalog's published
+    # slot for an unfinished model. The UI-facing loader must fail before
+    # ever reaching the session manager/adapter for a missing checkpoint.
+    missing = tmp_path / "does-not-exist.pt"
+    monkeypatch.setitem(MODEL_CATALOG, "Fake Model", {**MODEL_CATALOG["YOLOv8n · Fabric trained"], "checkpoint": missing})
+
+    class ExplodingSessionManager:
+        def load(self, model_id, spec, artifact):
+            raise AssertionError("session_manager.load must not be called for a missing checkpoint")
+
+    with pytest.raises(FileNotFoundError, match="Fake Model"):
+        load_selected_model(ExplodingSessionManager(), "Fake Model")
+
+
+def test_load_selected_model_delegates_to_session_manager_when_checkpoint_exists(monkeypatch, tmp_path):
+    present = tmp_path / "weights.pt"
+    present.write_bytes(b"placeholder")
+    monkeypatch.setitem(MODEL_CATALOG, "Fake Model", {**MODEL_CATALOG["YOLOv8n · Fabric trained"], "checkpoint": present})
+    captured = {}
+
+    class FakeSessionManager:
+        def load(self, model_id, spec, artifact):
+            captured["model_id"] = model_id
+            captured["artifact_path"] = artifact.path
+            return {"active_model": model_id}
+
+    result = load_selected_model(FakeSessionManager(), "Fake Model")
+
+    assert result == {"active_model": "Fake Model"}
+    assert captured == {"model_id": "Fake Model", "artifact_path": str(present)}
 
 
 def test_image_scope_filters_defect_and_normal_samples(monkeypatch, tmp_path):
