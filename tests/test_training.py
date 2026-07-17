@@ -6,9 +6,13 @@ overlay logic, without importing any ML framework or running training.
 import pytest
 
 from fabric_defect_hub.training import (
+    DEFAULT_DATASET_ROOTS,
     TEST_SHOT_NUM_SAMPLES,
     DatasetOverrides,
+    _apply_test_speed_overrides,
     apply_dataset_overrides,
+    apply_default_dataset_root,
+    apply_model_overrides,
     find_model_configs,
     infer_backend,
     resolve_model_config,
@@ -185,6 +189,54 @@ def test_anomalib_train_split_is_forced_normal_only():
     assert test_selection["num_samples"] == TEST_SHOT_NUM_SAMPLES
 
 
+def test_apply_model_overrides_is_a_no_op_when_variant_is_none():
+    raw = {"model": {"variant": "yolov8n"}}
+    assert apply_model_overrides(raw, "ultralytics", None) is raw
+
+
+def test_apply_model_overrides_sets_variant_for_ultralytics():
+    raw = {"model": {"variant": "yolov8n"}}
+    out = apply_model_overrides(raw, "ultralytics", "yolov8s")
+    assert out["model"]["variant"] == "yolov8s"
+
+
+def test_apply_model_overrides_sets_variant_for_torchvision():
+    raw = {"model": {"variant": "fasterrcnn_resnet50_fpn"}}
+    out = apply_model_overrides(raw, "torchvision", "maskrcnn_resnet50_fpn")
+    assert out["model"]["variant"] == "maskrcnn_resnet50_fpn"
+
+
+def test_apply_model_overrides_sets_name_for_anomalib():
+    raw = {"model": {"name": "PatchCore"}}
+    out = apply_model_overrides(raw, "anomalib", "PaDiM")
+    assert out["model"]["name"] == "PaDiM"
+
+
+def test_apply_model_overrides_does_not_mutate_input():
+    raw = {"model": {"variant": "yolov8n"}}
+    apply_model_overrides(raw, "ultralytics", "yolov8s")
+    assert raw["model"]["variant"] == "yolov8n"
+
+
+def test_apply_model_overrides_namespaces_checkpoint_name():
+    raw = {"model": {"variant": "yolov8n"}, "checkpoint": {"name": "pattern1", "project": "runs"}}
+    out = apply_model_overrides(raw, "ultralytics", "yolov8s")
+    assert out["checkpoint"]["name"] == "yolov8s_pattern1"
+    assert out["checkpoint"]["project"] == "runs"  # untouched
+
+
+def test_apply_model_overrides_does_not_double_prefix_checkpoint_name():
+    raw = {"model": {"variant": "yolov8n"}, "checkpoint": {"name": "yolov8s_pattern1"}}
+    out = apply_model_overrides(raw, "ultralytics", "yolov8s")
+    assert out["checkpoint"]["name"] == "yolov8s_pattern1"
+
+
+def test_apply_model_overrides_without_checkpoint_section_is_fine():
+    raw = {"model": {"variant": "yolov8n"}}
+    out = apply_model_overrides(raw, "ultralytics", "yolov8s")
+    assert "checkpoint" not in out
+
+
 def test_pattern_category_and_seed_apply_to_both_splits():
     raw = {"data": {"dataset": "mvtec-ad", "train_selection": {}, "val_selection": {}}}
     out = apply_dataset_overrides(
@@ -193,3 +245,124 @@ def test_pattern_category_and_seed_apply_to_both_splits():
     for key in ("train_selection", "val_selection"):
         assert out["data"][key]["category"] == "bottle"
         assert out["data"][key]["seed"] == 7
+
+
+# -- apply_default_dataset_root ------------------------------------------- #
+
+
+@pytest.mark.parametrize("dataset", sorted(DEFAULT_DATASET_ROOTS))
+def test_default_dataset_root_fills_missing_root_for_every_registered_dataset(dataset):
+    raw = {"data": {"dataset": dataset}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == DEFAULT_DATASET_ROOTS[dataset]
+
+
+def test_default_dataset_root_fills_in_when_root_key_absent():
+    raw = {"data": {"dataset": "zju-leaper"}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == "data/ZJU-Leaper"
+
+
+def test_default_dataset_root_fills_in_when_root_is_empty_string():
+    raw = {"data": {"dataset": "zju-leaper", "dataset_root": ""}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == "data/ZJU-Leaper"
+
+
+def test_default_dataset_root_fills_in_when_env_var_placeholder_unexpanded():
+    # os.path.expandvars leaves ${VAR} untouched (not blank, not an error)
+    # when the environment variable isn't set, so this is what a real
+    # unexpanded config looks like by the time it reaches here.
+    raw = {"data": {"dataset": "zju-leaper", "dataset_root": "${ZJU_LEAPER_ROOT}"}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == "data/ZJU-Leaper"
+
+
+def test_default_dataset_root_does_not_override_an_explicit_path():
+    raw = {"data": {"dataset": "zju-leaper", "dataset_root": "/custom/path"}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == "/custom/path"
+
+
+def test_default_dataset_root_does_not_override_a_successfully_expanded_env_var():
+    raw = {"data": {"dataset": "zju-leaper", "dataset_root": "/Volumes/SSD/datasets/ZJU-Leaper"}}
+    out = apply_default_dataset_root(raw)
+    assert out["data"]["dataset_root"] == "/Volumes/SSD/datasets/ZJU-Leaper"
+
+
+def test_default_dataset_root_is_a_no_op_without_a_dataset():
+    raw = {"data": {"data_yaml": "/path/to/data.yaml"}}
+    assert apply_default_dataset_root(raw) is raw
+
+
+def test_default_dataset_root_is_a_no_op_for_unregistered_dataset_name():
+    raw = {"data": {"dataset": "some-future-dataset"}}
+    assert apply_default_dataset_root(raw) is raw
+
+
+def test_default_dataset_root_is_a_no_op_without_data_section():
+    raw = {"model": {"variant": "yolov8n"}}
+    assert apply_default_dataset_root(raw) is raw
+
+
+def test_default_dataset_root_does_not_mutate_input():
+    raw = {"data": {"dataset": "zju-leaper"}}
+    apply_default_dataset_root(raw)
+    assert "dataset_root" not in raw["data"]
+
+
+# -- switching --dataset drops a stale root for the old dataset ----------- #
+
+
+def test_dataset_override_without_root_drops_stale_root_for_old_dataset():
+    raw = {
+        "data": {
+            "dataset": "zju-leaper",
+            "dataset_root": "/Volumes/SSD/datasets/ZJU-Leaper",
+            "train_selection": {},
+            "val_selection": {},
+        }
+    }
+    out = apply_dataset_overrides(raw, "ultralytics", DatasetOverrides(dataset="raw-fabric"))
+    assert out["data"]["dataset"] == "raw-fabric"
+    assert "dataset_root" not in out["data"]
+    # ... and apply_default_dataset_root then resolves it correctly for the new dataset.
+    resolved = apply_default_dataset_root(out)
+    assert resolved["data"]["dataset_root"] == "data/RAW_FABRID"
+
+
+# -- --mode test must actually cap epochs, not just sample count --------- #
+
+
+def test_test_speed_overrides_force_epochs_even_when_config_sets_its_own():
+    # Regression: a plain `setdefault` here was a no-op against configs that
+    # already declare `epochs`/`patience` (every example config does), so
+    # `--mode test` silently ran the config's full schedule instead of a
+    # fast 1-epoch smoke run.
+    raw = {"train": {"epochs": 100, "patience": 30, "lr0": 0.01}}
+    out = _apply_test_speed_overrides(raw, "ultralytics")
+    assert out["train"]["epochs"] == 1
+    assert out["train"]["patience"] == 1
+    assert out["train"]["lr0"] == 0.01  # unrelated keys untouched
+
+
+def test_test_speed_overrides_force_max_epochs_for_anomalib():
+    raw = {"train": {"engine_kwargs": {"max_epochs": 50, "accelerator": "gpu"}}}
+    out = _apply_test_speed_overrides(raw, "anomalib")
+    assert out["train"]["engine_kwargs"]["max_epochs"] == 1
+    assert out["train"]["engine_kwargs"]["accelerator"] == "gpu"
+
+
+def test_dataset_override_with_explicit_root_keeps_it():
+    raw = {
+        "data": {
+            "dataset": "zju-leaper",
+            "dataset_root": "/Volumes/SSD/datasets/ZJU-Leaper",
+            "train_selection": {},
+            "val_selection": {},
+        }
+    }
+    out = apply_dataset_overrides(
+        raw, "ultralytics", DatasetOverrides(dataset="raw-fabric", dataset_root="/custom/raw-fabric")
+    )
+    assert out["data"]["dataset_root"] == "/custom/raw-fabric"

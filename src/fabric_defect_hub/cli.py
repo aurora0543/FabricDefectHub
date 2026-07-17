@@ -47,6 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     train_parser.add_argument(
+        "--variant",
+        help=(
+            "override which model in the backend's family gets trained: written to "
+            "model.variant for ultralytics/torchvision (e.g. yolov8n, yolov8s, yolo11n, "
+            "fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn) or model.name for anomalib "
+            "(e.g. PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet); lets one config "
+            "file train any model its backend supports instead of needing one YAML per model"
+        ),
+    )
+    train_parser.add_argument(
         "--dataset", help="registered dataset name (e.g. zju-leaper, raw-fabric, mvtec-ad); overrides data.dataset"
     )
     train_parser.add_argument("--dataset-root", help="dataset root path; overrides data.dataset_root")
@@ -72,6 +82,61 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--pattern", help="ZJU-Leaper pattern/group filter override")
     train_parser.add_argument("--category", help="MVTec-AD category filter override")
     train_parser.add_argument("--seed", type=int, help="subsampling RNG seed override")
+
+    predict_parser = subparsers.add_parser(
+        "predict",
+        help=(
+            "unified inference entry point: pick a model config (same resolution as 'train'), "
+            "load a previously trained artifact, and run it over images or a dataset selection"
+        ),
+    )
+    predict_parser.add_argument(
+        "model",
+        help=(
+            "a model config: a path, a filename stem under --config-dir, or a model keyword "
+            "(yolov8n, patchcore, ...) — resolved exactly like 'fdh train MODEL'"
+        ),
+    )
+    predict_parser.add_argument(
+        "--weights", required=True,
+        help=(
+            "path to a trained/registered artifact to load, e.g. 'fdh train's "
+            "registered_artifact.path output (artifacts/models/<name>.pt or .ckpt)"
+        ),
+    )
+    predict_parser.add_argument(
+        "--config-dir", default="configs/models",
+        help="directory searched when 'model' is a filename stem or keyword (default: configs/models)",
+    )
+    predict_parser.add_argument(
+        "--backend", choices=("ultralytics", "torchvision", "anomalib"),
+        help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
+    )
+    predict_parser.add_argument(
+        "--variant",
+        help="override which model in the backend's family runs inference (see 'train --variant'); "
+        "must match what --weights was actually trained as",
+    )
+    predict_parser.add_argument(
+        "--image", action="append", dest="images", default=[],
+        help="path to an image to run inference on; repeatable. Mutually exclusive with --dataset",
+    )
+    predict_parser.add_argument(
+        "--dataset", help="registered dataset name (e.g. zju-leaper, raw-fabric, mvtec-ad) to draw samples from"
+    )
+    predict_parser.add_argument("--dataset-root", help="dataset root path; falls back to data/<Dataset> if omitted")
+    predict_parser.add_argument("--split", default="test", choices=("train", "test"), help="dataset split to draw from")
+    predict_parser.add_argument("--num-samples", type=int, help="how many dataset samples to run inference on")
+    predict_parser.add_argument("--pattern", help="ZJU-Leaper pattern/group filter")
+    predict_parser.add_argument("--category", help="MVTec-AD category filter")
+    predict_parser.add_argument("--seed", type=int, default=0, help="subsampling RNG seed")
+    predict_parser.add_argument(
+        "--output", help="write predictions as JSON to this path (in addition to stdout)"
+    )
+    predict_parser.add_argument(
+        "--output-dir",
+        help="anomalib only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
+    )
     return parser
 
 
@@ -82,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_benchmark(args.config)
         elif args.command == "train":
             payload = _run_train(args)
+        elif args.command == "predict":
+            payload = _run_predict(args)
         else:
             payload = _run_config(args.config, args.backend)
     except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -145,14 +212,52 @@ def _run_train(args: argparse.Namespace) -> Any:
         category=args.category,
         seed=args.seed,
     )
-    run = run_train(args.model, backend=args.backend, overrides=overrides, config_dir=args.config_dir)
+    run = run_train(
+        args.model, backend=args.backend, overrides=overrides, config_dir=args.config_dir, variant=args.variant
+    )
     result = run.result
     return {
         "backend": run.backend,
         "metrics": result.metrics,
         "trained_artifact": _artifact_dict(result.trained_artifact),
         "registered_artifact": _artifact_dict(result.registered_artifact),
+        "published_path": run.published_path,
         "exports": [asdict(artifact) for artifact in result.exports],
+    }
+
+
+def _run_predict(args: argparse.Namespace) -> Any:
+    from fabric_defect_hub.predict import PredictInput, run_predict
+
+    source = PredictInput(
+        images=args.images,
+        dataset=args.dataset,
+        dataset_root=args.dataset_root,
+        split=args.split,
+        num_samples=args.num_samples,
+        pattern=args.pattern,
+        category=args.category,
+        seed=args.seed,
+    )
+    run = run_predict(
+        args.model,
+        weights=args.weights,
+        source=source,
+        backend=args.backend,
+        variant=args.variant,
+        config_dir=args.config_dir,
+        output_dir=args.output_dir,
+    )
+    predictions = [asdict(prediction) for prediction in run.predictions]
+    if args.output:
+        from fabric_defect_hub.core.serialization import save_predictions
+
+        save_predictions(run.predictions, args.output)
+    return {
+        "backend": run.backend,
+        "variant": run.variant,
+        "num_predictions": len(predictions),
+        "predictions": predictions,
     }
 
 

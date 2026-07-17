@@ -14,7 +14,7 @@
 
 # ---- Model: variant and initial weights ----
 model:
-  variant: yolov8n        # yolov8n | yolov8s | yolo11n
+  variant: yolov8s        # yolov8n | yolov8s | yolo11n
   pretrained: true        # true = load COCO-pretrained weights for transfer learning; false = train from scratch
   offline: false           # true = forbid implicit downloads, error before training if weights are missing
   # weights: null         # if set, fine-tune from this checkpoint (overrides pretrained)
@@ -86,6 +86,6 @@ export:
 # ---- Run directory / model registry ----
 checkpoint:
   project: runs/fabric_defect_hub
-  name: yolov8n_pattern1
+  name: yolov8s_pattern1
   registry_dir: artifacts/models   # the trained best.pt is copied here as a stable file
   exist_ok: false

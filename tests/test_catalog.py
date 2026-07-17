@@ -1,0 +1,127 @@
+"""Fast, framework-free tests for `fabric_defect_hub.catalog`: the
+train->frontend bridge (see catalog.py's module docstring).
+"""
+
+from pathlib import Path
+
+import pytest
+
+from fabric_defect_hub.catalog import (
+    CANONICAL_MODELS,
+    find_canonical_model,
+    metadata_for,
+    publish_artifact,
+    published_path,
+)
+
+
+def test_canonical_models_has_fourteen_entries():
+    assert len(CANONICAL_MODELS) == 14
+
+
+def test_canonical_model_keys_are_unique():
+    keys = [model.key for model in CANONICAL_MODELS]
+    assert len(keys) == len(set(keys))
+
+
+def test_canonical_model_labels_are_unique():
+    labels = [model.label for model in CANONICAL_MODELS]
+    assert len(labels) == len(set(labels))
+
+
+@pytest.mark.parametrize(
+    ("backend", "variant", "expected_key"),
+    [
+        ("ultralytics", "yolov8n", "yolov8n"),
+        ("ultralytics", "YOLOV8N", "yolov8n"),  # case-insensitive
+        ("torchvision", "cascadercnn_resnet50_fpn", "cascadercnn_resnet50_fpn"),
+        ("torchvision", "detr_resnet50", "detr_resnet50"),
+        ("torchvision", "unetplusplus_resnet34", "unetplusplus_resnet34"),
+        ("torchvision", "deeplabv3plus_resnet50", "deeplabv3plus_resnet50"),
+        ("anomalib", "PatchCore", "PatchCore"),
+        ("anomalib", "patchcore", "PatchCore"),  # case-insensitive
+    ],
+)
+def test_find_canonical_model_matches(backend, variant, expected_key):
+    model = find_canonical_model(backend, variant)
+    assert model is not None
+    assert model.key == expected_key
+
+
+def test_find_canonical_model_returns_none_for_unknown_variant():
+    assert find_canonical_model("ultralytics", "yolov5x") is None
+
+
+def test_find_canonical_model_returns_none_for_backend_mismatch():
+    # "yolov8n" exists, but not under torchvision
+    assert find_canonical_model("torchvision", "yolov8n") is None
+
+
+def test_published_path_uses_pt_for_ultralytics_and_torchvision():
+    yolo = find_canonical_model("ultralytics", "yolov8n")
+    tv = find_canonical_model("torchvision", "fasterrcnn_resnet50_fpn")
+    assert published_path(yolo).suffix == ".pt"
+    assert published_path(tv).suffix == ".pt"
+
+
+def test_published_path_uses_ckpt_for_anomalib():
+    model = find_canonical_model("anomalib", "PatchCore")
+    assert published_path(model).suffix == ".ckpt"
+
+
+def test_published_path_is_keyed_by_model_key():
+    model = find_canonical_model("ultralytics", "yolov8s")
+    assert published_path(model).name == "yolov8s.pt"
+
+
+def test_metadata_for_non_anomalib_has_no_model_class():
+    model = find_canonical_model("ultralytics", "yolov8n")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert "model_class" not in metadata
+
+
+def test_metadata_for_anomalib_resolves_model_class():
+    model = find_canonical_model("anomalib", "RD4AD")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert metadata["model_class"] == "ReverseDistillation"
+
+
+def test_publish_artifact_returns_none_for_non_canonical_variant(tmp_path):
+    src = tmp_path / "weights.pt"
+    src.write_bytes(b"fake")
+    assert publish_artifact("ultralytics", "yolov5x", str(src)) is None
+
+
+def test_publish_artifact_copies_to_published_path(tmp_path, monkeypatch):
+    import fabric_defect_hub.catalog as catalog_module
+
+    dest_root = tmp_path / "published"
+    monkeypatch.setattr(catalog_module, "PUBLISHED_MODEL_ROOT", dest_root)
+
+    src = tmp_path / "run" / "best.pt"
+    src.parent.mkdir()
+    src.write_bytes(b"trained weights")
+
+    result = publish_artifact("ultralytics", "yolov8n", str(src))
+
+    assert result == dest_root / "yolov8n.pt"
+    assert result.read_bytes() == b"trained weights"
+
+
+def test_publish_artifact_overwrites_previous_publish(tmp_path, monkeypatch):
+    import fabric_defect_hub.catalog as catalog_module
+
+    dest_root = tmp_path / "published"
+    monkeypatch.setattr(catalog_module, "PUBLISHED_MODEL_ROOT", dest_root)
+
+    first = tmp_path / "first.pt"
+    first.write_bytes(b"run 1")
+    second = tmp_path / "second.pt"
+    second.write_bytes(b"run 2")
+
+    publish_artifact("ultralytics", "yolov8n", str(first))
+    result = publish_artifact("ultralytics", "yolov8n", str(second))
+
+    assert result.read_bytes() == b"run 2"

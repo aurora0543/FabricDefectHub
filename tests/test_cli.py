@@ -89,3 +89,54 @@ def test_cli_parser_train_accepts_shot_mode_and_dataset_overrides():
 def test_cli_parser_train_use_defect_mutually_exclusive():
     args = build_parser().parse_args(["train", "model.yaml", "--no-use-defect"])
     assert args.use_defect is False
+
+
+def test_cli_parser_train_accepts_variant():
+    args = build_parser().parse_args(["train", "model.yaml", "--variant", "yolov8s"])
+    assert args.variant == "yolov8s"
+
+
+def test_cli_parser_train_variant_defaults_to_none():
+    args = build_parser().parse_args(["train", "model.yaml"])
+    assert args.variant is None
+
+
+def test_cli_parser_accepts_predict():
+    args = build_parser().parse_args(
+        ["predict", "model.yaml", "--weights", "artifacts/models/x.pt", "--image", "a.jpg"]
+    )
+    assert args.command == "predict"
+    assert args.model == "model.yaml"
+    assert args.weights == "artifacts/models/x.pt"
+    assert args.images == ["a.jpg"]
+
+
+def test_cli_parser_predict_image_is_repeatable():
+    args = build_parser().parse_args(
+        ["predict", "model.yaml", "--weights", "w.pt", "--image", "a.jpg", "--image", "b.jpg"]
+    )
+    assert args.images == ["a.jpg", "b.jpg"]
+
+
+def test_cli_parser_predict_accepts_dataset_selection_and_variant():
+    args = build_parser().parse_args(
+        [
+            "predict", "model.yaml", "--weights", "w.pt",
+            "--dataset", "raw-fabric", "--dataset-root", "/data/raw",
+            "--split", "train", "--num-samples", "5",
+            "--variant", "yolov8s", "--backend", "ultralytics",
+            "--output", "preds.json",
+        ]
+    )
+    assert args.dataset == "raw-fabric"
+    assert args.dataset_root == "/data/raw"
+    assert args.split == "train"
+    assert args.num_samples == 5
+    assert args.variant == "yolov8s"
+    assert args.backend == "ultralytics"
+    assert args.output == "preds.json"
+
+
+def test_cli_parser_predict_requires_weights():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["predict", "model.yaml"])

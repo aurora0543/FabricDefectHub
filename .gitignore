@@ -217,12 +217,21 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# FabricDefectHub local data and artifacts
+# FabricDefectHub local data, runs, and checkpoints
 /data/*
 !/data/.gitkeep
 /artifacts/
+/runs/
+/results/
 node_modules/
 frontend/dist/
+
+# Model weights, checkpoints and exports
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
 
 # macOS
 .DS_Store
