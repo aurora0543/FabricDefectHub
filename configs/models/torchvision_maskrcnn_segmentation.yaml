@@ -1,28 +1,30 @@
 # ============================================================================
-# torchvision (Faster R-CNN / Mask R-CNN) experiment config example.
+# torchvision Mask R-CNN (instance segmentation) experiment config example.
+#
+# Unlike torchvision_example.yaml (Faster R-CNN, bounding-box detection),
+# this trains on pixel-level defect masks instead of boxes. That matters
+# because only ZJU-Leaper ships real bounding-box annotations in this
+# project; RAW_FABRID and MVTec AD only carry ground-truth *masks*
+# (`.../ground_truth/<defect>/<id>_mask.png`), no boxes — training Faster
+# R-CNN (task: detection) against those two datasets silently produces an
+# all-background, zero-metric run (every image looks unlabeled to a
+# box-based detector). Mask R-CNN with task: segmentation is what actually
+# works across all three registered datasets:
+#   fdh train configs/models/torchvision_maskrcnn_segmentation.yaml
+#   fdh train configs/models/torchvision_maskrcnn_segmentation.yaml --dataset raw-fabric
+#   fdh train configs/models/torchvision_maskrcnn_segmentation.yaml --dataset mvtec-ad --category bottle
 #
 # Usage (configuration-driven, not command-line flags):
 #     from fabric_defect_hub.models.torchvision import run_from_yaml
-#     result = run_from_yaml("configs/models/torchvision_example.yaml")
+#     result = run_from_yaml("configs/models/torchvision_maskrcnn_segmentation.yaml")
 #     print(result.metrics)                    # {'map': ..., 'map_50': ...}
 #     print(result.registered_artifact.path)    # stable storage path of the trained model
-#
-# Only write the fields you want to change; anything you don't set falls
-# back to the fabric preset (models/torchvision/presets.py) and torchvision's
-# own defaults.
-#
-# torchvision replaces the originally-planned mmdetection backend:
-# mmdetection's mmcv dependency has no prebuilt wheel on macOS arm64 and
-# cannot be built from source on Python 3.14 (confirmed by a real install
-# attempt), while torchvision is a pure PyTorch implementation that installs
-# anywhere torch does. The tradeoff is dropping Cascade R-CNN / DETR / DINO —
-# only Faster R-CNN and Mask R-CNN (the two classic two-stage detectors) remain.
 # ============================================================================
 
 # ---- Model: variant and initial weights ----
 model:
-  variant: fasterrcnn_resnet50_fpn   # fasterrcnn_resnet50_fpn[_v2] | maskrcnn_resnet50_fpn[_v2]
-  pretrained: true                    # true = load COCO-pretrained weights and replace the classifier head for transfer learning
+  variant: maskrcnn_resnet50_fpn   # maskrcnn_resnet50_fpn | maskrcnn_resnet50_fpn_v2
+  pretrained: true                    # true = load COCO-pretrained weights and replace the classifier/mask heads for transfer learning
   offline: false                       # true = forbid implicit downloads, error before training if weights are missing
   # weights: null                     # if set, fine-tune from this checkpoint (overrides pretrained)
   trainable_backbone_layers: 3        # how many of the 5 ResNet stages stay trainable; the rest are frozen
@@ -34,19 +36,19 @@ data:
   # see training.DEFAULT_DATASET_ROOTS) if ${ZJU_LEAPER_ROOT} is not set.
   dataset_root: ${ZJU_LEAPER_ROOT}
   class_names: ["defect"]
-  train_selection:        # constructor kwargs passed to ZJULeaperDataset
+  train_selection:        # constructor kwargs passed to the DatasetAdapter
     split: train
-    pattern: pattern1
+    pattern: pattern1     # ignored (harmlessly) by datasets that don't have a pattern axis, e.g. raw-fabric/mvtec-ad
     num_samples: 300
-    defect_ratio: 1.0      # detection task: training set uses only defective images (with bboxes)
-    task: detection
+    defect_ratio: 1.0      # segmentation task: training set uses only defective images (with masks)
+    task: segmentation
     seed: 0
   val_selection:
     split: test
     pattern: pattern1
     num_samples: 100
     defect_ratio: 1.0
-    task: detection
+    task: segmentation
     seed: 0
 
 # ---- Training hyperparameters (only the commonly-changed ones are listed; see presets.COMMON_FABRIC_TRAIN_DEFAULTS for the rest) ----
@@ -91,6 +93,6 @@ export:
 # ---- Run directory / model registry ----
 checkpoint:
   run_dir: runs/fabric_defect_hub_tv
-  name: fasterrcnn_pattern1
+  name: maskrcnn_pattern1
   registry_dir: artifacts/models   # the best trained checkpoint is copied here as a stable file
   save_every_epoch: false

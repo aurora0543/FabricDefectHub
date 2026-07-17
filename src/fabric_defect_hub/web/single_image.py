@@ -8,6 +8,7 @@ import random
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.catalog import CANONICAL_MODELS, metadata_for, published_path
 from fabric_defect_hub.core.serialization import sample_from_dict, sample_to_dict
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.loader import load_dataset, load_model
@@ -16,63 +17,25 @@ from fabric_defect_hub.models.base import Artifact
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-LOCAL_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "yolo"
-LOCAL_ANOMALIB_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "anomalib"
 RUNTIME_ANOMALY_MAP_ROOT = PROJECT_ROOT / "artifacts" / "runtime" / "anomaly_maps"
 _SSD_VOLUME_PARENT = Path("anomaly-detection-challenges") / "datasets"
 
-# The UI deliberately exposes trained, local artifacts only.  The path remains
-# backend-owned so operators never need to paste an absolute checkpoint path.
+# Generated from `catalog.CANONICAL_MODELS` — the same list `fdh train`
+# publishes to (see `catalog.publish_artifact`, called from
+# `training.run_train`) — so training a canonical model and refreshing this
+# page is the entire "get it into the UI" workflow; no manual catalog edits.
+# `checkpoint` points at each model's fixed *published* path, not the
+# run-specific path `fdh train` registers under (see catalog.py's docstring
+# for why those differ).
 MODEL_CATALOG = {
-    "YOLOv8n · Fabric trained": {
-        "backend": "ultralytics",
-        "name": "yolov8n",
-        "checkpoint": LOCAL_MODEL_ROOT / "YOLOv8n.pt",
-        "task": "detection",
-        "metadata": {"trusted": True, "source": "local trained artifact"},
-    },
-    "YOLOv8s · Fabric trained": {
-        "backend": "ultralytics",
-        "name": "yolov8s",
-        "checkpoint": LOCAL_MODEL_ROOT / "YOLOv8s.pt",
-        "task": "detection",
-        "metadata": {"trusted": True, "source": "local trained artifact"},
-    },
-    "YOLO11n · Fabric trained": {
-        "backend": "ultralytics",
-        "name": "yolo11n",
-        "checkpoint": LOCAL_MODEL_ROOT / "YOLOv11.pt",
-        "task": "detection",
-        "metadata": {"trusted": True, "source": "local trained artifact"},
-    },
-    "PatchCore · Normal Lab trained": {
-        "backend": "anomalib",
-        "name": "PatchCore",
-        "checkpoint": LOCAL_ANOMALIB_MODEL_ROOT / "Patchcore-latest.ckpt",
-        "task": "anomaly",
-        "metadata": {"trusted": True, "source": "Normal Lab", "model_class": "Patchcore"},
-    },
-    "RD4AD · Normal Lab trained": {
-        "backend": "anomalib",
-        "name": "RD4AD",
-        "checkpoint": LOCAL_ANOMALIB_MODEL_ROOT / "ReverseDistillation-latest.ckpt",
-        "task": "anomaly",
-        "metadata": {"trusted": True, "source": "Normal Lab", "model_class": "ReverseDistillation"},
-    },
-    "EfficientAD · Normal Lab trained": {
-        "backend": "anomalib",
-        "name": "EfficientAD",
-        "checkpoint": LOCAL_ANOMALIB_MODEL_ROOT / "EfficientAd-latest.ckpt",
-        "task": "anomaly",
-        "metadata": {"trusted": True, "source": "Normal Lab", "model_class": "EfficientAd"},
-    },
-    "SuperSimpleNet · Normal Lab trained": {
-        "backend": "anomalib",
-        "name": "SuperSimpleNet",
-        "checkpoint": LOCAL_ANOMALIB_MODEL_ROOT / "Supersimplenet-latest.ckpt",
-        "task": "anomaly",
-        "metadata": {"trusted": True, "source": "Normal Lab", "model_class": "Supersimplenet"},
-    },
+    model.label: {
+        "backend": model.backend,
+        "name": model.variant,
+        "checkpoint": published_path(model),
+        "task": model.task,
+        "metadata": metadata_for(model),
+    }
+    for model in CANONICAL_MODELS
 }
 
 # Each entry names a registered DatasetAdapter plus the UI-facing metadata

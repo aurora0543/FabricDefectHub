@@ -29,11 +29,14 @@ model:
   name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet (case-insensitive)
 
 # ---- Data: read from ZJULeaperDataset at runtime and staged into a temporary MVTec-style directory ----
-# The dataset_root below is this dev machine's actual path; change it to your
-# own ZJU-Leaper dataset location (the directory containing Images/ Annotations/ ImageSets/).
+# dataset_root is left unset on purpose: `fdh train` falls back to this
+# project's own data/ZJU-Leaper symlink (see training.DEFAULT_DATASET_ROOTS),
+# which is set up the same way on every machine that has this dataset staged.
+# Override with --dataset-root, or set ${ZJU_LEAPER_ROOT} and uncomment below,
+# to point at a different location.
 data:
   dataset: zju-leaper
-  dataset_root: /Volumes/SSD/anomaly-detection-challenges/datasets/ZJU-Leaper
+  # dataset_root: ${ZJU_LEAPER_ROOT}
   train_selection:        # training uses normal samples only (PatchCore et al. train one-class)
     split: train
     pattern: pattern1
