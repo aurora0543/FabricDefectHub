@@ -294,6 +294,10 @@ def create_app():
 
 def launch(**kwargs):
     kwargs.setdefault("css", CSS)
+    # The cloud host this project is deployed to only has port 6008 open;
+    # standardize on it everywhere so `fdh-ui` works unmodified there.
+    kwargs.setdefault("server_name", "0.0.0.0")
+    kwargs.setdefault("server_port", 6008)
     # Gradio 6 only caches files below the workspace or system temp directory
     # unless an external location is explicitly trusted. Every catalog
     # dataset typically lives on external storage reached through a
