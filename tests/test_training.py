@@ -149,6 +149,50 @@ def test_few_mode_leaves_configured_count_untouched():
     assert out["data"]["train_selection"]["num_samples"] == 300
 
 
+def test_few_mode_leaves_configured_pattern_untouched():
+    raw = {
+        "data": {
+            "dataset": "zju-leaper",
+            "train_selection": {"pattern": [1, 2, 3, 4], "num_samples": 300},
+        }
+    }
+    out = apply_dataset_overrides(raw, "ultralytics", DatasetOverrides(mode="few"))
+    assert out["data"]["train_selection"]["pattern"] == [1, 2, 3, 4]
+
+
+def test_medium_mode_caps_samples_per_pattern_across_all_19():
+    raw = {
+        "data": {
+            "dataset": "zju-leaper",
+            "train_selection": {"pattern": [1, 2, 3, 4], "num_samples": 300},
+            "val_selection": {"pattern": [1, 2, 3, 4], "num_samples": 100},
+        }
+    }
+    out = apply_dataset_overrides(raw, "ultralytics", DatasetOverrides(mode="medium"))
+    assert out["data"]["train_selection"]["pattern"] == list(range(1, 20))
+    assert out["data"]["val_selection"]["pattern"] == list(range(1, 20))
+    assert out["data"]["train_selection"]["num_samples"] == 150 * 19
+    assert out["data"]["val_selection"]["num_samples"] == 50 * 19
+
+
+def test_full_mode_widens_pattern_to_the_whole_benchmark():
+    raw = {"data": {"dataset": "zju-leaper", "train_selection": {"pattern": [1, 2, 3, 4]}}}
+    out = apply_dataset_overrides(raw, "ultralytics", DatasetOverrides(mode="full"))
+    assert out["data"]["train_selection"]["pattern"] is None
+
+
+def test_explicit_pattern_wins_over_mode_widening():
+    raw = {"data": {"dataset": "zju-leaper", "train_selection": {"pattern": [1, 2, 3, 4]}}}
+    out = apply_dataset_overrides(raw, "ultralytics", DatasetOverrides(mode="full", pattern="pattern7"))
+    assert out["data"]["train_selection"]["pattern"] == "pattern7"
+
+
+def test_mode_pattern_widening_is_zju_leaper_only():
+    raw = {"data": {"dataset": "mvtec-ad", "train_selection": {"category": "bottle"}}}
+    out = apply_dataset_overrides(raw, "torchvision", DatasetOverrides(mode="full"))
+    assert "pattern" not in out["data"]["train_selection"]
+
+
 def test_explicit_num_samples_wins_over_mode():
     raw = {"data": {"dataset": "zju-leaper", "train_selection": {}, "val_selection": {}}}
     out = apply_dataset_overrides(
