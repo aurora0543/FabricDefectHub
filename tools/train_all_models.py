@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--list-keys", action="store_true", help="print every canonical model key and exit")
     parser.add_argument(
-        "--mode", choices=("full", "few", "test"), default=None,
+        "--mode", choices=("full", "medium", "few", "test"), default=None,
         help="shot mode override passed to every model (default: each config's own setting)",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the training plan without running anything")

@@ -61,10 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_parser.add_argument("--dataset-root", help="dataset root path; overrides data.dataset_root")
     train_parser.add_argument(
-        "--mode", choices=("full", "few", "test"), default=None,
+        "--mode", choices=("full", "medium", "few", "test"), default=None,
         help=(
-            "shot mode: full=use every sample (num_samples=null); "
-            "few=leave the config's own declared few-shot count untouched; "
+            "shot mode: full=use every sample, every ZJU-Leaper pattern (num_samples=null); "
+            "medium=every ZJU-Leaper pattern but capped per-pattern (150 train / 50 val each); "
+            "few=leave the config's own declared few-shot count and pattern subset untouched; "
             "test=quick 8-image smoke run of the whole pipeline"
         ),
     )
