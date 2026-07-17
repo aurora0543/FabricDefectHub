@@ -29,14 +29,14 @@ data:
   class_names: ["defect"]
   train_selection:        # constructor kwargs passed to ZJULeaperDataset
     split: train
-    pattern: pattern1
+    pattern: [pattern1, pattern2, pattern3, pattern4]   # spread the low-shot budget across textures instead of only pattern1's plain white background
     num_samples: 300
     defect_ratio: 1.0     # detection task: training set uses only defective images (with bboxes)
     task: detection
     seed: 0
   val_selection:
     split: test
-    pattern: pattern1
+    pattern: [pattern1, pattern2, pattern3, pattern4]
     num_samples: 100
     defect_ratio: 1.0
     task: detection
@@ -86,6 +86,6 @@ export:
 # ---- Run directory / model registry ----
 checkpoint:
   project: runs/fabric_defect_hub
-  name: yolov8n_pattern1
+  name: yolov8n_pattern1-4
   registry_dir: artifacts/models   # the trained best.pt is copied here as a stable file
   exist_ok: false

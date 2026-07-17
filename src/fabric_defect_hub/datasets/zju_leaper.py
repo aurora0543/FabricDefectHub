@@ -14,7 +14,8 @@ This adapter turns any user-chosen slice of that benchmark into a unified
 2. Defect adaptation — `use_defect` (False = zero-shot / normal-only; True =
    include defective images).
 3. Texture/pattern filtering — `pattern` selects one texture pattern, one
-   group, or the whole benchmark.
+   group, the whole benchmark, or (pass a list) several patterns pooled
+   together with an even split across them — see `pattern` below.
 4. Unified config — `num_samples`, `use_defect`, `defect_ratio` together fix
    how many images, whether defects are present, and the defect fraction.
 
@@ -51,6 +52,12 @@ class ZJULeaperDataset(DatasetAdapter):
         - "pattern7" / 7             -> ImageSets/Patterns/pattern7.json
         - a texture name, e.g. "Knot Pattern" (matched against statistic.csv)
         - "group3"                   -> ImageSets/Groups/group3.json
+        - a list of any of the above, e.g. [1, 2, 3, 4] -> pools those
+          patterns' id lists and, when `num_samples` is set, splits the
+          budget as evenly as possible across them (instead of draining
+          whichever pattern happens to shuffle first) so low-shot training
+          isn't silently drawn from a single texture, e.g. pattern1's plain
+          white background.
     num_samples: total images to load. None = all images in the selection
         (few-shot / full-data). A small int (e.g. 350) = low-shot regime.
     use_defect: include defective images. False = zero-shot (normal only).
@@ -69,7 +76,7 @@ class ZJULeaperDataset(DatasetAdapter):
         self,
         root: str,
         split: str = "test",
-        pattern: str | int | None = None,
+        pattern: str | int | list[str | int] | None = None,
         num_samples: int | None = None,
         use_defect: bool = True,
         defect_ratio: float = 0.5,
@@ -94,11 +101,15 @@ class ZJULeaperDataset(DatasetAdapter):
     # ------------------------------------------------------------------ #
     # Path helpers
     # ------------------------------------------------------------------ #
-    def _imageset_file(self) -> Path:
-        """Resolve `self.pattern` to the ImageSets JSON that lists its ids."""
+    def _imageset_files(self) -> list[Path]:
+        """Resolve `self.pattern` to the ImageSets JSON(s) that list its ids."""
 
+        if isinstance(self.pattern, (list, tuple)):
+            return [self._resolve_pattern_file(p) for p in self.pattern]
+        return [self._resolve_pattern_file(self.pattern)]
+
+    def _resolve_pattern_file(self, p: str | int | None) -> Path:
         image_sets = self.root_path / "ImageSets"
-        p = self.pattern
         if p is None or p == "total":
             return image_sets / "total.json"
         if isinstance(p, int):
@@ -140,32 +151,44 @@ class ZJULeaperDataset(DatasetAdapter):
     def _select_ids(self) -> tuple[list[str], list[str]]:
         """Return (normal_ids, defect_ids) chosen per the count/ratio config."""
 
-        index_path = self._imageset_file()
-        with open(index_path) as fh:
-            index = json.load(fh)
-
-        normal_pool = _validate_index_ids(index, "normal", self.split, index_path)
-        defect_pool = (
-            _validate_index_ids(index, "defect", self.split, index_path)
-            if self.use_defect
-            else []
-        )
-
         rng = random.Random(self.seed)
-        rng.shuffle(normal_pool)
-        rng.shuffle(defect_pool)
+        normal_pools: list[list[str]] = []
+        defect_pools: list[list[str]] = []
+        for index_path in self._imageset_files():
+            with open(index_path) as fh:
+                index = json.load(fh)
+            normal_pool = _validate_index_ids(index, "normal", self.split, index_path)
+            defect_pool = (
+                _validate_index_ids(index, "defect", self.split, index_path)
+                if self.use_defect
+                else []
+            )
+            rng.shuffle(normal_pool)
+            rng.shuffle(defect_pool)
+            normal_pools.append(normal_pool)
+            defect_pools.append(defect_pool)
 
         if self.num_samples is None:
             # Few-shot / full-data: take everything in the selection.
-            return normal_pool, defect_pool
+            return [i for pool in normal_pools for i in pool], [i for pool in defect_pools for i in pool]
 
-        # Low-shot: honour total count and defect ratio.
+        # Low-shot: honour total count and defect ratio, split as evenly as
+        # possible across each selected pattern so a multi-pattern selection
+        # can't collapse back into "whichever pattern shuffled favorably".
         if not self.use_defect:
-            return normal_pool[: self.num_samples], []
+            allocation = _stratified_allocate(self.num_samples, [len(pool) for pool in normal_pools])
+            return [i for pool, n in zip(normal_pools, allocation) for i in pool[:n]], []
 
-        n_defect = min(round(self.num_samples * self.defect_ratio), len(defect_pool))
-        n_normal = min(self.num_samples - n_defect, len(normal_pool))
-        return normal_pool[:n_normal], defect_pool[:n_defect]
+        total_defect_capacity = sum(len(pool) for pool in defect_pools)
+        total_normal_capacity = sum(len(pool) for pool in normal_pools)
+        n_defect = min(round(self.num_samples * self.defect_ratio), total_defect_capacity)
+        n_normal = min(self.num_samples - n_defect, total_normal_capacity)
+
+        defect_allocation = _stratified_allocate(n_defect, [len(pool) for pool in defect_pools])
+        normal_allocation = _stratified_allocate(n_normal, [len(pool) for pool in normal_pools])
+        normal_ids = [i for pool, n in zip(normal_pools, normal_allocation) for i in pool[:n]]
+        defect_ids = [i for pool, n in zip(defect_pools, defect_allocation) for i in pool[:n]]
+        return normal_ids, defect_ids
 
     # ------------------------------------------------------------------ #
     # Sample building
@@ -229,6 +252,32 @@ class ZJULeaperDataset(DatasetAdapter):
         samples = [self._build_sample(i, is_defect=False) for i in normal_ids]
         samples += [self._build_sample(i, is_defect=True) for i in defect_ids]
         return samples
+
+
+def _stratified_allocate(total: int, capacities: list[int]) -> list[int]:
+    """Split `total` as evenly as possible across buckets sized `capacities`.
+
+    Round-robins the remaining budget over buckets that still have room,
+    so a bucket with a small pool (e.g. a less common pattern) isn't
+    starved just because it comes last, and any leftover budget a
+    capped-out bucket couldn't absorb spills over to the others.
+    """
+
+    n = len(capacities)
+    allocation = [0] * n
+    remaining = total
+    active = [i for i in range(n) if capacities[i] > 0]
+    while remaining > 0 and active:
+        share = max(1, remaining // len(active))
+        for i in list(active):
+            if remaining <= 0:
+                break
+            take = min(share, capacities[i] - allocation[i], remaining)
+            allocation[i] += take
+            remaining -= take
+            if allocation[i] >= capacities[i]:
+                active.remove(i)
+    return allocation
 
 
 def _text(element: ET.Element, tag: str) -> str | None:

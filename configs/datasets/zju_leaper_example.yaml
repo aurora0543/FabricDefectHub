@@ -20,6 +20,19 @@ low_shot:
   task: anomaly
   seed: 0
 
+# ---- Scenario B2: low-shot, multiple patterns pooled and evenly split ----
+# pattern1 alone is a plain white background with no texture; training only
+# on it doesn't generalize to the other 18 patterns. Pass a list to pool
+# several patterns and split num_samples as evenly as possible across them.
+low_shot_multi_pattern:
+  pattern: [pattern1, pattern2, pattern3, pattern4]
+  split: test
+  num_samples: 350
+  use_defect: true
+  defect_ratio: 0.3
+  task: anomaly
+  seed: 0
+
 # ---- Scenario C: zero-shot (normal samples only, no defect images) ----
 zero_shot:
   pattern: pattern1
