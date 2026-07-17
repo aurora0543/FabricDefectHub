@@ -98,13 +98,19 @@ python tools/train_all_models.py --only <model-key> --mode test
 python tools/train_all_models.py
 ```
 
-No `--mode` flag: each model trains with its own config's declared sample
-count (300 train images by default — a deliberately fast "low-shot" setting,
-not the full dataset). To train on the complete dataset instead:
+No `--mode` flag: each model trains with its own config's declared setting
+("few" — 300/100 train/val images, drawn evenly from ZJU-Leaper patterns
+1-4 only). Two other shot modes are available, both widening that to every
+one of the benchmark's 19 patterns:
 
 ```bash
-python tools/train_all_models.py --mode full
+python tools/train_all_models.py --mode medium   # every pattern, capped at 150/50 images each (2850/950 total)
+python tools/train_all_models.py --mode full     # every pattern, every image (tens of thousands — slow)
 ```
+
+"medium" is the practical choice for real cross-texture generalization
+without "full"'s runtime; "full" is there for a from-scratch or final
+run where training time isn't the constraint.
 
 This can be significantly slower, especially for Anomalib's PatchCore
 (coreset selection scales with total image count, not just epochs).

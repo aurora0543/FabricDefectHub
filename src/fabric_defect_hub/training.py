@@ -1,8 +1,16 @@
 """The single `train` entry point: pick a model config, let the backend be
 detected from keywords in that config (or state it explicitly), optionally
 point at a different dataset, and optionally override the shot mode
-(full-shot / few-shot / an 8-image test-shot smoke run) — then hand the
-fully-resolved config to that backend's own `run_from_config`.
+(full-shot / medium-shot / few-shot / an 8-image test-shot smoke run) —
+then hand the fully-resolved config to that backend's own
+`run_from_config`.
+
+For ZJU-Leaper, "few" trains on the config's own declared pattern subset
+(patterns 1-4) and sample count; "medium" and "full" both widen that to
+every one of the benchmark's 19 patterns for real cross-texture
+generalization, differing only in how much of each pattern they take —
+"medium" caps it per pattern (see `MEDIUM_SHOT_TRAIN_PER_PATTERN` /
+`MEDIUM_SHOT_VAL_PER_PATTERN`), "full" takes every image.
 
 This sits one layer above `models/{ultralytics,torchvision,anomalib}
 /pipeline.py`: those already execute a fully-declarative single-backend
@@ -27,11 +35,21 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
 
-ShotMode = Literal["full", "few", "test"]
+ShotMode = Literal["full", "medium", "few", "test"]
 
 # "test" shot: a tiny end-to-end smoke run (per model/dataset combination)
 # meant to verify the pipeline wiring, not to produce a usable checkpoint.
 TEST_SHOT_NUM_SAMPLES = 8
+
+# "medium" shot: unlike "few" (patterns 1-4 only, config's own 300/100
+# counts), this covers every ZJU-Leaper pattern for real cross-texture
+# generalization, but caps the per-pattern count instead of taking each
+# pattern's full pool the way "full" does — 19 patterns x a few hundred
+# images each is already thousands of samples; every pattern's full pool
+# would be tens of thousands.
+ZJU_LEAPER_PATTERN_COUNT = 19
+MEDIUM_SHOT_TRAIN_PER_PATTERN = 150
+MEDIUM_SHOT_VAL_PER_PATTERN = 50
 
 # Where `resolve_model_config` looks for configs when given a bare name
 # instead of a path (e.g. "ultralytics_example" or "yolov8n").
@@ -307,8 +325,9 @@ def apply_dataset_overrides(
     train_selection = dict(data.get(train_key) or {})
     other_selection = dict(data.get(other_key) or {})
 
-    _apply_selection_overrides(train_selection, overrides, is_train_split=True)
-    _apply_selection_overrides(other_selection, overrides, is_train_split=False)
+    dataset_name = data["dataset"]
+    _apply_selection_overrides(train_selection, overrides, is_train_split=True, dataset=dataset_name)
+    _apply_selection_overrides(other_selection, overrides, is_train_split=False, dataset=dataset_name)
 
     if backend == "anomalib":
         # One-class training: the train split is always normal-only, no
@@ -371,13 +390,16 @@ def _resolve_num_samples(
         return True, TEST_SHOT_NUM_SAMPLES
     if overrides.mode == "full":
         return True, None
+    if overrides.mode == "medium":
+        per_pattern = MEDIUM_SHOT_TRAIN_PER_PATTERN if is_train_split else MEDIUM_SHOT_VAL_PER_PATTERN
+        return True, per_pattern * ZJU_LEAPER_PATTERN_COUNT
     if overrides.mode == "few":
         return False, current  # leave the config's own few-shot count as-is
     return False, current
 
 
 def _apply_selection_overrides(
-    selection: dict[str, Any], overrides: DatasetOverrides, *, is_train_split: bool
+    selection: dict[str, Any], overrides: DatasetOverrides, *, is_train_split: bool, dataset: str
 ) -> None:
     should_set, num_samples = _resolve_num_samples(
         overrides, selection.get("num_samples"), is_train_split=is_train_split
@@ -390,6 +412,12 @@ def _apply_selection_overrides(
         selection["defect_ratio"] = overrides.defect_ratio
     if overrides.pattern is not None:
         selection["pattern"] = overrides.pattern
+    elif dataset == "zju-leaper" and overrides.mode in ("full", "medium"):
+        # "few" leaves the config's own pattern subset (patterns 1-4) alone;
+        # "full"/"medium" both mean "generalize across the whole benchmark",
+        # so widen the pattern selection to all 19 unless the caller pinned
+        # one explicitly with --pattern.
+        selection["pattern"] = None if overrides.mode == "full" else list(range(1, ZJU_LEAPER_PATTERN_COUNT + 1))
     if overrides.category is not None:
         selection["category"] = overrides.category
     if overrides.seed is not None:
