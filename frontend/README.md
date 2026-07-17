@@ -8,7 +8,7 @@ directly.
 ## Launch
 
 ```bash
-pip install -e ".[ui]"
+pip install -r requirements.txt
 fdh-ui
 ```
 
@@ -38,6 +38,7 @@ directly.
 - **Single Image Detection**: dataset random sampling, image browsing,
   model status, checkpoint/pretrained selection, and bbox/mask/anomaly-map
   result display.
-- **Benchmark**: a standalone placeholder for now, to be implemented later
-  by reusing the backend's saved leaderboard and `ExperimentResult`
-  artifacts.
+- **Benchmark**: pick a dataset and one or more compatible trained models,
+  then run them through the same mount → test → unmount pipeline one at a
+  time (never more than one resident model in memory), streaming leaderboard
+  rows back as each model finishes.

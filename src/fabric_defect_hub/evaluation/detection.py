@@ -72,6 +72,21 @@ class DetectionEvaluator(Evaluator):
     def _build_class_map(self, pairs) -> dict[str, int]:
         if self.class_names is not None:
             return {name: idx for idx, name in enumerate(self.class_names)}
+        gt_labels = {label for sample, _ in pairs for label in (sample.annotations.labels or [])}
+        if len(gt_labels) == 1:
+            # Every dataset this project scores is single-class ("defect" for
+            # ZJU-Leaper), but a checkpoint's own detection head can carry a
+            # different class name than the ground truth's (e.g. a published
+            # yolov8n.pt trained/exported with class name "item" instead of
+            # "defect"). Building the class map from the union of gt+pred
+            # labels would then produce two distinct category ids that never
+            # match each other, silently zeroing every mAP/mAR column even
+            # though the boxes overlap fine (`_precision_recall_f1` is
+            # class-agnostic and doesn't hit this). There's only one real
+            # class here, so collapse onto it and ignore the predictor's own
+            # label text entirely -- see `_to_torchmetrics_format`'s
+            # `ignore_pred_label`.
+            return {next(iter(gt_labels)): 0}
         labels: set[str] = set()
         for sample, pred in pairs:
             labels.update(sample.annotations.labels or [])
@@ -82,6 +97,7 @@ class DetectionEvaluator(Evaluator):
 def _to_torchmetrics_format(pairs, class_map: dict[str, int]):
     import torch
 
+    ignore_pred_label = len(class_map) == 1
     preds_t = []
     targets_t = []
     for sample, pred in pairs:
@@ -99,9 +115,14 @@ def _to_torchmetrics_format(pairs, class_map: dict[str, int]):
         pred_boxes = pred.boxes or []
         pred_labels = pred.labels or []
         pred_scores = pred.scores or [1.0] * len(pred_boxes)
-        pred_ids = [class_map[label] for label in pred_labels if label in class_map]
-        kept_pred_boxes = [b for b, label in zip(pred_boxes, pred_labels) if label in class_map]
-        kept_scores = [s for s, label in zip(pred_scores, pred_labels) if label in class_map]
+        if ignore_pred_label:
+            pred_ids = [0] * len(pred_boxes)
+            kept_pred_boxes = list(pred_boxes)
+            kept_scores = list(pred_scores)
+        else:
+            pred_ids = [class_map[label] for label in pred_labels if label in class_map]
+            kept_pred_boxes = [b for b, label in zip(pred_boxes, pred_labels) if label in class_map]
+            kept_scores = [s for s, label in zip(pred_scores, pred_labels) if label in class_map]
         preds_t.append(
             {
                 "boxes": torch.as_tensor(kept_pred_boxes, dtype=torch.float32).reshape(-1, 4),
@@ -131,6 +152,7 @@ def _precision_recall_f1(pairs, class_map: dict[str, int], score_threshold: floa
     number that a sweep-based mAP doesn't directly answer.
     """
 
+    ignore_pred_label = len(class_map) == 1
     tp = fp = fn = 0
     for sample, pred in pairs:
         gt_boxes = [
@@ -141,7 +163,7 @@ def _precision_recall_f1(pairs, class_map: dict[str, int], score_threshold: floa
             (b, s) for b, label, s in zip(
                 pred.boxes or [], pred.labels or [], pred.scores or [1.0] * len(pred.boxes or [])
             )
-            if label in class_map and s >= score_threshold
+            if (ignore_pred_label or label in class_map) and s >= score_threshold
         ]
         kept.sort(key=lambda x: x[1], reverse=True)
 

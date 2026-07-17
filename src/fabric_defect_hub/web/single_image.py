@@ -14,6 +14,7 @@ from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.loader import load_dataset, load_model
 from fabric_defect_hub.models.anomalib.checkpoint import inspect_checkpoint
 from fabric_defect_hub.models.base import Artifact
+from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -43,10 +44,19 @@ MODEL_CATALOG = {
 # filter, default Sample.task) to that dataset's shape. `slice_kwarg` names the
 # DatasetAdapter constructor kwarg the "Texture / pattern" dropdown feeds (e.g.
 # "pattern" for ZJU-Leaper's textures, "category" for MVTec AD's object
-# classes); None means the dataset has no such subdivision. Additional
-# datasets can add a catalog entry here without changing the page interaction
-# contract, as long as `texture_choices`/`slice_value` below know how to
-# enumerate/resolve their slice_kwarg.
+# classes); None means the dataset has no such subdivision. `task` is the
+# dataset's *default* Sample task, used by the Single Image tab's gallery
+# (ground truth isn't needed there, so one default is enough). `tasks` is the
+# superset of every task this dataset can supply real ground truth for
+# (boxes, masks, or an anomaly flag) — the Benchmark tab uses it to decide
+# which models are evaluable against a given dataset (`compatible_models`
+# below), and loads the dataset once per selected model with `task` set to
+# whichever of these that model actually needs (see `run_benchmark`), since
+# only `task == "segmentation"` makes a `DatasetAdapter` attach
+# `Sample.annotations.masks` (see e.g. `datasets/zju_leaper.py::_build_sample`).
+# Additional datasets can add a catalog entry here without changing the page
+# interaction contract, as long as `texture_choices`/`slice_value` below know
+# how to enumerate/resolve their slice_kwarg.
 DATASET_CATALOG = {
     "ZJU-Leaper": {
         "name": "zju-leaper",
@@ -54,6 +64,15 @@ DATASET_CATALOG = {
         "env": "ZJU_LEAPER_ROOT",
         "slice_kwarg": "pattern",
         "task": "detection",
+        # Every ZJU-Leaper sample carries a normal/defect flag unconditionally
+        # (`ZJULeaperDataset._build_sample`'s `Annotations(is_anomalous=...)`,
+        # set regardless of `task`), so it's valid anomaly-evaluation ground
+        # truth too, not just detection/segmentation — this is what makes all
+        # 14 canonical models (not just the 9 detection/segmentation ones)
+        # benchmarkable against it. The anomaly models are "Normal Lab
+        # trained" (see catalog.py's `source`), so scoring them here is a
+        # cross-domain generalization check, not an in-domain one.
+        "tasks": ("detection", "segmentation", "anomaly"),
     },
     "RAW-FABRID": {
         "name": "raw-fabric",
@@ -61,6 +80,7 @@ DATASET_CATALOG = {
         "env": "RAW_FABRIC_ROOT",
         "slice_kwarg": None,
         "task": "anomaly",
+        "tasks": ("anomaly", "segmentation"),
     },
     "MVTec AD": {
         "name": "mvtec-ad",
@@ -68,6 +88,7 @@ DATASET_CATALOG = {
         "env": "MVTEC_AD_ROOT",
         "slice_kwarg": "category",
         "task": "anomaly",
+        "tasks": ("anomaly", "segmentation"),
     },
 }
 ALL_TEXTURES = "All textures"
@@ -78,6 +99,48 @@ SHOT_FULL = "Full-shot"
 SHOT_FEW = "Few-shot"
 FEW_SHOT_SAMPLE_COUNT = 350
 FEW_SHOT_DEFECT_RATIO = 0.3
+
+
+# Gradio `(display_label, value)` tuples for every choice-based control whose
+# *value* is also compared elsewhere in this module (`shot_mode == SHOT_FULL`,
+# `image_scope == DEFECT_ONLY`, ...). Only the display half is localized —
+# see `i18n.py`'s module docstring for why the value must stay stable.
+def split_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
+    return [(tr(lang, "split_test"), "test"), (tr(lang, "split_train"), "train")]
+
+
+def image_scope_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
+    return [
+        (tr(lang, "choice_all_images"), ALL_IMAGES),
+        (tr(lang, "choice_defect_only"), DEFECT_ONLY),
+        (tr(lang, "choice_normal_only"), NORMAL_ONLY),
+    ]
+
+
+def shot_mode_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
+    return [(tr(lang, "choice_full_shot"), SHOT_FULL), (tr(lang, "choice_few_shot"), SHOT_FEW)]
+
+
+_TASK_KEYS = {
+    "detection": "task_detection",
+    "segmentation": "task_segmentation",
+    "instance_segmentation": "task_instance_segmentation",
+    "anomaly": "task_anomaly",
+}
+
+
+def _task_text(lang: str, task: str) -> str:
+    return tr(lang, _TASK_KEYS.get(task, "task_detection"))
+
+
+def _scope_text(lang: str, image_scope: str) -> str:
+    mapping = {ALL_IMAGES: "choice_all_images", DEFECT_ONLY: "choice_defect_only", NORMAL_ONLY: "choice_normal_only"}
+    return tr(lang, mapping.get(image_scope, "choice_all_images")).lower()
+
+
+def shot_text(lang: str, shot_mode: str) -> str:
+    mapping = {SHOT_FULL: "choice_full_shot", SHOT_FEW: "choice_few_shot"}
+    return tr(lang, mapping.get(shot_mode, "choice_full_shot")).lower()
 
 
 def _dataset_roots(dataset_label: str) -> list[Path]:
@@ -188,48 +251,45 @@ def empty_gallery_state() -> dict[str, Any]:
     return {"samples": [], "index": 0, "dataset": None}
 
 
-def model_status(model_label: str) -> str:
+def model_status(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     spec = MODEL_CATALOG[model_label]
     package = spec["backend"]
     installed = importlib.util.find_spec(package) is not None
     if not installed:
-        return f"🔴 **Unavailable** — install the `{package}` extra before loading this backend."
+        return tr(lang, "model_status_unavailable", package=package)
     path = Path(spec["checkpoint"])
-    return (
-        f"🟢 **Ready** — {spec['task']} model from `{spec['metadata']['source']}` (`{path.name}`)"
-        if path.is_file()
-        else f"🟠 **Checkpoint missing** — expected `{path}`."
+    if not path.is_file():
+        return tr(lang, "model_status_missing", path=path)
+    return tr(
+        lang, "model_status_ready",
+        task=_task_text(lang, spec["task"]), source=spec["metadata"]["source"], filename=path.name,
     )
 
 
-def checkpoint_diagnostic(model_label: str) -> str:
+def checkpoint_diagnostic(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     """Return on-demand, non-executing provenance data for a selected model."""
 
     spec = MODEL_CATALOG[model_label]
     if spec["backend"] != "anomalib":
-        return "ℹ️ **Native Ultralytics artifact** — readiness is checked from its local `.pt` file."
+        return tr(lang, "checkpoint_diag_native")
     diagnostic = inspect_checkpoint(spec["checkpoint"])
     if not diagnostic.exists:
-        return f"🟠 **Checkpoint missing** — `{diagnostic.path}` was not found."
-    globals_summary = ", ".join(diagnostic.unsafe_globals) or "none"
-    return (
-        "🟢 **Trusted checkpoint diagnostic**  \n"
-        f"SHA-256: `{diagnostic.sha256}`  \n"
-        f"Size: `{diagnostic.size_bytes / (1024 * 1024):.1f} MiB`  \n"
-        f"Declared checkpoint globals: `{globals_summary}`"
-    )
+        return tr(lang, "checkpoint_diag_missing", path=diagnostic.path)
+    globals_summary = ", ".join(diagnostic.unsafe_globals) or tr(lang, "value_none")
+    return "  \n".join((
+        tr(lang, "checkpoint_diag_trusted_header"),
+        tr(lang, "checkpoint_diag_sha", sha=diagnostic.sha256),
+        tr(lang, "checkpoint_diag_size", size=diagnostic.size_bytes / (1024 * 1024)),
+        tr(lang, "checkpoint_diag_globals", globals=globals_summary),
+    ))
 
 
-def dataset_status(dataset_label: str) -> str:
+def dataset_status(dataset_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     root = default_dataset_root(dataset_label)
     if root:
-        return f"🟢 **Ready** — using the registered `{dataset_label}` dataset."
+        return tr(lang, "dataset_ready", label=dataset_label)
     spec = DATASET_CATALOG[dataset_label]
-    return (
-        f"🟠 **Dataset unavailable** — connect the storage containing `{dataset_label}` "
-        f"(expected at `data/{spec['dir']}`, typically a symlink onto external storage, "
-        f"or set `${spec['env']}`), then restart the app."
-    )
+    return tr(lang, "dataset_unavailable", label=dataset_label, dir=spec["dir"], env=spec["env"])
 
 
 def build_gallery_state(samples: list[Sample], count: int, seed: int, dataset_label: str) -> dict[str, Any]:
@@ -249,6 +309,7 @@ def load_random_samples(
     texture_label: str = ALL_TEXTURES,
     image_scope: str = ALL_IMAGES,
     shot_mode: str = SHOT_FULL,
+    lang: str = DEFAULT_LANGUAGE,
 ) -> tuple[dict[str, Any], str | None, str, str]:
     root = default_dataset_root(dataset_label)
     if not root:
@@ -275,38 +336,40 @@ def load_random_samples(
     elif image_scope not in (ALL_IMAGES, NORMAL_ONLY):
         raise ValueError(f"Unknown image selection {image_scope!r}.")
     state = build_gallery_state(samples, sample_count, actual_seed, dataset_label)
-    path, position = current_image(state)
-    texture = "all textures" if texture_label == ALL_TEXTURES else texture_label
-    return state, path, position, (
-        f"🟢 Loaded **{len(state['samples'])}** random `{image_scope.lower()}` "
-        f"({shot_mode.lower()}) from `{dataset.name}` / `{texture}` / `{split}`."
+    path, position = current_image(state, lang)
+    texture = ALL_TEXTURES if texture_label == ALL_TEXTURES else texture_label
+    status = tr(
+        lang, "dataset_load_success",
+        count=len(state["samples"]), scope=_scope_text(lang, image_scope), shot=shot_text(lang, shot_mode),
+        name=dataset.name, texture=texture, split=split,
     )
+    return state, path, position, status
 
 
-def current_image(state: dict[str, Any]) -> tuple[str | None, str]:
+def current_image(state: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> tuple[str | None, str]:
     samples = state.get("samples", [])
     if not samples:
-        return None, "No image loaded yet."
+        return None, tr(lang, "caption_no_image")
     index = int(state.get("index", 0)) % len(samples)
     state["index"] = index
     sample = sample_from_dict(samples[index])
-    return sample.image_path, _sample_caption(sample, index, len(samples))
+    return sample.image_path, _sample_caption(sample, index, len(samples), lang)
 
 
-def move_image(state: dict[str, Any], direction: int) -> tuple[dict[str, Any], str | None, str]:
+def move_image(state: dict[str, Any], direction: int, lang: str = DEFAULT_LANGUAGE) -> tuple[dict[str, Any], str | None, str]:
     if not state.get("samples"):
-        return state, None, "Load a dataset before browsing images."
+        return state, None, tr(lang, "move_need_dataset")
     state = dict(state)
     state["index"] = (int(state.get("index", 0)) + direction) % len(state["samples"])
-    path, caption = current_image(state)
+    path, caption = current_image(state, lang)
     return state, path, caption
 
 
-def detect_current(state: dict[str, Any], model_label: str) -> tuple[Any, dict[str, Any], str]:
+def detect_current(state: dict[str, Any], model_label: str, lang: str = DEFAULT_LANGUAGE) -> tuple[Any, dict[str, Any], str]:
     if not state.get("samples"):
-        return None, {}, "🟠 Load a dataset and select an image first."
+        return None, {}, tr(lang, "inference_need_dataset")
     spec = MODEL_CATALOG[model_label]
-    status = model_status(model_label)
+    status = model_status(model_label, lang)
     if status.startswith("🔴") or status.startswith("🟠"):
         return None, {}, status
 
@@ -316,8 +379,8 @@ def detect_current(state: dict[str, Any], model_label: str) -> tuple[Any, dict[s
         prediction = _predict_with_model(model, spec, model_label, sample)[0]
         image = render_prediction(sample.image_path, prediction)
     except Exception as exc:
-        return None, {}, f"🔴 **Inference failed** — {type(exc).__name__}: {exc}"
-    return image, prediction_summary(prediction), "🟢 **Inference complete**"
+        return None, {}, tr(lang, "inference_failed", error_type=type(exc).__name__, error=exc)
+    return image, prediction_summary(prediction), tr(lang, "inference_complete")
 
 
 def load_selected_model(session_manager: Any, model_label: str) -> dict[str, Any]:
@@ -351,12 +414,12 @@ def unload_selected_model(session_manager: Any) -> dict[str, Any]:
 
 
 def detect_loaded_model(
-    session_manager: Any, state: dict[str, Any], model_label: str
+    session_manager: Any, state: dict[str, Any], model_label: str, lang: str = DEFAULT_LANGUAGE
 ) -> tuple[Any, dict[str, Any], str]:
     """Predict through a preloaded backend session without creating an adapter."""
 
     if not state.get("samples"):
-        return None, {}, "🟠 Load a dataset and select an image first."
+        return None, {}, tr(lang, "inference_need_dataset")
     spec = MODEL_CATALOG[model_label]
     sample = sample_from_dict(state["samples"][state["index"]])
     try:
@@ -367,8 +430,8 @@ def detect_loaded_model(
             prediction = session_manager.predict(model_label, [sample])[0]
         image = render_prediction(sample.image_path, prediction)
     except Exception as exc:
-        return None, {}, f"🔴 **Inference failed** — {type(exc).__name__}: {exc}"
-    return image, prediction_summary(prediction), "🟢 **Inference complete**"
+        return None, {}, tr(lang, "inference_failed", error_type=type(exc).__name__, error=exc)
+    return image, prediction_summary(prediction), tr(lang, "inference_complete")
 
 
 def _predict_with_model(model: Any, spec: dict[str, Any], model_label: str, sample: Sample) -> list[Prediction]:
@@ -399,34 +462,56 @@ def prediction_summary(prediction: Prediction) -> dict[str, Any]:
     }
 
 
-def format_prediction_summary(summary: dict[str, Any]) -> str:
-    """Format the unified prediction contract for a human-facing UI panel."""
+def render_prediction_tags(summary: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> str:
+    """Render the unified prediction contract as colored HTML chips instead
+    of prose: one tag per detected defect naming its actual predicted class
+    (`summary["labels"]`, e.g. "defect" or a checkpoint's own class name),
+    paired with a confidence tag whose background opacity scales with the
+    score — darker means more confident, lighter means less. See the app's
+    `CSS` for the `.fdh-tag*` classes this emits into the `Inference result`
+    card's `gr.HTML` panel."""
+
+    import html as _html
 
     if not summary:
-        return "### Prediction summary\nNo prediction available yet."
+        return f'<div class="fdh-tagpanel-empty">{_html.escape(tr(lang, "prediction_none"))}</div>'
+
     if summary["task"] == "anomaly":
-        label = next(iter(summary["labels"]), "unclassified")
         score = summary["anomaly_score"]
-        score_text = "unavailable" if score is None else f"{score:.4f}"
-        map_text = "available" if summary["has_anomaly_map"] else "not available"
-        return (
-            "### Prediction summary\n"
-            f"**Result:** {label.title()}  \n"
-            f"**Anomaly score:** {score_text}  \n"
-            f"**Heatmap:** {map_text}"
-        )
+        is_anomalous = bool(score is not None and score >= 0.5)
+        verdict_key = "tag_anomalous" if is_anomalous else "tag_normal"
+        verdict_class = "fdh-tag-anomalous" if is_anomalous else "fdh-tag-normal"
+        chips = [f'<span class="fdh-tag {verdict_class}">{_html.escape(tr(lang, verdict_key))}</span>']
+        if score is not None:
+            chips.append(_confidence_chip(tr(lang, "tag_anomaly_score"), float(score)))
+        heatmap_key = "tag_heatmap_available" if summary["has_anomaly_map"] else "tag_heatmap_unavailable"
+        chips.append(f'<span class="fdh-tag fdh-tag-neutral">{_html.escape(tr(lang, heatmap_key))}</span>')
+        return f'<div class="fdh-tags">{"".join(chips)}</div>'
+
     detections = int(summary["detections"])
     if detections == 0:
-        return "### Prediction summary\n**Result:** No defect detected."
-    details = [
-        f"{label} ({score:.2%})"
-        for label, score in zip(summary["labels"], summary["scores"])
-    ]
+        return (
+            '<div class="fdh-tags">'
+            f'<span class="fdh-tag fdh-tag-normal">{_html.escape(tr(lang, "prediction_no_defect"))}</span>'
+            "</div>"
+        )
+    header = f'<div class="fdh-tagpanel-header">{_html.escape(tr(lang, "prediction_regions", count=detections))}</div>'
+    rows = []
+    for label, score in zip(summary["labels"], summary["scores"]):
+        label_chip = f'<span class="fdh-tag fdh-tag-label">{_html.escape(str(label))}</span>'
+        conf_chip = _confidence_chip(tr(lang, "tag_confidence"), float(score))
+        rows.append(f'<div class="fdh-tag-row">{label_chip}{conf_chip}</div>')
+    return header + f'<div class="fdh-tags fdh-tags-column">{"".join(rows)}</div>'
+
+
+def _confidence_chip(caption: str, score: float) -> str:
+    import html as _html
+
+    clamped = max(0.0, min(1.0, score))
+    alpha = 0.45 + 0.5 * clamped  # darker = higher confidence, lighter = lower
     return (
-        "### Prediction summary\n"
-        "**Result:** Defect detected  \n"
-        f"**Detected regions:** {detections}  \n"
-        f"**Confidence:** {', '.join(details) or 'unavailable'}"
+        f'<span class="fdh-tag fdh-tag-conf" style="background: rgba(234,110,24,{alpha:.2f})">'
+        f"{_html.escape(caption)} {clamped * 100:.1f}%</span>"
     )
 
 
@@ -478,6 +563,6 @@ def _overlay_anomaly_map(image, map_path: str | None):
     return Image.alpha_composite(image, overlay)
 
 
-def _sample_caption(sample: Sample, index: int, total: int) -> str:
-    state = "defect" if sample.annotations.is_anomalous else "normal"
+def _sample_caption(sample: Sample, index: int, total: int, lang: str = DEFAULT_LANGUAGE) -> str:
+    state = tr(lang, "state_defect" if sample.annotations.is_anomalous else "state_normal")
     return f"**{index + 1} / {total}** · `{sample.id}` · {state}"

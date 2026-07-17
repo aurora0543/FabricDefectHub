@@ -1,3 +1,14 @@
+# Lean UI/inference-only dependency set. This is the file Hugging Face
+# Spaces auto-installs from (paired with the root `app.py`), so it
+# deliberately excludes the training stack (torch/torchvision/anomalib/
+# ultralytics -- several GB combined) to keep that deployment small and
+# fast to build.
+#
+# For local/cloud development with everything (every model backend, the
+# test suite, quantization tooling, and this package installed editable),
+# use `requirements-full.txt` instead:
+#
+#   pip install -r requirements-full.txt
 gradio>=5.0,<7
 numpy
 pillow

@@ -19,9 +19,9 @@ from fabric_defect_hub.web.single_image import (
     detect_loaded_model,
     detect_current,
     empty_gallery_state,
-    format_prediction_summary,
     load_selected_model,
     move_image,
+    render_prediction_tags,
     texture_choices,
 )
 
@@ -131,7 +131,7 @@ def test_anomalib_selection_dispatches_a_trusted_artifact_and_map_directory(monk
 
     monkeypatch.setattr(workspace, "load_model", lambda backend, name: FakeAnomalibModel())
     monkeypatch.setattr(workspace, "render_prediction", lambda image_path, prediction: "rendered")
-    monkeypatch.setattr(workspace, "model_status", lambda label: "🟢 **Ready**")
+    monkeypatch.setattr(workspace, "model_status", lambda label, lang="en": "🟢 **Ready**")
 
     image, summary, status = detect_current(state, "PatchCore · Normal Lab trained")
 
@@ -281,15 +281,16 @@ def test_mvtec_ad_texture_selection_forwards_the_category_kwarg(monkeypatch, tmp
     assert captured["category"] is None
 
 
-def test_prediction_summary_is_human_readable_for_detection_and_anomaly():
-    detection = format_prediction_summary(
+def test_prediction_tags_render_defect_label_and_confidence_for_detection_and_anomaly():
+    detection = render_prediction_tags(
         {"task": "detection", "detections": 1, "labels": ["Defect"], "scores": [0.2567], "anomaly_score": None, "has_anomaly_map": False}
     )
-    anomaly = format_prediction_summary(
+    anomaly = render_prediction_tags(
         {"task": "anomaly", "detections": 0, "labels": ["anomaly"], "scores": [], "anomaly_score": 0.7014, "has_anomaly_map": True}
     )
 
-    assert "Defect detected" in detection
-    assert "25.67%" in detection
-    assert "0.7014" in anomaly
-    assert "available" in anomaly
+    assert "Defect" in detection
+    assert "25.7%" in detection
+    assert "Anomalous" in anomaly
+    assert "70.1%" in anomaly
+    assert "Heatmap available" in anomaly

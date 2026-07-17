@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
+from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, LANGUAGES, tr
 from fabric_defect_hub.inference.session import InferenceSessionManager, format_session_status
 from fabric_defect_hub.web.benchmark import compatible_models, run_benchmark
 from fabric_defect_hub.web.single_image import (
     DATASET_CATALOG,
-    ALL_IMAGES,
-    DEFECT_ONLY,
-    NORMAL_ONLY,
     MODEL_CATALOG,
-    SHOT_FEW,
-    SHOT_FULL,
     checkpoint_diagnostic,
+    current_image,
     dataset_status as dataset_availability_status,
     default_dataset_root,
     detect_loaded_model,
     empty_gallery_state,
-    format_prediction_summary,
+    image_scope_choices,
     load_random_samples,
+    load_selected_model,
     model_status,
     move_image,
-    load_selected_model,
+    render_prediction_tags,
+    shot_mode_choices,
+    split_choices,
     texture_choices,
     unload_selected_model,
 )
@@ -34,13 +34,13 @@ body.dark .gradio-container { --body-background-fill: #07111f; --block-backgroun
 body:not(.dark), body:not(.dark) .gradio-container { background: #f4f7fb !important; color: #172033 !important; }
 body:not(.dark) .gradio-container { --body-background-fill: #f4f7fb; --block-background-fill: #ffffff; --block-border-color: #d7e0ec; --block-label-text-color: #475569; --input-background-fill: #ffffff; --input-border-color: #cbd5e1; --input-placeholder-color: #94a3b8; --body-text-color: #172033; --color-accent: #ea6e18; }
 .fdh-shell { max-width: 1440px; margin: 0 auto; padding: 0 8px 28px; }
-.fdh-nav { display: flex; align-items: center; justify-content: space-between; padding: 12px 2px 26px; }
+.fdh-nav-row { display: flex; align-items: center; padding: 12px 2px 26px; gap: 16px; }
+.fdh-nav { display: flex; align-items: center; justify-content: space-between; flex: 1; }
 .fdh-brand { display: flex; gap: 12px; align-items: center; font-weight: 800; font-size: 22px; }
 .fdh-logo { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #f97316; color: #fff; }
 .fdh-links { font-size: 14px; }
-.fdh-hero { padding: 28px 32px; border-radius: 18px; margin-bottom: 18px; }
-.fdh-hero h1 { margin: 0 0 6px; font-size: 30px; }
-.fdh-hero p { margin: 0; }
+.fdh-lang { max-width: 120px; }
+.fdh-lang .wrap-inner { min-height: 0 !important; }
 .fdh-card, .fdh-control-card, .fdh-dataset-card { border-radius: 14px; padding: 10px; }
 .fdh-control-card { min-height: 0; }
 .fdh-card label, .fdh-card .wrap, .fdh-card .prose, .fdh-control-card label, .fdh-control-card .wrap, .fdh-dataset-card label { font-weight: 600; }
@@ -48,13 +48,22 @@ body:not(.dark) .gradio-container { --body-background-fill: #f4f7fb; --block-bac
 .fdh-caption { text-align: center; min-height: 26px; }
 .fdh-nav-button button { min-width: 110px; border-radius: 10px !important; }
 .fdh-primary button { background: #ea6e18 !important; border-color: #fb923c !important; color: #fff !important; }
-.fdh-action-run button { height: 60px !important; min-height: 60px !important; max-height: 60px !important; font-size: 16px; font-weight: 700; flex: 0 0 auto !important; }
+.fdh-action-run button { height: 52px !important; min-height: 52px !important; max-height: 52px !important; font-size: 15px; font-weight: 700; width: 100%; margin-top: 6px; }
 .fdh-dataset-actions { align-items: end; }
 .fdh-placeholder { padding: 80px 30px; text-align: center; }
+.fdh-tagpanel-header { font-weight: 700; margin-bottom: 8px; font-size: 15px; }
+.fdh-tagpanel-empty { padding: 10px 2px; }
+.fdh-tags { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fdh-tags-column { flex-direction: column; align-items: flex-start; gap: 6px; }
+.fdh-tag-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fdh-tag { display: inline-flex; align-items: center; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap; line-height: 1.6; }
+.fdh-tag-label { background: var(--color-accent); }
+.fdh-tag-normal { background: #16a34a; }
+.fdh-tag-anomalous { background: #dc2626; }
+.fdh-tag-neutral { background: #64748b; }
 body.dark .fdh-brand { color: #f8fafc; }
 body.dark .fdh-links { color: #9fb0c8; }
-body.dark .fdh-hero { border: 1px solid #34465f; background: linear-gradient(118deg, #132842, #17233a 58%, #29233b); color: #f8fafc; box-shadow: 0 18px 42px rgba(0,0,0,.22); }
-body.dark .fdh-hero p { color: #c4d0e0; }
+body.dark .fdh-tagpanel-empty { color: #bdcbe0; }
 body.dark .fdh-card, body.dark .fdh-control-card, body.dark .fdh-dataset-card { border: 1px solid #293b54; background: #101c2d; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 body.dark .fdh-card label, body.dark .fdh-card .wrap, body.dark .fdh-card .prose, body.dark .fdh-control-card label, body.dark .fdh-control-card .wrap, body.dark .fdh-dataset-card label { color: #dce7f5 !important; }
 body.dark .fdh-card input, body.dark .fdh-card textarea, body.dark .fdh-card button.secondary, body.dark .fdh-control-card input, body.dark .fdh-control-card button.secondary, body.dark .fdh-dataset-card input, body.dark .fdh-dataset-card button.secondary { background: #0a1524 !important; color: #e5edf8 !important; border-color: #30445f !important; }
@@ -65,8 +74,7 @@ body.dark .fdh-status { background: #182a3d; border: 1px solid #36516d; color: #
 body.dark .fdh-caption, body.dark .fdh-placeholder { color: #bdcbe0; }
 body:not(.dark) .fdh-brand { color: #172033; }
 body:not(.dark) .fdh-links { color: #64748b; }
-body:not(.dark) .fdh-hero { border: 1px solid #d7e0ec; background: linear-gradient(118deg, #ffffff, #f4f7fb 60%, #fff1e8); color: #172033; box-shadow: 0 12px 30px rgba(15,23,42,.08); }
-body:not(.dark) .fdh-hero p { color: #52627a; }
+body:not(.dark) .fdh-tagpanel-empty { color: #52627a; }
 body:not(.dark) .fdh-card, body:not(.dark) .fdh-control-card, body:not(.dark) .fdh-dataset-card { border: 1px solid #d7e0ec; background: #ffffff; box-shadow: 0 6px 18px rgba(15,23,42,.07); }
 body:not(.dark) .fdh-card label, body:not(.dark) .fdh-card .wrap, body:not(.dark) .fdh-card .prose, body:not(.dark) .fdh-control-card label, body:not(.dark) .fdh-control-card .wrap, body:not(.dark) .fdh-dataset-card label { color: #172033 !important; }
 body:not(.dark) .fdh-card input, body:not(.dark) .fdh-card textarea, body:not(.dark) .fdh-card button.secondary, body:not(.dark) .fdh-control-card input, body:not(.dark) .fdh-control-card button.secondary, body:not(.dark) .fdh-dataset-card input, body:not(.dark) .fdh-dataset-card button.secondary { background: #ffffff !important; color: #172033 !important; border-color: #cbd5e1 !important; }
@@ -78,79 +86,116 @@ body:not(.dark) .fdh-caption, body:not(.dark) .fdh-placeholder { color: #52627a;
 """
 
 
+def _nav_html(lang: str) -> str:
+    return (
+        "<div class='fdh-nav'><div class='fdh-brand'><span class='fdh-logo'>FD</span>"
+        f"FabricDefectHub</div><div class='fdh-links'>{tr(lang, 'nav_links')}</div></div>"
+    )
+
+
+def _lang_choices() -> list[tuple[str, str]]:
+    return [(display, code) for code, display in LANGUAGES.items()]
+
+
 def create_app():
     try:
         import gradio as gr
     except ImportError as exc:
-        raise RuntimeError("Install the UI extra first: pip install -e '.[ui]'.") from exc
+        raise RuntimeError("Install the UI dependencies first: pip install -r requirements.txt") from exc
 
     sessions = InferenceSessionManager()
+    default_model = next(iter(MODEL_CATALOG))
+    default_dataset = next(iter(DATASET_CATALOG))
+    lang0 = DEFAULT_LANGUAGE
+
     with gr.Blocks(title="FabricDefectHub") as app:
+        lang_state = gr.State(lang0)
         with gr.Column(elem_classes="fdh-shell"):
-            gr.HTML(
-                "<div class='fdh-nav'><div class='fdh-brand'><span class='fdh-logo'>FD</span>"
-                "FabricDefectHub</div><div class='fdh-links'>Workspace · Datasets · Models · Results</div></div>"
-            )
+            with gr.Row(elem_classes="fdh-nav-row"):
+                nav_html = gr.HTML(_nav_html(lang0))
+                lang_choice = gr.Dropdown(
+                    choices=_lang_choices(), value=lang0, show_label=False,
+                    container=False, scale=0, min_width=100, elem_classes="fdh-lang",
+                )
             with gr.Tabs():
-                with gr.Tab("Single Image Detection", id="single-image"):
+                with gr.Tab(tr(lang0, "tab_single_image"), id="single-image") as tab_single:
                     state = gr.State(empty_gallery_state())
-                    with gr.Row():
-                        with gr.Column(scale=5, elem_classes="fdh-control-card"):
-                            gr.Markdown("### Model session")
-                            model_choice = gr.Dropdown(list(MODEL_CATALOG), value=next(iter(MODEL_CATALOG)), label="Local trained model")
-                            model_state = gr.Markdown(model_status(next(iter(MODEL_CATALOG))), elem_classes="fdh-status")
-                            with gr.Row():
-                                load_model_button = gr.Button("Load model", variant="secondary")
-                                unload_model_button = gr.Button("Unload model", variant="secondary")
-                                verify_model_button = gr.Button("Inspect checkpoint", variant="secondary")
-                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
-                            gr.Markdown("### Runtime memory")
-                            runtime_state = gr.Markdown(format_session_status(sessions.status()), elem_classes="fdh-status")
-                        with gr.Column(scale=3, elem_classes="fdh-control-card fdh-action-run"):
-                            gr.Markdown("### Inference")
-                            detect_button = gr.Button("Run detection", variant="primary", elem_classes="fdh-primary")
+
+                    # Column 1: model session + Run detection. Column 2: the
+                    # sampled dataset image. Column 3: the annotated result.
                     with gr.Row(equal_height=True):
-                        with gr.Column(scale=5, elem_classes="fdh-card"):
-                            source_image = gr.Image(label="Selected dataset image", height=390, interactive=False)
-                            position = gr.Markdown("No image loaded yet.", elem_classes="fdh-caption")
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            model_header = gr.Markdown(tr(lang0, "model_session_header"))
+                            model_choice = gr.Dropdown(
+                                list(MODEL_CATALOG), value=default_model, label=tr(lang0, "model_dropdown_label")
+                            )
+                            model_state = gr.Markdown(model_status(default_model, lang0), elem_classes="fdh-status")
                             with gr.Row():
-                                previous = gr.Button("← Previous", elem_classes="fdh-nav-button")
-                                next_image = gr.Button("Next →", elem_classes="fdh-nav-button")
-                        with gr.Column(scale=7, elem_classes="fdh-card"):
-                            result_image = gr.Image(label="Inference result", height=390, interactive=False)
-                            result_summary = gr.Markdown("### Prediction summary\nNo prediction available yet.", elem_classes="fdh-status")
-                            inference_status = gr.Markdown("Select an image and a ready model to begin.", elem_classes="fdh-status")
+                                load_model_button = gr.Button(tr(lang0, "btn_load_model"), variant="secondary")
+                                unload_model_button = gr.Button(tr(lang0, "btn_unload_model"), variant="secondary")
+                            verify_model_button = gr.Button(tr(lang0, "btn_inspect_checkpoint"), variant="secondary")
+                            detect_button = gr.Button(
+                                tr(lang0, "btn_run_detection"), variant="primary",
+                                elem_classes="fdh-primary fdh-action-run",
+                            )
+                        with gr.Column(scale=4, elem_classes="fdh-card"):
+                            source_image = gr.Image(
+                                label=tr(lang0, "image_selected_label"), height=360, interactive=False
+                            )
+                            position = gr.Markdown(tr(lang0, "caption_no_image"), elem_classes="fdh-caption")
+                            with gr.Row():
+                                previous = gr.Button(tr(lang0, "btn_previous"), elem_classes="fdh-nav-button")
+                                next_image = gr.Button(tr(lang0, "btn_next"), elem_classes="fdh-nav-button")
+                        with gr.Column(scale=5, elem_classes="fdh-card"):
+                            result_image = gr.Image(
+                                label=tr(lang0, "image_result_label"), height=360, interactive=False
+                            )
+
+                    # Runtime memory sits under the sampled image; the new
+                    # colored-tag prediction result sits under the annotated
+                    # result image right above it.
+                    with gr.Row(equal_height=True):
+                        with gr.Column(scale=4, elem_classes="fdh-card"):
+                            runtime_header = gr.Markdown(tr(lang0, "runtime_memory_header"))
+                            runtime_state = gr.Markdown(
+                                format_session_status(sessions.status(), lang0), elem_classes="fdh-status"
+                            )
+                        with gr.Column(scale=5, elem_classes="fdh-card"):
+                            result_summary = gr.HTML(render_prediction_tags({}, lang0), elem_classes="fdh-status")
+                            inference_status = gr.Markdown(tr(lang0, "inference_hint_start"), elem_classes="fdh-status")
 
                     with gr.Column(elem_classes="fdh-dataset-card"):
-                        gr.Markdown("### Dataset sampler")
+                        dataset_header = gr.Markdown(tr(lang0, "dataset_sampler_header"))
                         with gr.Row():
                             with gr.Column(scale=3):
-                                dataset_choice = gr.Dropdown(list(DATASET_CATALOG), value=next(iter(DATASET_CATALOG)), label="Dataset")
+                                dataset_choice = gr.Dropdown(
+                                    list(DATASET_CATALOG), value=default_dataset, label=tr(lang0, "dataset_dropdown_label")
+                                )
                             with gr.Column(scale=3):
-                                texture_choice = gr.Dropdown(texture_choices(next(iter(DATASET_CATALOG))), value="All textures", label="Texture / pattern")
+                                texture_choice = gr.Dropdown(
+                                    texture_choices(default_dataset), value="All textures",
+                                    label=tr(lang0, "texture_dropdown_label"),
+                                )
                             with gr.Column(scale=2):
-                                split = gr.Radio(["test", "train"], value="test", label="Split")
+                                split = gr.Radio(choices=split_choices(lang0), value="test", label=tr(lang0, "split_label"))
                             with gr.Column(scale=2):
-                                sample_count = gr.Slider(4, 12, value=8, step=1, label="Random images")
+                                sample_count = gr.Slider(4, 12, value=8, step=1, label=tr(lang0, "slider_random_images_label"))
                             with gr.Column(scale=2):
                                 image_scope = gr.Dropdown(
-                                    [ALL_IMAGES, DEFECT_ONLY, NORMAL_ONLY],
-                                    value=ALL_IMAGES,
-                                    label="Image selection",
+                                    choices=image_scope_choices(lang0), value="All images",
+                                    label=tr(lang0, "image_selection_label"),
                                 )
                             with gr.Column(scale=2):
                                 shot_mode = gr.Radio(
-                                    [SHOT_FULL, SHOT_FEW],
-                                    value=SHOT_FULL,
-                                    label="Sample regime",
+                                    choices=shot_mode_choices(lang0), value="Full-shot", label=tr(lang0, "sample_regime_label")
                                 )
                             with gr.Column(scale=2, elem_classes="fdh-dataset-actions"):
-                                load_button = gr.Button("Load random images")
+                                load_button = gr.Button(tr(lang0, "btn_load_random_images"))
                         dataset_status = gr.Markdown(
-                            dataset_availability_status(next(iter(DATASET_CATALOG))), elem_classes="fdh-status"
+                            dataset_availability_status(default_dataset, lang0), elem_classes="fdh-status"
                         )
 
-                    def load_handler(dataset, texture, selected_split, count, selected_scope, selected_shot_mode):
+                    def load_handler(dataset, texture, selected_split, count, selected_scope, selected_shot_mode, lang):
                         try:
                             new_state, image, caption, status = load_random_samples(
                                 dataset,
@@ -159,60 +204,68 @@ def create_app():
                                 texture_label=texture,
                                 image_scope=selected_scope,
                                 shot_mode=selected_shot_mode,
+                                lang=lang,
                             )
-                            return new_state, image, caption, status, None, "### Prediction summary\nNo prediction available yet.", "Image ready. Choose a model to run detection."
+                            return (
+                                new_state, image, caption, status, None,
+                                render_prediction_tags({}, lang), tr(lang, "inference_hint_ready"),
+                            )
                         except Exception as exc:
-                            return empty_gallery_state(), None, "No image loaded yet.", f"🔴 **Dataset unavailable** — {exc}", None, "### Prediction summary\nNo prediction available yet.", ""
+                            return (
+                                empty_gallery_state(), None, tr(lang, "caption_no_image"),
+                                tr(lang, "dataset_load_error", error=exc), None, render_prediction_tags({}, lang), "",
+                            )
 
-                    def move_handler(current_state, direction):
-                        new_state, image, caption = move_image(current_state, direction)
-                        return new_state, image, caption, None, "### Prediction summary\nNo prediction available yet.", "Image changed. Run detection again for this image."
+                    def move_handler(current_state, direction, lang):
+                        new_state, image, caption = move_image(current_state, direction, lang)
+                        return new_state, image, caption, None, render_prediction_tags({}, lang), tr(lang, "inference_hint_changed")
 
-                    def detect_handler(current_state, model_label):
-                        image, summary, status = detect_loaded_model(sessions, current_state, model_label)
-                        return image, format_prediction_summary(summary), status, format_session_status(sessions.status())
+                    def detect_handler(current_state, model_label, lang):
+                        image, summary, status = detect_loaded_model(sessions, current_state, model_label, lang)
+                        return image, render_prediction_tags(summary, lang), status, format_session_status(sessions.status(), lang)
 
-                    def load_model_handler(model_label):
+                    def load_model_handler(model_label, lang):
                         try:
-                            return format_session_status(load_selected_model(sessions, model_label))
+                            return format_session_status(load_selected_model(sessions, model_label), lang)
                         except Exception as exc:
-                            return f"🔴 **Model load failed** — {type(exc).__name__}: {exc}"
+                            return tr(lang, "model_load_failed", error_type=type(exc).__name__, error=exc)
 
-                    def unload_model_handler():
-                        return format_session_status(unload_selected_model(sessions))
+                    def unload_model_handler(lang):
+                        return format_session_status(unload_selected_model(sessions), lang)
 
                     load_button.click(
                         load_handler,
-                        inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode],
+                        inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode, lang_state],
                         outputs=[state, source_image, position, dataset_status, result_image, result_summary, inference_status],
                     )
                     previous.click(
-                        lambda current_state: move_handler(current_state, -1),
-                        inputs=state,
+                        lambda current_state, lang: move_handler(current_state, -1, lang),
+                        inputs=[state, lang_state],
                         outputs=[state, source_image, position, result_image, result_summary, inference_status],
                     )
                     next_image.click(
-                        lambda current_state: move_handler(current_state, 1),
-                        inputs=state,
+                        lambda current_state, lang: move_handler(current_state, 1, lang),
+                        inputs=[state, lang_state],
                         outputs=[state, source_image, position, result_image, result_summary, inference_status],
                     )
                     model_choice.change(
                         model_status,
-                        inputs=model_choice,
+                        inputs=[model_choice, lang_state],
                         outputs=model_state,
                     )
                     verify_model_button.click(
                         checkpoint_diagnostic,
-                        inputs=model_choice,
+                        inputs=[model_choice, lang_state],
                         outputs=model_state,
                     )
                     load_model_button.click(
                         load_model_handler,
-                        inputs=model_choice,
+                        inputs=[model_choice, lang_state],
                         outputs=runtime_state,
                     )
                     unload_model_button.click(
                         unload_model_handler,
+                        inputs=lang_state,
                         outputs=runtime_state,
                     )
                     dataset_choice.change(
@@ -223,72 +276,132 @@ def create_app():
                     for selection in (texture_choice, split, image_scope, shot_mode):
                         selection.change(
                             load_handler,
-                            inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode],
+                            inputs=[dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode, lang_state],
                             outputs=[state, source_image, position, dataset_status, result_image, result_summary, inference_status],
                         )
                     detect_button.click(
                         detect_handler,
-                        inputs=[state, model_choice],
+                        inputs=[state, model_choice, lang_state],
                         outputs=[result_image, result_summary, inference_status, runtime_state],
                     )
 
-                with gr.Tab("Benchmark", id="benchmark"):
-                    gr.Markdown(
-                        "### Dataset benchmark workspace\n"
-                        "Runs the test split end to end (no heatmaps or boxes) and reports the "
-                        "standard metrics for the task — image AUROC/F1 for anomaly datasets, "
-                        "mAP/precision/recall for detection datasets."
-                    )
+                with gr.Tab(tr(lang0, "tab_benchmark"), id="benchmark") as tab_bench:
+                    bench_header = gr.Markdown(tr(lang0, "benchmark_header"))
                     with gr.Row():
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
                             bench_dataset = gr.Dropdown(
-                                list(DATASET_CATALOG), value=next(iter(DATASET_CATALOG)), label="Dataset"
+                                list(DATASET_CATALOG), value=default_dataset, label=tr(lang0, "benchmark_dataset_label")
                             )
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
                             bench_texture = gr.Dropdown(
-                                texture_choices(next(iter(DATASET_CATALOG))), value="All textures",
-                                label="Texture / pattern",
+                                texture_choices(default_dataset), value="All textures",
+                                label=tr(lang0, "benchmark_texture_label"),
                             )
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
                             bench_shot_mode = gr.Radio(
-                                [SHOT_FULL, SHOT_FEW], value=SHOT_FULL,
-                                label="Sample regime (test split)",
+                                choices=shot_mode_choices(lang0), value="Full-shot",
+                                label=tr(lang0, "benchmark_shot_label"),
                             )
                     with gr.Row():
                         with gr.Column(scale=7, elem_classes="fdh-control-card"):
                             bench_models = gr.CheckboxGroup(
-                                compatible_models(next(iter(DATASET_CATALOG))),
-                                label="Models to benchmark",
+                                compatible_models(default_dataset), label=tr(lang0, "benchmark_models_label")
                             )
                         with gr.Column(scale=3, elem_classes="fdh-control-card fdh-action-run"):
-                            bench_run_button = gr.Button("Run benchmark", variant="primary", elem_classes="fdh-primary")
-                    bench_status = gr.Markdown(
-                        "Select a dataset, a sample regime, and one or more models to begin.",
-                        elem_classes="fdh-status",
-                    )
-                    bench_results = gr.Dataframe(label="Leaderboard", interactive=False, wrap=True)
+                            bench_run_button = gr.Button(
+                                tr(lang0, "btn_run_benchmark"), variant="primary", elem_classes="fdh-primary"
+                            )
+                    bench_status = gr.Markdown(tr(lang0, "benchmark_placeholder"), elem_classes="fdh-status")
+                    bench_results = gr.Dataframe(label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True)
 
-                    def bench_dataset_change_handler(dataset_label):
+                    def bench_dataset_change_handler(dataset_label, lang):
                         return (
                             gr.Dropdown(choices=texture_choices(dataset_label), value="All textures"),
                             gr.CheckboxGroup(choices=compatible_models(dataset_label), value=[]),
                         )
 
-                    def bench_run_handler(dataset_label, texture_label, shot_mode, model_labels):
-                        columns, rows, status = run_benchmark(dataset_label, texture_label, shot_mode, model_labels)
-                        table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
-                        return table, status
+                    def bench_run_handler(dataset_label, texture_label, shot_mode_value, model_labels, lang):
+                        for columns, rows, status in run_benchmark(dataset_label, texture_label, shot_mode_value, model_labels, lang):
+                            table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
+                            yield table, status
 
                     bench_dataset.change(
                         bench_dataset_change_handler,
-                        inputs=bench_dataset,
+                        inputs=[bench_dataset, lang_state],
                         outputs=[bench_texture, bench_models],
                     )
                     bench_run_button.click(
                         bench_run_handler,
-                        inputs=[bench_dataset, bench_texture, bench_shot_mode, bench_models],
+                        inputs=[bench_dataset, bench_texture, bench_shot_mode, bench_models, lang_state],
                         outputs=[bench_results, bench_status],
                     )
+
+        # -- Language toggle: rebuilds every static label/header/button/
+        # placeholder in the new language, and recomputes the handful of
+        # dynamic panels we have live data for (model/dataset/runtime
+        # status, the currently-shown image's caption) instead of just
+        # resetting them. Transient result panels (the last inference's
+        # tags, the benchmark leaderboard's status line) reset to their
+        # placeholder text -- there's no stored "was a result already
+        # shown" state to re-render them from, and resetting on a language
+        # switch is an acceptable, expected trade-off.
+        def apply_language(lang, model_label, dataset_label, gallery_state):
+            _, caption = current_image(gallery_state, lang)
+            return (
+                lang,
+                _nav_html(lang),
+                gr.Tab(label=tr(lang, "tab_single_image")),
+                gr.Tab(label=tr(lang, "tab_benchmark")),
+                tr(lang, "model_session_header"),
+                gr.Dropdown(label=tr(lang, "model_dropdown_label")),
+                model_status(model_label, lang),
+                tr(lang, "btn_load_model"),
+                tr(lang, "btn_unload_model"),
+                tr(lang, "btn_inspect_checkpoint"),
+                tr(lang, "btn_run_detection"),
+                gr.Image(label=tr(lang, "image_selected_label")),
+                caption,
+                tr(lang, "btn_previous"),
+                tr(lang, "btn_next"),
+                gr.Image(label=tr(lang, "image_result_label")),
+                tr(lang, "runtime_memory_header"),
+                format_session_status(sessions.status(), lang),
+                render_prediction_tags({}, lang),
+                tr(lang, "inference_hint_ready") if gallery_state.get("samples") else tr(lang, "inference_hint_start"),
+                tr(lang, "dataset_sampler_header"),
+                gr.Dropdown(label=tr(lang, "dataset_dropdown_label")),
+                gr.Dropdown(label=tr(lang, "texture_dropdown_label")),
+                gr.Radio(choices=split_choices(lang), label=tr(lang, "split_label")),
+                gr.Slider(label=tr(lang, "slider_random_images_label")),
+                gr.Dropdown(choices=image_scope_choices(lang), label=tr(lang, "image_selection_label")),
+                gr.Radio(choices=shot_mode_choices(lang), label=tr(lang, "sample_regime_label")),
+                tr(lang, "btn_load_random_images"),
+                dataset_availability_status(dataset_label, lang),
+                tr(lang, "benchmark_header"),
+                gr.Dropdown(label=tr(lang, "benchmark_dataset_label")),
+                gr.Dropdown(label=tr(lang, "benchmark_texture_label")),
+                gr.Radio(choices=shot_mode_choices(lang), label=tr(lang, "benchmark_shot_label")),
+                gr.CheckboxGroup(label=tr(lang, "benchmark_models_label")),
+                tr(lang, "btn_run_benchmark"),
+                tr(lang, "benchmark_placeholder"),
+                gr.Dataframe(label=tr(lang, "leaderboard_label")),
+            )
+
+        lang_choice.change(
+            apply_language,
+            inputs=[lang_choice, model_choice, dataset_choice, state],
+            outputs=[
+                lang_state, nav_html, tab_single, tab_bench,
+                model_header, model_choice, model_state,
+                load_model_button, unload_model_button, verify_model_button, detect_button,
+                source_image, position, previous, next_image, result_image,
+                runtime_header, runtime_state, result_summary, inference_status,
+                dataset_header, dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode,
+                load_button, dataset_status,
+                bench_header, bench_dataset, bench_texture, bench_shot_mode, bench_models,
+                bench_run_button, bench_status, bench_results,
+            ],
+        )
     return app
 
 

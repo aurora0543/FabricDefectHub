@@ -1,0 +1,55 @@
+# Full local/cloud development environment: every backend (Ultralytics,
+# torchvision, Anomalib), the Gradio UI, quantization/ONNX export tooling,
+# and the test suite -- one `pip install -r requirements-full.txt` and
+# nothing else needs installing afterwards (the trailing `-e .` installs
+# this project itself in editable mode, so `fdh`/`fdh-ui` exist as commands
+# and code edits apply without reinstalling).
+#
+# This mirrors the union of every extra group in pyproject.toml's
+# `[project.optional-dependencies]` (kept there too, for anyone who still
+# wants a narrower `pip install -e ".[ultralytics]"`-style selective
+# install, or for PyPI packaging) -- if you add a dependency to one of
+# those groups, add it here too.
+#
+# Deliberately NOT included: the two NVIDIA-hardware-only extras
+# (`profiling-power-nvidia`, `profiling-tensorrt`) -- `tensorrt`/`pycuda`
+# need a matching CUDA toolkit and generally won't install at all without
+# an NVIDIA GPU (this repo is developed partly on Apple Silicon). Uncomment
+# the block at the bottom on a CUDA host that needs them.
+#
+# For a lean Hugging Face Spaces deployment (UI/inference only, no training
+# stack), use the root `requirements.txt` instead.
+
+-r requirements.txt
+
+# -- ultralytics extra: YOLO detection backend --
+ultralytics
+
+# -- torchvision extra: Faster/Cascade/Mask R-CNN, DETR, UNet++, DeepLabV3+ --
+torch
+torchvision
+torchmetrics
+pycocotools
+onnxscript
+
+# -- anomalib extra: PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet --
+anomalib
+scikit-learn
+scikit-image
+
+# -- quantization + profiling-onnxruntime extras: fp16/INT8 export, ONNX runtime profiling --
+onnx
+onnxruntime
+onnxconverter-common
+
+# -- dev extra: test suite --
+pytest
+jsonschema
+
+# -- this project itself, editable --
+-e .
+
+# -- NVIDIA-hardware-only (uncomment on a CUDA host) --
+# nvidia-ml-py          # profiling-power-nvidia: GPU power draw via NVML
+# tensorrt              # profiling-tensorrt: TensorRT engine profiling
+# pycuda                # profiling-tensorrt: TensorRT INT8 calibration

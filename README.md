@@ -5,6 +5,8 @@ A unified defect-detection benchmark platform for real-world fabric quality insp
 > [!IMPORTANT]
 > This project is currently in the design and early-development stage. Interfaces and directory layout will keep evolving. **[See the Wiki](https://github.com/aurora0543/FabricDefectHub/wiki) for the full architecture, CLI reference, edge-deployment (quantization/power) guide, and roadmap** — this README stays intentionally short.
 
+Two requirements files, no `pip install -e ".[extra]"` bracket-juggling: `requirements.txt` is the lean UI/inference-only set (also what Hugging Face Spaces auto-installs from, paired with the root `app.py`); `requirements-full.txt` installs every model backend, the test suite, and this package itself (editable) in one shot for local/cloud development.
+
 ## UI: Single Image Detection
 
 ![Single Image Detection tab](docs/images/ui-single-image-detection.png)
@@ -16,7 +18,7 @@ The Gradio workspace (`fdh-ui`) is a thin client over the same backend the CLI d
 - runs detection/segmentation/anomaly inference on a sampled or selected image and renders boxes, masks, or anomaly maps.
 
 ```bash
-pip install -e ".[ui]"
+pip install -r requirements.txt
 fdh-ui
 ```
 
@@ -27,7 +29,7 @@ See the [Gradio Workspace wiki page](https://github.com/aurora0543/FabricDefectH
 The same backend is driven headlessly by three `fdh` subcommands:
 
 ```bash
-pip install -e ".[dev]"
+pip install -r requirements-full.txt
 fdh train configs/models/ultralytics_example.yaml   # unified entry point: train/val/export one model, config-driven
 fdh run configs/models/ultralytics_example.yaml      # what fdh train reduces to with no extra flags
 fdh benchmark configs/benchmark_example.yaml         # cross-backend leaderboard

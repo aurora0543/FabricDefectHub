@@ -10,7 +10,7 @@ recorded separately and does not become a false failure on unsupported hosts.
 Install the complete CPU test stack and run the default suite:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -r requirements-full.txt
 python -m pytest -q
 ```
 
@@ -23,15 +23,16 @@ assessment, and CPU-capable profiler paths. Slow real-backend tests are skipped.
 Install the UI dependency before rendering the application:
 
 ```bash
-python -m pip install -e ".[ui]"
+python -m pip install -r requirements.txt
 fdh-ui
 ```
 
 The Gradio-specific build test is intentionally skipped until `gradio` is
 installed. Once available, verify the Single Image Detection tab by setting
 `ZJU_LEAPER_ROOT`, loading random images, browsing with both navigation
-buttons, and running a configured checkpoint or pretrained model. The
-Benchmark tab is an explicit placeholder and is not part of this UI phase.
+buttons, and running a configured checkpoint or pretrained model, then
+verify the Benchmark tab by selecting one or more compatible models and
+running a leaderboard pass.
 
 ## Real backend lifecycle
 
@@ -71,8 +72,8 @@ drivers, or sensors fail explicitly instead of producing an incomplete result.
 `quantization/onnx_quant.py` (fp16, INT8 dynamic, INT8 static) is CPU-only
 and fully executable on any host: `tests/test_quantization.py` runs all
 three levels end to end against a real (small, hand-built) ONNX model with
-`onnx`/`onnxruntime`/`onnxconverter-common` — part of the default `[dev]`
-suite, no hardware dependency. TensorRT INT8 calibration
+`onnx`/`onnxruntime`/`onnxconverter-common` — part of `requirements-full.txt`,
+no hardware dependency. TensorRT INT8 calibration
 (`quantization/tensorrt_calibration.py`) shares the same status as the rest
 of `profiling/tensorrt.py`: written against the documented API, not
 executable without a CUDA/TensorRT host — see that module's docstring.

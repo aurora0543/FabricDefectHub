@@ -25,8 +25,8 @@ dataset preconditions this script assumes are already met.
 --------------------------------------------------------------------------
 Cloud setup checklist (do this once per host, not per run):
 
-1. Install every backend extra:
-       pip install -e ".[ultralytics,torchvision,anomalib]"
+1. Install every backend:
+       pip install -r requirements-full.txt
 2. Stage all three datasets under data/ as symlinks (this project's
    portability convention — see training.DEFAULT_DATASET_ROOTS):
        data/ZJU-Leaper -> <real ZJU-Leaper location>

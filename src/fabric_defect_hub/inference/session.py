@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from fabric_defect_hub.core.types import Prediction, Sample
+from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 from fabric_defect_hub.loader import load_model
 from fabric_defect_hub.models.base import Artifact, ModelAdapter
 
@@ -98,7 +99,7 @@ class InferenceSessionManager:
                 unload()
             self._active = None
         gc.collect()
-        _clear_accelerator_cache()
+        clear_accelerator_cache()
 
     @staticmethod
     def _load_artifact(adapter: ModelAdapter, artifact: Artifact) -> None:
@@ -109,24 +110,28 @@ class InferenceSessionManager:
         raise TypeError(f"{type(adapter).__name__} does not implement load_trained_model().")
 
 
-def format_session_status(status: dict[str, Any]) -> str:
+def format_session_status(status: dict[str, Any], lang: str = DEFAULT_LANGUAGE) -> str:
     """Render portable runtime metrics for a lightweight UI status panel."""
 
-    model = status["model_id"] or "none"
-    model_memory = _format_mib(status.get("model_memory_bytes"))
-    process_memory = _format_mib(status.get("process_rss_bytes"))
+    model = status["model_id"] or tr(lang, "value_none")
+    model_memory = _format_mib(status.get("model_memory_bytes"), lang)
+    process_memory = _format_mib(status.get("process_rss_bytes"), lang)
     lines = [
-        f"**Active model:** `{model}`",
-        f"**Runtime device:** `{status['device']}`",
-        f"**Model parameters and buffers:** `{model_memory}`",
-        f"**Process RSS:** `{process_memory}`",
+        tr(lang, "runtime_active_model", model=model),
+        tr(lang, "runtime_device", device=status["device"]),
+        tr(lang, "runtime_params", value=model_memory),
+        tr(lang, "runtime_rss", value=process_memory),
     ]
     if status.get("cuda_allocated_bytes") is not None:
-        lines.append(f"**CUDA allocated / reserved:** `{_format_mib(status['cuda_allocated_bytes'])} / {_format_mib(status['cuda_reserved_bytes'])}`")
+        lines.append(tr(
+            lang, "runtime_cuda",
+            alloc=_format_mib(status["cuda_allocated_bytes"], lang),
+            reserved=_format_mib(status["cuda_reserved_bytes"], lang),
+        ))
     if status.get("mps_allocated_bytes") is not None:
-        lines.append(f"**MPS allocated:** `{_format_mib(status['mps_allocated_bytes'])}`")
+        lines.append(tr(lang, "runtime_mps", value=_format_mib(status["mps_allocated_bytes"], lang)))
     if "load_time_ms" in status:
-        lines.append(f"**Load time:** `{status['load_time_ms']:.1f} ms`")
+        lines.append(tr(lang, "runtime_load_time", ms=status["load_time_ms"]))
     return "  \n".join(lines)
 
 
@@ -186,7 +191,12 @@ def _process_rss_bytes() -> int | None:
         return None
 
 
-def _clear_accelerator_cache() -> None:
+def clear_accelerator_cache() -> None:
+    """Release cached CUDA/MPS allocator memory. Shared with the Benchmark
+    tab's model-cycling loop (`web/benchmark.py`), which has the same
+    load-one-model-at-a-time-then-free-it lifecycle as this session manager
+    but doesn't go through it (it evaluates a batch, not a resident session)."""
+
     try:
         import torch
 
@@ -198,5 +208,5 @@ def _clear_accelerator_cache() -> None:
         return
 
 
-def _format_mib(value: int | None) -> str:
-    return "unavailable" if value is None else f"{value / (1024 * 1024):.1f} MiB"
+def _format_mib(value: int | None, lang: str = DEFAULT_LANGUAGE) -> str:
+    return tr(lang, "value_unavailable") if value is None else f"{value / (1024 * 1024):.1f} MiB"

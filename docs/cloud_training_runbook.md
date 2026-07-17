@@ -27,12 +27,12 @@ git pull
 
 ```bash
 conda activate fdh_env
-pip install -e ".[ultralytics,torchvision,anomalib]"
+pip install -r requirements-full.txt
 ```
 
-Only needed again later if `pyproject.toml`'s dependencies change — an
-editable install (`-e`) picks up code changes automatically without
-reinstalling.
+Only needed again later if `requirements-full.txt`/`pyproject.toml` change
+— it ends with an editable install of this project (`-e .`), which picks up
+code changes automatically without reinstalling.
 
 ## 3. Stage datasets under `data/` as symlinks
 
@@ -135,6 +135,3 @@ model overwrites just that model's file here, nothing else.
   end on a real GPU host yet — they were wired up and verified by tracing
   the adapter's own dataset-class-selection logic, not by a live run.
   Watch these four in the `--mode test` smoke pass.
-- The web UI's Benchmark tab only recognizes `detection`/`anomaly` task
-  models; the 3 segmentation models (Mask R-CNN, UNet++, DeepLabV3+) are
-  usable in the single-image inference tab but won't appear there.
