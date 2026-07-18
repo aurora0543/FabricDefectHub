@@ -33,7 +33,7 @@ Two short recordings of the Gradio UI in action.
 
 **Single Image Detection** — detection/segmentation/anomaly inference on one image:
 
-<video src="https://github.com/aurora0543/FabricDefectHub/raw/main/docs/videos/detection.mp4" controls width="100%"></video>
+[<video src="https://github.com/aurora0543/FabricDefectHub/raw/main/docs/videos/detection.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/5ce67795-705e-4888-9459-d324ca6f4315)
 
 **Benchmark** — scoring multiple models into a leaderboard:
 
