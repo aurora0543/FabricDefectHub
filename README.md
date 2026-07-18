@@ -37,7 +37,7 @@ Two short recordings of the Gradio UI in action.
 
 **Benchmark** — scoring multiple models into a leaderboard:
 
-<video src="https://github.com/aurora0543/FabricDefectHub/raw/main/docs/videos/benchmark.mp4" controls width="100%"></video>
+[<video src="https://github.com/aurora0543/FabricDefectHub/raw/main/docs/videos/benchmark.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/f11ec7c1-0bd7-4a97-8ccd-37bb29e7d8e8)
 
 ## Datasets
 
