@@ -27,9 +27,9 @@ The system architecture comprises a frontend and a backend. The frontend provide
 | 13 | EfficientAD | Teacher-Student | Zero-shot (unsupervised) |
 | 14 | SuperSimpleNet | Feature embedding | Zero-shot (unsupervised) |
 
-## Demo Videos
+## Web UI
 
-Two short recordings of the Gradio UI in action.
+We built a Gradio-based UI hub for the benchmark, providing an intuitive interface for the following functions. These capabilities are demonstrated in the two recordings below.
 
 **Single Image Detection** — detection/segmentation/anomaly inference on one image:
 
@@ -47,7 +47,15 @@ Two short recordings of the Gradio UI in action.
 
 ## Quick Start
 
-Pretrained checkpoints/weights aren't tracked in this repo — first download them from [this Google Drive folder](https://drive.google.com/drive/folders/1sIe5oP42GyOfaz-ON9FRkQzlCb2NlnNj?usp=drive_link) and place them under `artifacts/models/published/`. Then:
+1. Obtain the pretrained model weights from [ Google Drive folder](https://drive.google.com/drive/folders/1sIe5oP42GyOfaz-ON9FRkQzlCb2NlnNj?usp=drive_link) and place them under `artifacts/models/published/`.
+
+2. Get and place the datasets under `data/`. The datasets can be downloaded from the following links:
+
+- [ZJU-Leaper](http://www.qaas.zju.edu.cn/zju-leaper/)
+- [RAW-Fabric](https://data.mendeley.com/datasets/db6g85xsyg/1)
+- [MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad)
+
+1. Install the dependencies and launch the Gradio UI:
 
 ```bash
 git clone https://github.com/aurora0543/FabricDefectHub.git && cd FabricDefectHub
@@ -76,11 +84,176 @@ fdh benchmark configs/benchmark_example.yaml         # cross-backend leaderboard
 pip install -r requirements-full.txt
 ```
 
-**(b) Add a new model.**
-- To add a variant to an existing backend, register it in that backend's presets module: `models/torchvision/presets.py`'s `MODEL_VARIANTS` maps a friendly name to its factory function and weights enum, and `models/anomalib/presets.py`'s `MODEL_ALIASES` / `MODEL_PRESETS` do the same for Anomalib.
-- To add an entirely new backend, implement the `ModelAdapter` abstract base class (`models/base.py`) — `train()`, `predict()`, `export()` — and register it with `@register_model("<backend-name>")` (`core/registry.py`).
+**(b) Prepare datasets and model artifacts.**
 
-**(c) Add a new dataset.** Implement the `DatasetAdapter` abstract base class (`datasets/base.py`) — a single `load_samples()` method returning a unified list of `Sample` objects — and register it with `@register_dataset("<dataset-name>")` (`core/registry.py`). Once registered, it is resolvable by name via `fdh train --dataset <dataset-name>`.
+- Download the datasets you need and place them below `data/`: [ZJU-Leaper](http://www.qaas.zju.edu.cn/zju-leaper/), [RAW-Fabric](https://data.mendeley.com/datasets/db6g85xsyg/1), or [MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad). Use only ZJU-Leaper and RAW-Fabric for fabric-model training; MVTec AD is reserved for cross-domain zero-shot evaluation.
+- For pretrained inference, download the published weights from the [Google Drive folder](https://drive.google.com/drive/folders/1sIe5oP42GyOfaz-ON9FRkQzlCb2NlnNj?usp=drive_link) and place them in `artifacts/models/published/`.
+- Select a registered dataset from the command line while developing a model. Start with the small smoke-test mode, then run the full configuration once its data loading succeeds:
+
+```bash
+fdh train yolov8n --dataset <dataset-name> --mode test
+fdh train configs/models/ultralytics_example.yaml --dataset <dataset-name>
+```
+
+Replace `<dataset-name>` with the dataset registry name. The first command exercises the dataset adapter with an 8-image pipeline; the second runs the normal config-driven training, validation, and export workflow. Use `fdh benchmark configs/benchmark_example.yaml` after preparing the required datasets and model artifacts to generate a cross-backend leaderboard.
+
+### Extension Interfaces
+
+FabricDefectHub keeps data loading and model execution behind two adapters. Extensions convert backend-specific inputs and outputs at these boundaries; the CLI, evaluator, UI, and benchmark runner then use the same registry names and unified contracts. All source paths in this section are relative to `src/fabric_defect_hub/`.
+
+| Extension | Interface to implement | What the interface provides | Registry entry |
+| --- | --- | --- | --- |
+| Dataset | `datasets/base.py` → `DatasetAdapter` | `load_samples()` returns `list[Sample]` in the unified dataset contract | `@register_dataset("<dataset-name>")` |
+| Model/backend | `models/base.py` → `ModelAdapter` | `train()`, `predict()`, and `export()` bridge a backend to the unified prediction and artifact workflow | `@register_model("<backend-name>")` |
+
+`Sample` and `Prediction` are defined in `core/types.py`. `Sample` contains `id`, `image_path`, `task`, and `annotations`; `Prediction` contains `sample_id` and only the task-relevant outputs. Detection fills `boxes`, `labels`, and `scores`; segmentation additionally fills `masks`; anomaly detection fills `anomaly_score` and optionally `anomaly_map`. Do not force those tasks into one annotation format.
+
+#### Add a dataset
+
+1. Place the original files under `data/` and create `datasets/my_fabric.py`. The adapter owns all source-format parsing; callers should only see `Sample` objects.
+2. Subclass `DatasetAdapter`, set `name`, and return one `Sample` per image. For a detection dataset, the minimal shape is:
+
+```python
+# src/fabric_defect_hub/datasets/my_fabric.py
+from fabric_defect_hub.core.registry import register_dataset
+from fabric_defect_hub.core.types import Annotations, Sample
+from fabric_defect_hub.datasets.base import DatasetAdapter
+
+
+@register_dataset("my-fabric")
+class MyFabricDataset(DatasetAdapter):
+    name = "my-fabric"
+
+    def load_samples(self) -> list[Sample]:
+        samples: list[Sample] = []
+        for image_path, boxes, labels in self._read_split(self.root, self.split):
+            samples.append(
+                Sample(
+                    id=image_path.stem,
+                    image_path=str(image_path),
+                    task="detection",
+                    annotations=Annotations(boxes=boxes, labels=labels),
+                )
+            )
+        return samples
+```
+
+For segmentation, also fill `Annotations.masks`; for anomaly detection, fill `Annotations.is_anomalous` and, when available, `Annotations.anomaly_mask`.
+
+3. Import the new adapter in `datasets/__init__.py`. `load_dataset()` imports this package to trigger decorators, so omitting this import leaves the registry unaware of the dataset.
+4. Add `<dataset-name>: "data/<directory>"` to `DEFAULT_DATASET_ROOTS` in `training.py` if the dataset should work with the default local layout. Then use the registry name in a model YAML's `data.dataset` field or pass it with `--dataset`.
+5. Validate loading before a full run:
+
+```bash
+fdh train <model-name> --dataset <dataset-name> --mode test
+```
+
+Once this succeeds, the dataset is available to normal training and benchmark configurations through its registry name.
+
+#### Add a model
+
+There are two integration paths. Add a **variant** when the model belongs to an existing Ultralytics, torchvision, or Anomalib backend; add a **backend** only when its native train/predict/export lifecycle needs a new adapter.
+
+##### 1. Add a variant to an existing backend
+
+Edit the backend's preset module; no new `ModelAdapter` is needed.
+
+- **Ultralytics:** add a canonical name to `models/ultralytics/presets.py` → `MODEL_VARIANTS`, then add user-friendly spellings to `VARIANT_ALIASES` and optional training overrides to `VARIANT_TRAIN_OVERRIDES`.
+
+```python
+# models/ultralytics/presets.py
+MODEL_VARIANTS["yolov12n"] = {
+    "checkpoint": "yolo12n.pt",
+    "architecture": "yolo12n.yaml",
+}
+VARIANT_ALIASES["yolo12n"] = "yolov12n"
+VARIANT_TRAIN_OVERRIDES["yolov12n"] = {"batch": 16}
+```
+
+- **torchvision:** add a `MODEL_VARIANTS` record in `models/torchvision/presets.py`. Its `factory`, `weights_enum`, and `task` values are consumed by the existing adapter; use `task: "detect"` or `task: "instance_segmentation"`.
+
+```python
+# models/torchvision/presets.py
+MODEL_VARIANTS["my_detector"] = {
+    "factory": "my_detector",
+    "weights_enum": "MyDetector_Weights",
+    "task": "detect",
+}
+VARIANT_ALIASES["my-detector"] = "my_detector"
+```
+
+- **Anomalib:** add the public name to `models/anomalib/presets.py` → `MODEL_ALIASES`, and add constructor defaults keyed by the Anomalib class name in `MODEL_PRESETS`.
+
+```python
+# models/anomalib/presets.py
+MODEL_ALIASES["myanomaly"] = "MyAnomaly"
+MODEL_PRESETS["MyAnomaly"] = {"backbone": "resnet18"}
+```
+
+Then add or update a YAML under `configs/models/` with the appropriate `backend` and `model.variant` (Ultralytics/torchvision) or `model.name` (Anomalib). `fdh train <variant-name>` resolves against these configuration files, so a preset alone does not create a CLI training entry.
+
+##### 2. Add a new backend
+
+Create `models/<backend-name>/adapter.py`. The three abstract methods are mandatory: `train()` returns an `Artifact`, `predict()` returns exactly one `Prediction` for each input `Sample`, and `export()` returns an `ExportedArtifact`.
+
+```python
+# src/fabric_defect_hub/models/my_backend/adapter.py
+from typing import Any
+
+from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.types import Prediction, Sample
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+
+
+@register_model("my-backend")
+class MyBackendAdapter(ModelAdapter):
+    backend = "my-backend"
+
+    def __init__(self, name: str = "my-model", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.native_model = None
+
+    def train(self, config: dict[str, Any]) -> Artifact:
+        weights_path = self._train_with_native_library(config)
+        return Artifact(
+            path=str(weights_path),
+            backend=self.backend,
+            metadata={"model_name": self.name},
+        )
+
+    def predict(self, samples: list[Sample], artifact: Artifact) -> list[Prediction]:
+        self._load_native_weights(artifact.path)
+        return [
+            Prediction(
+                sample_id=sample.id,
+                boxes=[[10.0, 20.0, 30.0, 40.0]],
+                labels=["defect"],
+                scores=[0.95],
+            )
+            for sample in samples
+        ]
+
+    def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
+        exported_path = self._export_with_native_library(artifact.path, target)
+        return ExportedArtifact(path=str(exported_path), target=target)
+```
+
+The literal detection values above are placeholders: replace them with the native model outputs, converted to image-coordinate boxes and aligned to the input `sample.id`. A segmentation backend instead fills `masks`; an anomaly backend fills `anomaly_score` and optionally `anomaly_map`.
+
+Registering the decorator is necessary but not sufficient. Make these additional changes so the backend can be loaded and trained through the project entry points:
+
+1. Add `"my-backend": "fabric_defect_hub.models.my_backend.adapter"` to `_MODEL_BACKEND_MODULES` in `loader.py`. This makes `load_model("my-backend", "my-model")` import the module and trigger `@register_model`.
+2. Create the backend's `config.py` and `pipeline.py`, modelled on an existing backend, plus a YAML under `configs/models/`.
+3. Add the backend to `_BACKEND_PIPELINE_MODULES`, `_BACKEND_CONFIG_CLASSES`, `_BACKEND_DATA_SELECTIONS`, and `_BACKEND_MODEL_KEY` in `training.py`. These maps tell `fdh train` which pipeline to run, how to parse its YAML, which dataset-selection fields to override, and whether its model selector is `model.name` or `model.variant`.
+4. Add the backend name to the `--backend` choices in `cli.py` for both `fdh run` and `fdh train`.
+5. If the Web UI should expose the model, add its catalog entry and checkpoint metadata there as a separate UI integration step.
+
+Put any published checkpoint needed for inference in `artifacts/models/published/`, then verify the model with a registered dataset before using it in a benchmark:
+
+```bash
+fdh train <model-name> --dataset <dataset-name> --mode test
+fdh benchmark configs/benchmark_example.yaml
+```
 
 ## Learn More
 
