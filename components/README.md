@@ -1,39 +1,57 @@
 # components/
 
-Unmodified checkouts of third-party research repos that ship a model but
-not an installable package — no PyPI release, no stable API, just scripts
-and `nn.Module`s (e.g. [Dinomaly](https://github.com/guojiajeremy/Dinomaly),
-[MambaAD](https://github.com/lewandofskee/MambaAD)). These don't belong in
-`anomalib`'s adapter tree because they aren't in `anomalib`'s model zoo and
-never will be — they're the author's own code, vendored as-is.
+Research repos that ship a model but not an installable package — no PyPI
+release, no stable API, just scripts and `nn.Module`s. These don't belong
+in `anomalib`'s adapter tree because they aren't in `anomalib`'s model zoo
+and never will be — they're the author's own code, kept here.
 
-Each one is a **git submodule** pointing at the upstream repo, not a
-plain copy — `git submodule status` shows the exact commit pinned. After
-cloning this project, run:
+Each one is a **git submodule pointing at our own fork** of the upstream
+repo (e.g. `components/dinomaly` -> `aurora0543/Dinomaly`, forked from
+[guojiajeremy/Dinomaly](https://github.com/guojiajeremy/Dinomaly)) — not
+upstream directly, and not a plain copy. `git submodule status` shows the
+exact commit pinned. After cloning this project, run:
 
 ```
 git submodule update --init --recursive
 ```
 
 to actually populate `components/*` (a fresh clone leaves these
-directories empty until then). To add another one:
+directories empty until then).
+
+**Why a fork instead of upstream directly:** these repos are written as
+one-off scripts, not libraries, and sometimes hardcode paths that assume
+they're being run from their own repo root (e.g. Dinomaly's
+`models/vit_encoder.py` used to hardcode `"backbones/weights"` as a
+*relative* path — every process that imported it dumped ~400MB of
+DINOv2 weights whereever that process's cwd happened to be, which was
+this project's own root, not the submodule). A fork gives us a legitimate
+place to patch exactly that kind of thing (see `aurora0543/Dinomaly`'s
+own commit history) without violating "never edit vendored source in
+`components/`" — the fork *is* the vendored source at that point, edited
+deliberately and diffably against its own upstream.
+
+To add another one:
 
 ```
-git submodule add <upstream-url> components/<name>
+gh repo fork <upstream-owner>/<repo> --clone=false   # creates <you>/<repo>
+git submodule add https://github.com/<you>/<repo>.git components/<name>
 ```
 
 Rules for anything placed here:
 
-- **Never edit vendored source, and never commit inside a submodule from
-  this repo's working tree.** If a fix is needed, patch it in the adapter
-  that wraps it (`src/fabric_defect_hub/models/<name>/`), not here. This
-  keeps `components/<name>` a clean checkout of whatever commit it's
-  pinned to — `git submodule status` should never show a `+` (dirty/
-  diverged) prefix.
-- **Bumping the pinned commit** is deliberate: `cd components/<name> &&
+- **Never edit files directly under `components/<name>` from this repo's
+  working tree, and never commit there without deliberately intending to
+  patch the fork.** Any fix belongs in a commit on the fork itself (`cd
+  components/<name> && git commit && git push origin <branch>`, then bump
+  the pointer in the parent repo — see below) — not an incidental side
+  effect of running the model, and not done from the adapter's side.
+  `git submodule status` should never show a `+` (dirty/diverged) prefix
+  from *uncommitted* changes; a deliberate fork patch is the one case
+  where the pinned commit is expected to move.
+- **Bumping the pinned commit** (whether picking up an upstream update via
+  the fork, or landing a new patch on the fork): `cd components/<name> &&
   git fetch && git checkout <ref>`, then commit the resulting
-  `components/<name>` pointer change in the parent repo — not an
-  incidental side effect of editing files inside it.
+  `components/<name>` pointer change in the parent repo.
 - **One subdirectory per repo**, named after the repo (`components/dinomaly/`).
 - The corresponding adapter under `src/fabric_defect_hub/models/<name>/`
   is responsible for adding `components/<name>` to `sys.path` before
