@@ -15,8 +15,8 @@ from fabric_defect_hub.catalog import (
 )
 
 
-def test_canonical_models_has_fourteen_entries():
-    assert len(CANONICAL_MODELS) == 14
+def test_canonical_models_has_fifteen_entries():
+    assert len(CANONICAL_MODELS) == 15
 
 
 def test_canonical_model_keys_are_unique():
@@ -40,6 +40,7 @@ def test_canonical_model_labels_are_unique():
         ("torchvision", "deeplabv3plus_resnet50", "deeplabv3plus_resnet50"),
         ("anomalib", "PatchCore", "PatchCore"),
         ("anomalib", "patchcore", "PatchCore"),  # case-insensitive
+        ("dinomaly", "dinov2reg_vit_base_14", "Dinomaly"),
     ],
 )
 def test_find_canonical_model_matches(backend, variant, expected_key):
@@ -69,6 +70,11 @@ def test_published_path_uses_ckpt_for_anomalib():
     assert published_path(model).suffix == ".ckpt"
 
 
+def test_published_path_uses_pth_for_dinomaly():
+    model = find_canonical_model("dinomaly", "dinov2reg_vit_base_14")
+    assert published_path(model).suffix == ".pth"
+
+
 def test_published_path_is_keyed_by_model_key():
     model = find_canonical_model("ultralytics", "yolov8s")
     assert published_path(model).name == "yolov8s.pt"
@@ -86,6 +92,16 @@ def test_metadata_for_anomalib_resolves_model_class():
     metadata = metadata_for(model)
     assert metadata["trusted"] is True
     assert metadata["model_class"] == "ReverseDistillation"
+
+
+def test_metadata_for_dinomaly_resolves_architecture_fields():
+    model = find_canonical_model("dinomaly", "dinov2reg_vit_base_14")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert metadata["encoder_name"] == "dinov2reg_vit_base_14"
+    assert metadata["target_layers"] == [2, 3, 4, 5, 6, 7, 8, 9]
+    assert metadata["image_size"] == 448
+    assert metadata["crop_size"] == 392
 
 
 def test_publish_artifact_returns_none_for_non_canonical_variant(tmp_path):

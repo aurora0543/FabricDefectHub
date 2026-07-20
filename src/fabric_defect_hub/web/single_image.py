@@ -91,6 +91,17 @@ DATASET_CATALOG = {
         "tasks": ("anomaly", "segmentation"),
     },
 }
+# Backends whose `predict()` accepts `output_dir=` to persist pixel-level
+# anomaly maps for the heatmap overlay (`_overlay_anomaly_map`).
+_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly"}
+
+# `model_status` probes `importlib.util.find_spec(package)` to check a
+# backend is installed. That only works when the backend name IS the pip
+# package name (true for "anomalib"/"torchvision"/"ultralytics") -- Dinomaly
+# is vendored code (see components/README.md), not a pip package named
+# "dinomaly", so it's probed via its actual hard dependency instead.
+_BACKEND_PROBE_MODULE = {"dinomaly": "timm"}
+
 ALL_TEXTURES = "All textures"
 ALL_IMAGES = "All images"
 DEFECT_ONLY = "Defect only"
@@ -254,7 +265,7 @@ def empty_gallery_state() -> dict[str, Any]:
 def model_status(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     spec = MODEL_CATALOG[model_label]
     package = spec["backend"]
-    installed = importlib.util.find_spec(package) is not None
+    installed = importlib.util.find_spec(_BACKEND_PROBE_MODULE.get(package, package)) is not None
     if not installed:
         return tr(lang, "model_status_unavailable", package=package)
     path = Path(spec["checkpoint"])
@@ -423,7 +434,7 @@ def detect_loaded_model(
     spec = MODEL_CATALOG[model_label]
     sample = sample_from_dict(state["samples"][state["index"]])
     try:
-        if spec["backend"] == "anomalib":
+        if spec["backend"] in _ANOMALY_MAP_BACKENDS:
             maps_dir = RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label)
             prediction = session_manager.predict(model_label, [sample], output_dir=str(maps_dir))[0]
         else:
@@ -435,7 +446,7 @@ def detect_loaded_model(
 
 
 def _predict_with_model(model: Any, spec: dict[str, Any], model_label: str, sample: Sample) -> list[Prediction]:
-    if spec["backend"] == "anomalib":
+    if spec["backend"] in _ANOMALY_MAP_BACKENDS:
         maps_dir = RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label)
         return model.predict([sample], artifact_for_model(spec), output_dir=str(maps_dir))
     return model.predict([sample], artifact_for_model(spec))

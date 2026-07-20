@@ -73,6 +73,7 @@ DEFAULT_DATASET_ROOTS: dict[str, str] = {
 # that backend's `data` config section.
 _BACKEND_DATA_SELECTIONS: dict[str, tuple[str, str]] = {
     "anomalib": ("train_selection", "test_selection"),
+    "dinomaly": ("train_selection", "test_selection"),
     "torchvision": ("train_selection", "val_selection"),
     "ultralytics": ("train_selection", "val_selection"),
 }
@@ -81,23 +82,32 @@ _BACKEND_PIPELINE_MODULES = {
     "ultralytics": "fabric_defect_hub.models.ultralytics.pipeline",
     "torchvision": "fabric_defect_hub.models.torchvision.pipeline",
     "anomalib": "fabric_defect_hub.models.anomalib.pipeline",
+    "dinomaly": "fabric_defect_hub.models.dinomaly.pipeline",
 }
 
 _BACKEND_CONFIG_CLASSES = {
     "ultralytics": ("fabric_defect_hub.models.ultralytics.config", "UltralyticsConfig"),
     "torchvision": ("fabric_defect_hub.models.torchvision.config", "TorchvisionConfig"),
     "anomalib": ("fabric_defect_hub.models.anomalib.config", "AnomalibConfig"),
+    "dinomaly": ("fabric_defect_hub.models.dinomaly.config", "DinomalyConfig"),
 }
 
 # Per backend: which key under `model:` selects which model gets trained.
 # Ultralytics/torchvision key their model families by `variant`
 # (yolov8n/yolov8s/..., fasterrcnn_resnet50_fpn/...); anomalib's five models
-# are keyed by `name` (PatchCore/PaDiM/...) instead.
+# and Dinomaly's encoder presets are keyed by `name` instead (PatchCore/
+# PaDiM/... or dinov2reg_vit_base_14/...).
 _BACKEND_MODEL_KEY: dict[str, str] = {
     "anomalib": "name",
+    "dinomaly": "name",
     "torchvision": "variant",
     "ultralytics": "variant",
 }
+
+# Backends whose adapter trains one-class (normal-only) -- their train
+# split's `use_defect` is always forced to False regardless of CLI/UI
+# overrides (see `apply_dataset_overrides`).
+_ONE_CLASS_BACKENDS = {"anomalib", "dinomaly"}
 
 
 @dataclass
@@ -131,8 +141,11 @@ def infer_backend(raw: dict[str, Any]) -> str:
 
     Checked in order:
     1. An explicit top-level `backend:` key (always wins).
-    2. `model.name` present -> `anomalib` (its models are named, e.g.
-       'PatchCore'; Ultralytics/torchvision are keyed by `variant` instead).
+    2. `model.name` present -> resolved against anomalib's model aliases
+       first (e.g. 'PatchCore'), then Dinomaly's encoder presets (e.g.
+       'dinov2reg_vit_base_14') -- both are keyed by `name` rather than
+       `variant`, so a config using this key should set an explicit
+       top-level `backend:` if the two ever collide on a name.
     3. `model.variant` keyword: `yolo*` -> `ultralytics`,
        `fasterrcnn*`/`maskrcnn*` -> `torchvision`.
     """
@@ -150,7 +163,21 @@ def infer_backend(raw: dict[str, Any]) -> str:
         )
     model = raw["model"]
     if "name" in model:
-        return "anomalib"
+        name = str(model["name"])
+        from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
+        from fabric_defect_hub.models.dinomaly.presets import ENCODER_PRESETS
+
+        try:
+            resolve_model_class_name(name)
+            return "anomalib"
+        except KeyError:
+            pass
+        if name in ENCODER_PRESETS:
+            return "dinomaly"
+        raise ValueError(
+            f"model.name={name!r} matches neither an anomalib model alias nor a Dinomaly "
+            "encoder preset; pass backend explicitly or add a 'backend' key to the config"
+        )
     variant = str(model.get("variant", "")).lower()
     if variant.startswith("yolo"):
         return "ultralytics"
@@ -290,11 +317,11 @@ def apply_dataset_overrides(
 ) -> dict[str, Any]:
     """Return a copy of `raw` with `overrides` layered onto its `data` section.
 
-    Per-model shot logic: Anomalib's five models all train one-class, so
-    its train split always has `use_defect` forced to `False` (and
-    `defect_ratio` dropped) regardless of `overrides.use_defect` — that flag
-    only ever reaches its *test* split. Ultralytics/torchvision have no such
-    constraint; both overrides apply to their train split as given.
+    Per-model shot logic: Anomalib's five models and Dinomaly all train
+    one-class, so their train split always has `use_defect` forced to
+    `False` (and `defect_ratio` dropped) regardless of `overrides.use_defect`
+    — that flag only ever reaches their *test* split. Ultralytics/torchvision
+    have no such constraint; both overrides apply to their train split as given.
     """
 
     if overrides.is_empty():
@@ -329,7 +356,7 @@ def apply_dataset_overrides(
     _apply_selection_overrides(train_selection, overrides, is_train_split=True, dataset=dataset_name)
     _apply_selection_overrides(other_selection, overrides, is_train_split=False, dataset=dataset_name)
 
-    if backend == "anomalib":
+    if backend in _ONE_CLASS_BACKENDS:
         # One-class training: the train split is always normal-only, no
         # matter what --use-defect says (that only ever affects the test
         # split's mix, applied above via `other_selection`).
@@ -443,6 +470,15 @@ def _apply_test_speed_overrides(raw: dict[str, Any], backend: str) -> dict[str, 
         engine_kwargs = dict(train.get("engine_kwargs") or {})
         engine_kwargs["max_epochs"] = 1
         train["engine_kwargs"] = engine_kwargs
+    elif backend == "dinomaly":
+        # Also shrink batch/image size, not just total_iters: at the
+        # config's own defaults (batch_size 16, 448/392 images) even 8
+        # iterations of a DINOv2-base forward+backward on CPU is minutes,
+        # not seconds -- defeats the point of a "prove the wiring" smoke run.
+        train["total_iters"] = TEST_SHOT_NUM_SAMPLES
+        train["batch_size"] = min(int(train.get("batch_size", TEST_SHOT_NUM_SAMPLES)), TEST_SHOT_NUM_SAMPLES)
+        train["image_size"] = 98
+        train["crop_size"] = 84
     else:
         train["epochs"] = 1
         train["patience"] = 1
@@ -518,7 +554,7 @@ def run_train(
     if publish and result.registered_artifact is not None:
         from fabric_defect_hub.catalog import publish_artifact
 
-        model_key = "name" if resolved_backend == "anomalib" else "variant"
+        model_key = _BACKEND_MODEL_KEY[resolved_backend]
         resolved_variant = raw.get("model", {}).get(model_key)
         if resolved_variant:
             destination = publish_artifact(resolved_backend, resolved_variant, result.registered_artifact.path)

@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="run a model or benchmark YAML config")
     run_parser.add_argument("config", help="path to YAML config")
     run_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
         help="model backend; inferred from the config when omitted",
     )
 
@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list", action="store_true", help="list resolvable model configs under --config-dir and exit"
     )
     train_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     train_parser.add_argument(
@@ -51,9 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "override which model in the backend's family gets trained: written to "
             "model.variant for ultralytics/torchvision (e.g. yolov8n, yolov8s, yolo11n, "
-            "fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn) or model.name for anomalib "
-            "(e.g. PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet); lets one config "
-            "file train any model its backend supports instead of needing one YAML per model"
+            "fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn) or model.name for anomalib/dinomaly "
+            "(e.g. PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet, dinov2reg_vit_base_14); "
+            "lets one config file train any model its backend supports instead of needing one "
+            "YAML per model"
         ),
     )
     train_parser.add_argument(
@@ -110,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory searched when 'model' is a filename stem or keyword (default: configs/models)",
     )
     predict_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     predict_parser.add_argument(
@@ -136,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     predict_parser.add_argument(
         "--output-dir",
-        help="anomalib only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
+        help="anomalib/dinomaly only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
     )
     return parser
 
@@ -170,6 +171,8 @@ def _run_config(path: str, backend: str | None) -> Any:
         from fabric_defect_hub.models.ultralytics.pipeline import run_from_yaml
     elif selected == "torchvision":
         from fabric_defect_hub.models.torchvision.pipeline import run_from_yaml
+    elif selected == "dinomaly":
+        from fabric_defect_hub.models.dinomaly.pipeline import run_from_yaml
     else:
         from fabric_defect_hub.models.anomalib.pipeline import run_from_yaml
     result = run_from_yaml(path)

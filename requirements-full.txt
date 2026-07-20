@@ -37,6 +37,11 @@ anomalib
 scikit-learn
 scikit-image
 
+# -- dinomaly extra: vendored research model, see components/README.md --
+timm
+scipy
+tabulate
+
 # -- quantization + profiling-onnxruntime extras: fp16/INT8 export, ONNX runtime profiling --
 onnx
 onnxruntime

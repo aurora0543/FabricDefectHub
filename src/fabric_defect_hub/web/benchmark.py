@@ -9,15 +9,16 @@ build a leaderboard.
 Every selected model is cycled through the same mount -> test -> unmount ->
 next-model pipeline (`run_benchmark`'s loop): one model is loaded, evaluated,
 then explicitly released (`_release_model`) before the next one is
-instantiated, so a full run of all 14 catalog models — several hundred MB to
+instantiated, so a full run of all `CANONICAL_MODELS` — several hundred MB to
 ~1GB of weights each — never holds more than one resident model in memory at
 a time. `run_benchmark` is a generator that yields after every model so the
 UI can render results as they land instead of blocking until the whole
 leaderboard is done.
 
-No heatmaps or bounding boxes are rendered here — the anomalib adapter is
-called without `output_dir`, so only image-level metrics are computed and
-nothing is written to disk; this tab only ever needs numbers, not images.
+No heatmaps or bounding boxes are rendered here — anomaly-map-producing
+adapters (anomalib, Dinomaly) are called without `output_dir`, so only
+image-level metrics are computed and nothing is written to disk; this tab
+only ever needs numbers, not images.
 """
 
 from __future__ import annotations

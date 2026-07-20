@@ -39,7 +39,12 @@ _ADAPTER_MODULES: dict[str, tuple[str, str]] = {
     "ultralytics": ("fabric_defect_hub.models.ultralytics.adapter", "UltralyticsAdapter"),
     "torchvision": ("fabric_defect_hub.models.torchvision.adapter", "TorchvisionAdapter"),
     "anomalib": ("fabric_defect_hub.models.anomalib.adapter", "AnomalibAdapter"),
+    "dinomaly": ("fabric_defect_hub.models.dinomaly.adapter", "DinomalyAdapter"),
 }
+
+# Backends whose `predict()` accepts `output_dir=` to persist pixel-level
+# anomaly maps (see `_run_predict`/`--output-dir` in cli.py).
+_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly"}
 
 
 @dataclass
@@ -92,7 +97,7 @@ def _load_samples(source: PredictInput, backend: str) -> list[Sample]:
     if source.images and source.dataset:
         raise ValueError("pass either --image or --dataset, not both")
     if source.images:
-        task = "anomaly" if backend == "anomalib" else "detection"
+        task = "anomaly" if backend in _ANOMALY_MAP_BACKENDS else "detection"
         return [
             Sample(id=Path(image_path).stem, image_path=image_path, task=task, annotations=Annotations())
             for image_path in source.images
@@ -156,7 +161,7 @@ def run_predict(
         raise ValueError(f"unknown backend '{resolved_backend}'; expected one of {sorted(_ADAPTER_MODULES)}")
 
     raw = apply_model_overrides(raw, resolved_backend, variant)
-    model_key = "name" if resolved_backend == "anomalib" else "variant"
+    model_key = "name" if resolved_backend in _ANOMALY_MAP_BACKENDS else "variant"
     resolved_variant = raw.get("model", {}).get(model_key)
     if not resolved_variant:
         raise ValueError(f"config has no model.{model_key}; pass --variant explicitly")
@@ -168,7 +173,7 @@ def run_predict(
     if not samples:
         raise ValueError("no samples resolved to run inference on")
 
-    if resolved_backend == "anomalib":
+    if resolved_backend in _ANOMALY_MAP_BACKENDS:
         predictions = adapter.predict(samples, artifact, output_dir=output_dir)
     else:
         predictions = adapter.predict(samples, artifact)

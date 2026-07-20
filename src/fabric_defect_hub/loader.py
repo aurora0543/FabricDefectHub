@@ -30,6 +30,7 @@ _MODEL_BACKEND_MODULES = {
     "ultralytics": "fabric_defect_hub.models.ultralytics",
     "torchvision": "fabric_defect_hub.models.torchvision.adapter",
     "anomalib": "fabric_defect_hub.models.anomalib",
+    "dinomaly": "fabric_defect_hub.models.dinomaly",
 }
 
 

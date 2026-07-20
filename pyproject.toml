@@ -23,6 +23,9 @@ fdh-ui = "fabric_defect_hub.web.app:launch"
 ultralytics = ["ultralytics", "pillow", "pyyaml"]
 torchvision = ["torchvision", "torchmetrics", "pycocotools", "pillow", "pyyaml", "onnxscript"]
 anomalib = ["anomalib", "scikit-learn", "scikit-image"]
+# Dinomaly (components/dinomaly, vendored -- not an anomalib model, see
+# components/README.md). torch/torchvision come from anomalib/dev extras.
+dinomaly = ["timm", "scipy", "scikit-learn", "tabulate"]
 # BackendProfiler runtimes (profiling/pytorch.py needs only torch itself,
 # already pulled in by any of the extras above).
 profiling-onnxruntime = ["onnxruntime", "psutil"]

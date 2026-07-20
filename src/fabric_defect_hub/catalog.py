@@ -30,8 +30,8 @@ PUBLISHED_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "published"
 @dataclass(frozen=True)
 class CanonicalModel:
     key: str  # stable id, also the published filename stem
-    backend: str  # "ultralytics" | "torchvision" | "anomalib"
-    variant: str  # model.variant (ultralytics/torchvision) or model.name (anomalib)
+    backend: str  # "ultralytics" | "torchvision" | "anomalib" | "dinomaly"
+    variant: str  # model.variant (ultralytics/torchvision) or model.name (anomalib/dinomaly)
     task: str  # "detection" | "instance_segmentation" | "segmentation" | "anomaly"
     config: str  # config filename under configs/models/ used to train + publish this model
     label: str  # frontend dropdown label
@@ -71,10 +71,13 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "anomalib_example.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("SuperSimpleNet", "anomalib", "SuperSimpleNet", "anomaly",
                     "anomalib_example.yaml", "SuperSimpleNet · Normal Lab trained", "Normal Lab"),
+    # -- Dinomaly: anomaly (vendored research model, see components/README.md) --
+    CanonicalModel("Dinomaly", "dinomaly", "dinov2reg_vit_base_14", "anomaly",
+                    "dinomaly_example.yaml", "Dinomaly · Normal Lab trained", "Normal Lab"),
 ]
 
 _BY_KEY: dict[str, CanonicalModel] = {model.key: model for model in CANONICAL_MODELS}
-_EXTENSION = {"ultralytics": ".pt", "torchvision": ".pt", "anomalib": ".ckpt"}
+_EXTENSION = {"ultralytics": ".pt", "torchvision": ".pt", "anomalib": ".ckpt", "dinomaly": ".pth"}
 
 
 def find_canonical_model(backend: str, variant: str) -> CanonicalModel | None:
@@ -103,20 +106,34 @@ def metadata_for(model: CanonicalModel) -> dict:
     backend's `load_trained_model`/`predict` expects (see
     `web/single_image.py:artifact_for_model`). Anomalib needs `trusted` +
     `model_class` (the literal anomalib class name, e.g. "Patchcore" for
-    the "PatchCore" alias) — resolved here rather than hand-typed onto each
-    `CanonicalModel` entry, so a presets.py rename can't silently drift out
-    of sync with this catalog.
+    the "PatchCore" alias); Dinomaly needs `encoder_name`/`target_layers`/
+    `image_size`/`crop_size` (the architecture it was built with -- see
+    `DinomalyAdapter._build_model`) — both resolved here rather than
+    hand-typed onto each `CanonicalModel` entry, so a presets.py rename
+    can't silently drift out of sync with this catalog.
     """
 
-    if model.backend != "anomalib":
-        return {"trusted": True, "source": model.source}
-    from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
+    if model.backend == "anomalib":
+        from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
 
-    return {
-        "trusted": True,
-        "source": model.source,
-        "model_class": resolve_model_class_name(model.variant),
-    }
+        return {
+            "trusted": True,
+            "source": model.source,
+            "model_class": resolve_model_class_name(model.variant),
+        }
+    if model.backend == "dinomaly":
+        from fabric_defect_hub.models.dinomaly.presets import DEFAULT_TRAIN_KWARGS, encoder_preset
+
+        return {
+            "trusted": True,
+            "source": model.source,
+            "model_class": "ViTill",
+            "encoder_name": model.variant,
+            "target_layers": encoder_preset(model.variant)["target_layers"],
+            "image_size": DEFAULT_TRAIN_KWARGS["image_size"],
+            "crop_size": DEFAULT_TRAIN_KWARGS["crop_size"],
+        }
+    return {"trusted": True, "source": model.source}
 
 
 def publish_artifact(backend: str, variant: str, registered_artifact_path: str) -> Path | None:
