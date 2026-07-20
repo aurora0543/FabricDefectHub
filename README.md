@@ -58,6 +58,9 @@ We built a Gradio-based UI hub for the benchmark, providing an intuitive interfa
 1. Install the dependencies and launch the Gradio UI:
 
 ```bash
+conda create -n fdh_env python=3.14 -y
+conda activate fdh_env
+
 git clone https://github.com/aurora0543/FabricDefectHub.git && cd FabricDefectHub
 pip install -r requirements.txt
 fdh-ui
