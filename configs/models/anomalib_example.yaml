@@ -24,9 +24,11 @@
 #      two steps stitched together.
 # ============================================================================
 
-# ---- Model: pick one of five ----
+# ---- Model: pick one ----
 model:
-  name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet (case-insensitive)
+  name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet | WinCLIP (case-insensitive)
+  # WinCLIP is zero-shot by default (needs no training images); pass
+  # train.model_kwargs: {k_shot: 5} to use few-shot normal references instead.
 
 # ---- Data: read from ZJULeaperDataset at runtime and staged into a temporary MVTec-style directory ----
 # dataset_root is left unset on purpose: `fdh train` falls back to this

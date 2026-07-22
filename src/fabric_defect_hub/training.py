@@ -67,6 +67,29 @@ DEFAULT_DATASET_ROOTS: dict[str, str] = {
     "zju-leaper": "data/ZJU-Leaper",
     "raw-fabric": "data/RAW_FABRID",
     "mvtec-ad": "data/MVTec AD",
+    "mvtec-loco": "data/MVTec LOCO",
+    "tilda-400": "data/TILDA_400",
+    "fabric-defects": "data/Fabric Defects Dataset",
+    "visa": "data/VisA",
+    # The fabric-train composite resolves its members under this base dir
+    # (see datasets/fabric_train.py::_MEMBERS), not a single dataset folder.
+    "fabric-train": "data",
+}
+
+# Anomaly (one-class) training is deliberately restricted to *in-domain
+# fabric* sources: the individual fabric datasets and the `fabric-train`
+# union that combines them (see datasets/fabric_train.py). Cross-domain
+# object benchmarks (MVTec AD/LOCO, VisA) are eval-only — training a fabric
+# model on them would defeat the benchmark — and detection-only sets
+# (SDUST-FDD) belong to the ultralytics/torchvision backends, not the
+# one-class anomaly ones. `_enforce_trainable_dataset` rejects anything
+# outside this set for the one-class backends.
+ANOMALY_TRAINABLE_DATASETS: set[str] = {
+    "zju-leaper",
+    "raw-fabric",
+    "tilda-400",
+    "fabric-defects",
+    "fabric-train",
 }
 
 # Per backend: (train-split selection key, val/test-split selection key) in
@@ -495,6 +518,31 @@ class TrainRunResult:
     published_path: str | None = None  # set when (backend, variant) is one of catalog.CANONICAL_MODELS
 
 
+def _enforce_trainable_dataset(raw: dict[str, Any], backend: str) -> None:
+    """Reject training a one-class (anomaly) backend on an eval-only or
+    detection dataset. No-op for detection backends (which legitimately
+    train on detection sets) and for the `data_root`/`datamodule_kwargs`
+    on-disk modes, where no registered dataset name is involved and the
+    caller has taken explicit responsibility for the folder.
+    """
+
+    if backend not in _ONE_CLASS_BACKENDS:
+        return
+    data = raw.get("data")
+    dataset = data.get("dataset") if isinstance(data, dict) else None
+    if not dataset or dataset in ANOMALY_TRAINABLE_DATASETS:
+        return
+    allowed = ", ".join(sorted(ANOMALY_TRAINABLE_DATASETS))
+    raise ValueError(
+        f"dataset {dataset!r} is not a training source for the one-class "
+        f"'{backend}' backend. Anomaly training is restricted to in-domain "
+        f"fabric sources: {allowed}. Cross-domain benchmarks (mvtec-ad, "
+        "mvtec-loco, visa) are eval-only — use them for inference/benchmark, "
+        "not training. To train on the combined fabric corpus use "
+        "'fabric-train'."
+    )
+
+
 def run_train(
     model: str | Path,
     backend: str | None = None,
@@ -539,6 +587,7 @@ def run_train(
 
     overrides = overrides or DatasetOverrides()
     raw = apply_dataset_overrides(raw, resolved_backend, overrides)
+    _enforce_trainable_dataset(raw, resolved_backend)
     raw = apply_default_dataset_root(raw)
     if overrides.mode == "test":
         raw = _apply_test_speed_overrides(raw, resolved_backend)

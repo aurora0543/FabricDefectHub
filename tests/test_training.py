@@ -6,10 +6,12 @@ overlay logic, without importing any ML framework or running training.
 import pytest
 
 from fabric_defect_hub.training import (
+    ANOMALY_TRAINABLE_DATASETS,
     DEFAULT_DATASET_ROOTS,
     TEST_SHOT_NUM_SAMPLES,
     DatasetOverrides,
     _apply_test_speed_overrides,
+    _enforce_trainable_dataset,
     apply_dataset_overrides,
     apply_default_dataset_root,
     apply_model_overrides,
@@ -84,6 +86,31 @@ def test_find_model_configs_empty_dir_returns_empty(tmp_path):
 )
 def test_infer_backend(raw, backend):
     assert infer_backend(raw) == backend
+
+
+@pytest.mark.parametrize("dataset", sorted(ANOMALY_TRAINABLE_DATASETS))
+def test_enforce_allows_trainable_fabric_datasets(dataset):
+    # Should not raise for any one-class backend.
+    _enforce_trainable_dataset({"data": {"dataset": dataset}}, "anomalib")
+    _enforce_trainable_dataset({"data": {"dataset": dataset}}, "dinomaly")
+
+
+@pytest.mark.parametrize("dataset", ["visa", "mvtec-ad", "mvtec-loco"])
+def test_enforce_rejects_eval_only_datasets_for_anomaly_backends(dataset):
+    with pytest.raises(ValueError, match="not a training source"):
+        _enforce_trainable_dataset({"data": {"dataset": dataset}}, "anomalib")
+
+
+def test_enforce_is_noop_for_detection_backends():
+    # Detection backends legitimately train on detection datasets; the
+    # anomaly allowlist must not apply to them.
+    _enforce_trainable_dataset({"data": {"dataset": "sdust-fdd"}}, "ultralytics")
+    _enforce_trainable_dataset({"data": {"dataset": "mvtec-ad"}}, "torchvision")
+
+
+def test_enforce_is_noop_without_registered_dataset():
+    # data_root / datamodule_kwargs mode: no registered dataset name.
+    _enforce_trainable_dataset({"data": {"data_root": "/some/mvtec/bottle"}}, "anomalib")
 
 
 def test_infer_backend_requires_model_or_backend_key():

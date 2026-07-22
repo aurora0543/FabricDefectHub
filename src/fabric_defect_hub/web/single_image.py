@@ -90,6 +90,45 @@ DATASET_CATALOG = {
         "task": "anomaly",
         "tasks": ("anomaly", "segmentation"),
     },
+    # Cross-domain, eval-only object benchmark (logical + structural
+    # anomalies); per-image ground-truth mask dirs (datasets/mvtec_loco.py).
+    "MVTec LOCO": {
+        "name": "mvtec-loco",
+        "dir": "MVTec LOCO",
+        "env": "MVTEC_LOCO_ROOT",
+        "slice_kwarg": "category",
+        "task": "anomaly",
+        "tasks": ("anomaly", "segmentation"),
+    },
+    # Cross-domain, eval-only object benchmark; pixel masks for the Anomaly
+    # split (datasets/visa.py).
+    "VisA": {
+        "name": "visa",
+        "dir": "VisA",
+        "env": "VISA_ROOT",
+        "slice_kwarg": "category",
+        "task": "anomaly",
+        "tasks": ("anomaly", "segmentation"),
+    },
+    # In-domain fabric, image-level only (no pixel masks) — good for
+    # image-level AUROC, and a training-eligible source (datasets/tilda.py).
+    "TILDA-400": {
+        "name": "tilda-400",
+        "dir": "TILDA_400",
+        "env": "TILDA_400_ROOT",
+        "slice_kwarg": None,
+        "task": "anomaly",
+        "tasks": ("anomaly",),
+    },
+    # In-domain fabric, image-level only (datasets/fabric_defects.py).
+    "Fabric Defects": {
+        "name": "fabric-defects",
+        "dir": "Fabric Defects Dataset",
+        "env": "FABRIC_DEFECTS_ROOT",
+        "slice_kwarg": None,
+        "task": "anomaly",
+        "tasks": ("anomaly",),
+    },
 }
 # Backends whose `predict()` accepts `output_dir=` to persist pixel-level
 # anomaly maps for the heatmap overlay (`_overlay_anomaly_map`).
@@ -202,6 +241,24 @@ def _mvtec_ad_categories(root: str) -> list[str]:
     )
 
 
+def _visa_categories(root: str) -> list[str]:
+    """VisA marks a category by `<cat>/Data/Images/Normal` (not `train/good`),
+    so it needs its own probe — this also filters out non-category entries at
+    the VisA root like `split_csv/` and `LICENSE-DATASET`.
+    """
+
+    if not root:
+        return []
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in root_path.iterdir()
+        if path.is_dir() and (path / "Data" / "Images" / "Normal").is_dir()
+    )
+
+
 def texture_choices(dataset_label: str) -> list[str]:
     """Discover available texture/category slices from the registered
     dataset root. Datasets without a subdivision (`slice_kwarg` is None)
@@ -224,8 +281,11 @@ def texture_choices(dataset_label: str) -> list[str]:
         )
         return choices + [f"Pattern {pattern_id}" for pattern_id in pattern_ids]
 
-    if spec["name"] == "mvtec-ad":
+    if spec["name"] in ("mvtec-ad", "mvtec-loco"):
         return choices + _mvtec_ad_categories(root)
+
+    if spec["name"] == "visa":
+        return choices + _visa_categories(root)
 
     return choices
 
@@ -242,7 +302,7 @@ def slice_value(dataset_label: str, texture_label: str) -> str | None:
         if texture_label.lower().startswith("pattern "):
             return f"pattern{texture_label.split()[-1]}"
         raise ValueError(f"Unknown texture selection {texture_label!r}.")
-    if spec["name"] == "mvtec-ad":
+    if spec["name"] in ("mvtec-ad", "mvtec-loco", "visa"):
         return texture_label
     raise ValueError(f"{dataset_label!r} does not support texture/category selection.")
 

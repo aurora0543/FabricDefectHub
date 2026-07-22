@@ -14,7 +14,8 @@ CANONICAL_MODELS is intentionally NOT "every variant this backend can run"
 models this project trains and exposes to the frontend: 3 Ultralytics
 variants, 6 torchvision model families (one representative backbone each —
 Faster R-CNN, Mask R-CNN, Cascade R-CNN, DETR, UNet++, DeepLabV3+ — not
-every VGG16/ShuffleNet backbone swap of each), and all 5 Anomalib models.
+every VGG16/ShuffleNet backbone swap of each), all 6 Anomalib models
+(including zero-shot WinCLIP), and the vendored Dinomaly research model.
 """
 
 from __future__ import annotations
@@ -71,6 +72,9 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "anomalib_example.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("SuperSimpleNet", "anomalib", "SuperSimpleNet", "anomaly",
                     "anomalib_example.yaml", "SuperSimpleNet · Normal Lab trained", "Normal Lab"),
+    # -- WinCLIP: CLIP-based, zero-shot by default (no fabric training data) --
+    CanonicalModel("WinCLIP", "anomalib", "WinClip", "anomaly",
+                    "anomalib_example.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),
     # -- Dinomaly: anomaly (vendored research model, see components/README.md) --
     CanonicalModel("Dinomaly", "dinomaly", "dinov2reg_vit_base_14", "anomaly",
                     "dinomaly_example.yaml", "Dinomaly · Normal Lab trained", "Normal Lab"),

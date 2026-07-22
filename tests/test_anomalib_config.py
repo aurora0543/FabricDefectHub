@@ -20,11 +20,12 @@ from fabric_defect_hub.models.anomalib.presets import (
 
 def test_model_name_resolution_and_aliases():
     assert set(list_supported_models()) == {
-        "Patchcore", "Padim", "ReverseDistillation", "EfficientAd", "Supersimplenet",
+        "Patchcore", "Padim", "ReverseDistillation", "EfficientAd", "Supersimplenet", "WinClip",
     }
     assert resolve_model_class_name("PatchCore") == "Patchcore"
     assert resolve_model_class_name("rd4ad") == "ReverseDistillation"
     assert resolve_model_class_name("EfficientAD") == "EfficientAd"
+    assert resolve_model_class_name("WinCLIP") == "WinClip"
     assert resolve_model_class_name("Patchcore") == "Patchcore"  # literal class name passes through
     with pytest.raises(KeyError):
         resolve_model_class_name("NotAModel")
@@ -39,6 +40,15 @@ def test_supersimplenet_defaults_to_supervised():
     # ZJU-Leaper ships real defect masks, so the fabric preset should use
     # them (supervised=True) rather than anomalib's synthetic-anomaly default.
     assert default_model_kwargs("SuperSimpleNet")["supervised"] is True
+
+
+def test_winclip_defaults_to_zero_shot():
+    # WinCLIP is CLIP-based; k_shot=0 keeps it a pure zero-shot baseline that
+    # consumes no fabric training images, and class_name gives its prompt
+    # ensemble a domain-appropriate noun.
+    kwargs = default_model_kwargs("WinCLIP")
+    assert kwargs["k_shot"] == 0
+    assert kwargs["class_name"] == "fabric"
 
 
 def test_config_from_dict_layers_and_resolves():

@@ -15,8 +15,8 @@ from fabric_defect_hub.catalog import (
 )
 
 
-def test_canonical_models_has_fifteen_entries():
-    assert len(CANONICAL_MODELS) == 15
+def test_canonical_models_has_sixteen_entries():
+    assert len(CANONICAL_MODELS) == 16
 
 
 def test_canonical_model_keys_are_unique():
@@ -40,6 +40,8 @@ def test_canonical_model_labels_are_unique():
         ("torchvision", "deeplabv3plus_resnet50", "deeplabv3plus_resnet50"),
         ("anomalib", "PatchCore", "PatchCore"),
         ("anomalib", "patchcore", "PatchCore"),  # case-insensitive
+        ("anomalib", "WinClip", "WinCLIP"),
+        ("anomalib", "winclip", "WinCLIP"),  # case-insensitive
         ("dinomaly", "dinov2reg_vit_base_14", "Dinomaly"),
     ],
 )
@@ -92,6 +94,13 @@ def test_metadata_for_anomalib_resolves_model_class():
     metadata = metadata_for(model)
     assert metadata["trusted"] is True
     assert metadata["model_class"] == "ReverseDistillation"
+
+
+def test_metadata_for_winclip_resolves_model_class():
+    model = find_canonical_model("anomalib", "WinClip")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert metadata["model_class"] == "WinClip"
 
 
 def test_metadata_for_dinomaly_resolves_architecture_fields():

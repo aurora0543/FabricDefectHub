@@ -41,9 +41,30 @@ We built a Gradio-based UI hub for the benchmark, providing an intuitive interfa
 
 ## Datasets
 
+Datasets fall into three roles. Anomaly (one-class) training is restricted
+to the **in-domain fabric** sources; the cross-domain object benchmarks are
+**eval-only** (training a fabric model on them is rejected — see
+`training.ANOMALY_TRAINABLE_DATASETS`); YOLO-labelled sets belong to the
+**detection** backends. The `fabric-train` composite unions every fabric
+source into one training corpus so no model is trained on a single dataset.
+
+**In-domain fabric (train + eval):**
+
 - **ZJU-Leaper** — 94,833 images (71,127 normal / 23,706 defective), 19 fabric patterns. [Homepage](http://www.qaas.zju.edu.cn/zju-leaper/).
 - **RAW-Fabric (RAW_FABRID)** — 709 high-res grayscale images + 204 masks, plus an MVTec-AD-style 256×256 patch set (14,196/4,969/687/687).
-- **MVTec AD** — 5,354 images (3,629/1,725), 15 non-fabric categories; used for cross-domain zero-shot evaluation, not training.
+- **TILDA-400** — fabric texture patches, `good/` + 4 defect types (hole / oil spot / thread error / objects); image-level labels, no pixel masks.
+- **Fabric Defects Dataset** — fabric, `defect free/` + 5 defect classes (hole / stain / lines / vertical / horizontal); image-level labels, no pixel masks.
+- **`fabric-train`** — a composite (not a folder on disk) that unions the four fabric sources above for one-class training.
+
+**Cross-domain benchmarks (eval-only):**
+
+- **MVTec AD** — 5,354 images (3,629/1,725), 15 non-fabric categories; cross-domain zero-shot evaluation, not training.
+- **MVTec LOCO AD** — 5 categories with logical + structural anomalies; per-image ground-truth mask directories.
+- **VisA** — 12 object categories (Normal/Anomaly + pixel masks); cross-domain zero-shot evaluation.
+
+**Detection track (YOLO labels, not anomaly):**
+
+- **SDUST-FDD** — fabric, YOLO bounding-box labels (6 defect classes); feeds the Ultralytics/torchvision detectors, not the one-class anomaly models.
 
 ## Quick Start
 

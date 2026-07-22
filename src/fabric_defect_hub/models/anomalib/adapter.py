@@ -1,9 +1,12 @@
 """`ModelAdapter` implementation backed by the `anomalib` package.
 
-Covers the five models the README commits to — PatchCore, PaDiM, RD4AD,
-EfficientAD, SuperSimpleNet — via `presets.py`, which resolves README/paper
-names to anomalib's actual class names and supplies fabric-tailored default
-constructor kwargs (see `presets.py` for why each default was picked).
+Covers the anomalib models the README commits to — PatchCore, PaDiM, RD4AD,
+EfficientAD, SuperSimpleNet, WinCLIP — via `presets.py`, which resolves
+README/paper names to anomalib's actual class names and supplies
+fabric-tailored default constructor kwargs (see `presets.py` for why each
+default was picked). WinCLIP is CLIP-based and needs no gradient training
+(zero-shot by default, few-shot when `k_shot > 0`); it flows through the
+same one-pass `engine.fit` path as PatchCore/PaDiM.
 
 Anomaly-only: `predict()` always fills `anomaly_score` (image-level) and
 can optionally persist pixel-level `anomaly_map`s (see its docstring) for
@@ -34,9 +37,9 @@ class AnomalibAdapter(ModelAdapter):
     """Wraps an `anomalib.models` class.
 
     `name` may be a README/paper alias ('PatchCore', 'RD4AD', 'EfficientAD',
-    'SuperSimpleNet', 'PaDiM' — case-insensitive) or the literal anomalib
-    class name ('Patchcore', 'ReverseDistillation', ...). See
-    `presets.list_supported_models()` for the full set.
+    'SuperSimpleNet', 'PaDiM', 'WinCLIP' — case-insensitive) or the literal
+    anomalib class name ('Patchcore', 'ReverseDistillation', 'WinClip', ...).
+    See `presets.list_supported_models()` for the full set.
     """
 
     backend = "anomalib"

@@ -1,5 +1,5 @@
-"""Per-algorithm configuration for the five anomalib models the README
-commits to: PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet.
+"""Per-algorithm configuration for the anomalib models the README commits
+to: PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet, and WinCLIP.
 
 We deliberately do not reimplement these algorithms (see the project's
 "don't reimplement models we can depend on" principle in the top-level
@@ -34,6 +34,7 @@ MODEL_ALIASES: dict[str, str] = {
     "reversedistillation": "ReverseDistillation",
     "efficientad": "EfficientAd",
     "supersimplenet": "Supersimplenet",
+    "winclip": "WinClip",
 }
 
 # Fabric-tailored default `model_kwargs` per algorithm, keyed by the
@@ -89,6 +90,25 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
         "layers": ["layer2", "layer3"],
         "supervised": True,
         "perlin_threshold": 0.2,
+    },
+    # CLIP-based window model. Unlike the five above, WinCLIP does no
+    # gradient training and no feature-memory fit -- it scores each window
+    # against text prompts derived from `class_name` (zero-shot), optionally
+    # augmented with `k_shot` normal reference images (few-shot). Defaulting
+    # to `k_shot=0` keeps it a genuine zero-shot baseline that needs no
+    # fabric training data at all -- its distinguishing capability in this
+    # benchmark, where every other anomaly model consumes normal images.
+    # Set `k_shot` > 0 (via train.model_kwargs) to switch to few-shot; the
+    # normal reference images are then collected from the staged train split
+    # in the model's `setup()`, exactly as the training pipeline already
+    # provides them. `class_name` is the object noun WinCLIP's prompt
+    # ensemble is built around; "fabric" fits this domain (anomalib would
+    # otherwise fall back to the datamodule name, which is the backend id
+    # here, not a meaningful prompt).
+    "WinClip": {
+        "class_name": "fabric",
+        "k_shot": 0,
+        "scales": (2, 3),
     },
 }
 
