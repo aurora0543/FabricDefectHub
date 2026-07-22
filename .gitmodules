@@ -1,3 +1,6 @@
 [submodule "components/dinomaly"]
 	path = components/dinomaly
 	url = https://github.com/aurora0543/Dinomaly.git
+[submodule "components/mambaad"]
+	path = components/mambaad
+	url = https://github.com/aurora0543/MambaAD.git
