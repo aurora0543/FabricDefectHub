@@ -53,7 +53,7 @@ source into one training corpus so no model is trained on a single dataset.
 - **ZJU-Leaper** — 94,833 images (71,127 normal / 23,706 defective), 19 fabric patterns. [Homepage](http://www.qaas.zju.edu.cn/zju-leaper/).
 - **RAW-Fabric (RAW_FABRID)** — 709 high-res grayscale images + 204 masks, plus an MVTec-AD-style 256×256 patch set (14,196/4,969/687/687).
 - **TILDA-400** — fabric texture patches, `good/` + 4 defect types (hole / oil spot / thread error / objects); image-level labels, no pixel masks.
-- **Fabric Defects Dataset** — fabric, `defect free/` + 5 defect classes (hole / stain / lines / vertical / horizontal); image-level labels, no pixel masks.
+- **Fabric Defects Dataset** — fabric, `defect free/` + 5 defect classes (hole / stain / lines / vertical / horizontal); hole/vertical/horizontal ship binary pixel masks (the dataset's `_processed` files), lines/stain are image-level only.
 - **`fabric-train`** — a composite (not a folder on disk) that unions the four fabric sources above for one-class training.
 
 **Cross-domain benchmarks (eval-only):**

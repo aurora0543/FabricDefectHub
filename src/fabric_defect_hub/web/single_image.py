@@ -120,14 +120,18 @@ DATASET_CATALOG = {
         "task": "anomaly",
         "tasks": ("anomaly",),
     },
-    # In-domain fabric, image-level only (datasets/fabric_defects.py).
+    # In-domain fabric, training-eligible (datasets/fabric_defects.py).
+    # Partial pixel masks: hole/Vertical/horizontal ship binary masks
+    # (the dataset's "_processed" files, parsed as masks rather than
+    # separate photos); lines/stain have none. "segmentation" is still
+    # offered since some samples do carry ground truth.
     "Fabric Defects": {
         "name": "fabric-defects",
         "dir": "Fabric Defects Dataset",
         "env": "FABRIC_DEFECTS_ROOT",
         "slice_kwarg": None,
         "task": "anomaly",
-        "tasks": ("anomaly",),
+        "tasks": ("anomaly", "segmentation"),
     },
 }
 # Backends whose `predict()` accepts `output_dir=` to persist pixel-level

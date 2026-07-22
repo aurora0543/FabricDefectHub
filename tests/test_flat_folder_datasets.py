@@ -90,6 +90,66 @@ def test_fabric_defects_reads_nested_subdir(tmp_path):
     assert any(s.metadata["defect_type"] == "stain" for s in test)
 
 
+def test_fabric_defects_processed_files_are_masks_not_photos(tmp_path):
+    # hole/Vertical/horizontal ship "<stem>_processed (<n>)" binary masks
+    # alongside the base photo -- these must never be counted as their own
+    # Sample, and must be attached as anomaly_mask on the base image instead.
+    base = tmp_path / "Fabric Defect Dataset"
+    (base / "defect free").mkdir(parents=True)
+    (base / "hole").mkdir(parents=True)
+    (base / "hole" / "10.jpg").write_bytes(b"photo")
+    (base / "hole" / "10_processed (1).jpg").write_bytes(b"mask1")
+    (base / "hole" / "10_processed (2).jpg").write_bytes(b"mask2")
+
+    test = FabricDefectsDataset(root=str(tmp_path), split="test", train_ratio=0.0).load_samples()
+
+    assert len(test) == 1  # only the base photo, masks are not separate samples
+    sample = test[0]
+    assert sample.id == "hole/10"
+    assert sample.annotations.anomaly_mask.endswith("10_processed (1).jpg")
+
+
+def test_fabric_defects_segmentation_task_attaches_all_masks(tmp_path):
+    base = tmp_path / "Fabric Defect Dataset"
+    (base / "defect free").mkdir(parents=True)
+    (base / "hole").mkdir(parents=True)
+    (base / "hole" / "10.jpg").write_bytes(b"photo")
+    (base / "hole" / "10_processed (1).jpg").write_bytes(b"mask1")
+    (base / "hole" / "10_processed (2).jpg").write_bytes(b"mask2")
+
+    test = FabricDefectsDataset(
+        root=str(tmp_path), split="test", task="segmentation", train_ratio=0.0
+    ).load_samples()
+
+    assert len(test[0].annotations.masks) == 2
+
+
+def test_fabric_defects_handles_processed_naming_without_space(tmp_path):
+    # The raw dataset mixes "_processed (1)" and "_processed(1)" (no space)
+    # for the same convention -- both must be recognised as masks.
+    base = tmp_path / "Fabric Defect Dataset"
+    (base / "defect free").mkdir(parents=True)
+    (base / "horizontal").mkdir(parents=True)
+    (base / "horizontal" / "15.jpg").write_bytes(b"photo")
+    (base / "horizontal" / "15_processed(2).jpg").write_bytes(b"mask")
+
+    test = FabricDefectsDataset(root=str(tmp_path), split="test", train_ratio=0.0).load_samples()
+
+    assert len(test) == 1
+    assert test[0].annotations.anomaly_mask.endswith("15_processed(2).jpg")
+
+
+def test_fabric_defects_photo_without_mask_leaves_anomaly_mask_none(tmp_path):
+    base = tmp_path / "Fabric Defect Dataset"
+    (base / "defect free").mkdir(parents=True)
+    (base / "lines").mkdir(parents=True)  # lines has no masks in the real dataset
+    (base / "lines" / "1.jpg").write_bytes(b"photo")
+
+    test = FabricDefectsDataset(root=str(tmp_path), split="test", train_ratio=0.0).load_samples()
+
+    assert test[0].annotations.anomaly_mask is None
+
+
 def test_invalid_split_raises(tmp_path):
     _make_tilda(tmp_path, normals=["n0"])
     with pytest.raises(ValueError, match="split must be"):
