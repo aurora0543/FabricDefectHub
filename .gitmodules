@@ -1,3 +1,6 @@
 [submodule "components/dinomaly"]
 	path = components/dinomaly
 	url = https://github.com/aurora0543/Dinomaly.git
+[submodule "components/moeclip"]
+	path = components/moeclip
+	url = https://github.com/aurora0543/MoECLIP.git
