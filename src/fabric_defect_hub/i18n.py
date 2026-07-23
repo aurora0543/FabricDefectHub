@@ -130,6 +130,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "choice_score_balanced": "Balanced",
         "choice_score_efficiency_first": "Efficiency-first",
         "choice_score_custom": "Custom",
+        "chart_metric_label": "Bar chart metric",
+        "chart_bar_label": "Per-model comparison",
+        "chart_radar_label": "Multi-metric profile",
+        "radar_axes_label": "Radar axes (metrics)",
+        "radar_models_label": "Radar models (max {count})",
+        "radar_chart_label": "Normalized multi-metric radar chart",
+        "radar_area": "area",
+        "radar_no_results": "Run a benchmark to see the radar chart.",
+        "radar_needs_axes": "Select at least {count} metrics to draw a radar chart.",
+        "radar_select_model": "Select at least one model to draw a radar chart.",
         "tab_run_history": "Run History",
         "history_header": (
             "### Run history\n"
@@ -249,6 +259,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "choice_score_balanced": "均衡",
         "choice_score_efficiency_first": "效率优先",
         "choice_score_custom": "自定义",
+        "chart_metric_label": "柱状图指标",
+        "chart_bar_label": "各模型对比",
+        "chart_radar_label": "多指标画像",
+        "radar_axes_label": "雷达轴（指标）",
+        "radar_models_label": "雷达图模型（最多 {count} 个）",
+        "radar_chart_label": "归一化多指标雷达图",
+        "radar_area": "面积",
+        "radar_no_results": "请先运行一次基准测试以生成雷达图。",
+        "radar_needs_axes": "请至少选择 {count} 个指标才能绘制雷达图。",
+        "radar_select_model": "请至少选择一个模型才能绘制雷达图。",
         "tab_run_history": "运行历史",
         "history_header": (
             "### 运行历史\n"

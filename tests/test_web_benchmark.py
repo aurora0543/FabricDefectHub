@@ -91,7 +91,7 @@ def _install_fake_catalog(monkeypatch, tmp_path):
 def test_run_benchmark_basic_leaderboard_has_no_score_columns_without_metrics(monkeypatch, tmp_path):
     _install_fake_catalog(monkeypatch, tmp_path)
 
-    *_, (columns, rows, status) = web_benchmark.run_benchmark(
+    *_, (columns, rows, status, scored) = web_benchmark.run_benchmark(
         "Fake Dataset", "All textures", "Full-shot", [MODEL_LABEL], run_log_path=None,
     )
 
@@ -100,12 +100,15 @@ def test_run_benchmark_basic_leaderboard_has_no_score_columns_without_metrics(mo
     # No profiling metrics were requested, so overhead_score has nothing to
     # average and composite falls back to the technical (accuracy) score.
     assert rows[0][columns.index("composite_score")] == rows[0][columns.index("technical_score")]
+    # The chart-facing payload carries the same run as name-keyed dicts.
+    assert scored[0]["model"] == MODEL_LABEL
+    assert "composite_score" in scored[0]
 
 
 def test_run_benchmark_with_profiling_adds_overhead_metrics_and_scores(monkeypatch, tmp_path):
     _install_fake_catalog(monkeypatch, tmp_path)
 
-    *_, (columns, rows, status) = web_benchmark.run_benchmark(
+    *_, (columns, rows, status, scored) = web_benchmark.run_benchmark(
         "Fake Dataset", "All textures", "Full-shot", [MODEL_LABEL],
         include_profiling=True, run_log_path=None,
     )
@@ -135,7 +138,7 @@ def test_run_benchmark_appends_to_run_log(monkeypatch, tmp_path):
 def test_run_benchmark_custom_preset_uses_custom_weight(monkeypatch, tmp_path):
     _install_fake_catalog(monkeypatch, tmp_path)
 
-    *_, (columns, rows, status) = web_benchmark.run_benchmark(
+    *_, (columns, rows, status, scored) = web_benchmark.run_benchmark(
         "Fake Dataset", "All textures", "Full-shot", [MODEL_LABEL],
         score_preset="custom", custom_technical_weight=0.9, run_log_path=None,
     )

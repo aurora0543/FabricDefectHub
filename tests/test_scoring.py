@@ -2,10 +2,14 @@
 
 import pytest
 
+import math
+
 from fabric_defect_hub.scoring import (
     SCORE_PRESETS,
     metric_direction,
     metric_group,
+    normalize_metrics,
+    polygon_area,
     score_rows,
 )
 
@@ -108,3 +112,70 @@ def test_score_rows_rejects_non_positive_weights():
 def test_score_rows_rejects_negative_weights():
     with pytest.raises(ValueError):
         score_rows([{"model": "a"}], technical_weight=-1.0, overhead_weight=1.0)
+
+
+def test_normalize_metrics_returns_sorted_names_and_per_row_values():
+    rows = [
+        {"model": "a", "image_auroc": 0.9, "fps": 10.0},
+        {"model": "b", "image_auroc": 0.5, "fps": 100.0},
+    ]
+    names, per_row = normalize_metrics(rows)
+
+    assert names == ["fps", "image_auroc"]  # sorted, and "model" excluded
+    assert per_row[0]["image_auroc"] == pytest.approx(1.0)
+    assert per_row[1]["image_auroc"] == pytest.approx(0.0)
+
+
+def test_normalize_metrics_inverts_lower_is_better_metrics():
+    rows = [
+        {"model": "fast", "latency_ms_mean": 5.0},
+        {"model": "slow", "latency_ms_mean": 50.0},
+    ]
+    _, per_row = normalize_metrics(rows)
+
+    # Lower latency is better, so the fast model must normalize to 1.0.
+    assert per_row[0]["latency_ms_mean"] == pytest.approx(1.0)
+    assert per_row[1]["latency_ms_mean"] == pytest.approx(0.0)
+
+
+def test_normalize_metrics_omits_metrics_a_row_does_not_carry():
+    rows = [
+        {"model": "a", "image_auroc": 0.9},
+        {"model": "b", "image_auroc": 0.5, "fps": 30.0},
+    ]
+    names, per_row = normalize_metrics(rows)
+
+    assert names == ["fps", "image_auroc"]
+    assert "fps" not in per_row[0]
+    assert "fps" in per_row[1]
+
+
+def test_normalize_metrics_respects_metric_keys():
+    rows = [{"model": "a", "image_auroc": 0.9, "fps": 10.0}]
+    names, _ = normalize_metrics(rows, metric_keys={"fps"})
+    assert names == ["fps"]
+
+
+def test_normalize_metrics_all_tied_values_normalize_to_one():
+    rows = [{"model": "a", "image_auroc": 0.7}, {"model": "b", "image_auroc": 0.7}]
+    _, per_row = normalize_metrics(rows)
+    assert [row["image_auroc"] for row in per_row] == [1.0, 1.0]
+
+
+def test_polygon_area_matches_known_regular_polygons():
+    # A regular n-gon with unit circumradius has area (n/2)*sin(2*pi/n).
+    for count in (3, 4, 6):
+        expected = (count / 2) * math.sin(2 * math.pi / count)
+        assert polygon_area([1.0] * count) == pytest.approx(expected)
+
+
+def test_polygon_area_scales_with_the_square_of_the_radii():
+    full = polygon_area([1.0, 1.0, 1.0, 1.0])
+    half = polygon_area([0.5, 0.5, 0.5, 0.5])
+    assert half == pytest.approx(full * 0.25)
+
+
+def test_polygon_area_of_fewer_than_three_axes_is_zero():
+    assert polygon_area([]) == 0.0
+    assert polygon_area([1.0]) == 0.0
+    assert polygon_area([1.0, 1.0]) == 0.0

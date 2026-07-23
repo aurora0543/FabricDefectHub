@@ -5,6 +5,18 @@ from __future__ import annotations
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, LANGUAGES, tr
 from fabric_defect_hub.inference.session import InferenceSessionManager, format_session_status
 from fabric_defect_hub.reporting import flatten_run_log_rows, latest_run_per_model, read_run_log
+from fabric_defect_hub.web.charts import (
+    MAX_RADAR_MODELS,
+    bar_frame,
+    bar_y_limits,
+    default_bar_metric,
+    default_radar_axes,
+    default_radar_models,
+    metric_choices,
+    model_choices,
+    radar_axis_choices,
+    render_radar_svg,
+)
 from fabric_defect_hub.web.benchmark import (
     DEFAULT_RUN_LOG_PATH,
     compatible_models,
@@ -89,6 +101,56 @@ body:not(.dark) .fdh-card button.secondary:hover, body:not(.dark) .fdh-control-c
 body:not(.dark) .fdh-card button.secondary:active, body:not(.dark) .fdh-control-card button.secondary:active, body:not(.dark) .fdh-dataset-card button.secondary:active { background: #e9edf3 !important; border-color: #ea6e18 !important; }
 body:not(.dark) .fdh-status { background: #f8fafc; border: 1px solid #cbd5e1; color: #24344d; }
 body:not(.dark) .fdh-caption, body:not(.dark) .fdh-placeholder { color: #52627a; }
+
+/* -- Radar chart (web/charts.py emits the SVG; every color lives here so
+   the chart follows the light/dark theme instead of baking in one theme's
+   hexes). The three series slots are the categorical palette's first three
+   hues, which are the only ones that clear colorblind separation when every
+   pair can overlap -- as radar polygons can. Both modes were validated with
+   the dataviz skill's validator against this app's own card surfaces
+   (light #ffffff, dark #101c2d), --pairs all: all checks pass; the one
+   sub-3:1 contrast warning (light aqua) is relieved by the always-present
+   legend labels and the leaderboard table directly below, so identity never
+   rests on hue alone. Marks follow the shared specs: 2px strokes, ~12%
+   fills, hairline recessive grid, >=8px dots with a 2px surface ring. */
+.fdh-radar-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 6px 0 2px; }
+.fdh-radar { width: 100%; max-width: 480px; height: auto; }
+.fdh-radar-grid { fill: none; stroke-width: 1; }
+.fdh-radar-axis-label { font-size: 10px; font-family: inherit; }
+.fdh-radar-series { stroke-width: 2; stroke-linejoin: round; }
+.fdh-radar-dot { stroke-width: 2; }
+.fdh-radar-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 12px; }
+.fdh-radar-key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.fdh-radar-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.fdh-radar-note { padding: 40px 16px; text-align: center; font-size: 13px; }
+body.dark .fdh-radar-grid { stroke: #2c3d52; }
+body.dark .fdh-radar-axis-label { fill: #a9bad0; }
+body.dark .fdh-radar-dot { stroke: #101c2d; }
+body.dark .fdh-radar-legend { color: #dce7f5; }
+body.dark .fdh-radar-note { color: #bdcbe0; }
+body.dark .fdh-radar-series-1 { stroke: #d95926; fill: rgba(217, 89, 38, .12); }
+body.dark .fdh-radar-series-2 { stroke: #3987e5; fill: rgba(57, 135, 229, .12); }
+body.dark .fdh-radar-series-3 { stroke: #199e70; fill: rgba(25, 158, 112, .12); }
+body.dark .fdh-radar-dot-1 { fill: #d95926; }
+body.dark .fdh-radar-dot-2 { fill: #3987e5; }
+body.dark .fdh-radar-dot-3 { fill: #199e70; }
+body.dark .fdh-radar-swatch-1 { background: #d95926; }
+body.dark .fdh-radar-swatch-2 { background: #3987e5; }
+body.dark .fdh-radar-swatch-3 { background: #199e70; }
+body:not(.dark) .fdh-radar-grid { stroke: #dde4ee; }
+body:not(.dark) .fdh-radar-axis-label { fill: #52627a; }
+body:not(.dark) .fdh-radar-dot { stroke: #ffffff; }
+body:not(.dark) .fdh-radar-legend { color: #24344d; }
+body:not(.dark) .fdh-radar-note { color: #52627a; }
+body:not(.dark) .fdh-radar-series-1 { stroke: #eb6834; fill: rgba(235, 104, 52, .12); }
+body:not(.dark) .fdh-radar-series-2 { stroke: #2a78d6; fill: rgba(42, 120, 214, .12); }
+body:not(.dark) .fdh-radar-series-3 { stroke: #1baf7a; fill: rgba(27, 175, 122, .12); }
+body:not(.dark) .fdh-radar-dot-1 { fill: #eb6834; }
+body:not(.dark) .fdh-radar-dot-2 { fill: #2a78d6; }
+body:not(.dark) .fdh-radar-dot-3 { fill: #1baf7a; }
+body:not(.dark) .fdh-radar-swatch-1 { background: #eb6834; }
+body:not(.dark) .fdh-radar-swatch-2 { background: #2a78d6; }
+body:not(.dark) .fdh-radar-swatch-3 { background: #1baf7a; }
 """
 
 
@@ -352,6 +414,33 @@ def create_app():
                                 label=tr(lang0, "benchmark_custom_weight_label"), visible=False,
                             )
                     bench_status = gr.Markdown(tr(lang0, "benchmark_placeholder"), elem_classes="fdh-status")
+
+                    # Charts sit above the leaderboard table, and their
+                    # selectors sit above both in one shared filter row --
+                    # never inside an individual chart card, so it stays
+                    # obvious what each control scopes. `bench_rows_state`
+                    # holds the last run's scored rows so changing a
+                    # selector redraws from memory instead of re-running
+                    # every model's inference.
+                    bench_rows_state = gr.State([])
+                    with gr.Row():
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            chart_metric = gr.Dropdown(choices=[], label=tr(lang0, "chart_metric_label"))
+                        with gr.Column(scale=5, elem_classes="fdh-control-card"):
+                            radar_axes = gr.CheckboxGroup(choices=[], label=tr(lang0, "radar_axes_label"))
+                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
+                            radar_models = gr.CheckboxGroup(
+                                choices=[], label=tr(lang0, "radar_models_label", count=MAX_RADAR_MODELS)
+                            )
+                    with gr.Row(equal_height=True):
+                        with gr.Column(scale=6, elem_classes="fdh-card"):
+                            bench_bar_chart = gr.BarPlot(
+                                x="model", label=tr(lang0, "chart_bar_label"), sort="-y", height=320,
+                            )
+                        with gr.Column(scale=6, elem_classes="fdh-card"):
+                            bench_radar = gr.HTML(
+                                render_radar_svg([], [], [], lang0), label=tr(lang0, "chart_radar_label")
+                            )
                     bench_results = gr.Dataframe(label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True)
 
                     def bench_dataset_change_handler(dataset_label, lang):
@@ -364,14 +453,44 @@ def create_app():
                         dataset_label, texture_label, shot_mode_value, model_labels,
                         include_profiling, score_preset, custom_weight, lang,
                     ):
-                        for columns, rows, status in run_benchmark(
+                        """Stream the leaderboard, and re-derive the charts
+                        (and their selectors' choices) on every model that
+                        finishes -- the available metrics only become known
+                        as results land, so the selectors can't be populated
+                        up front."""
+
+                        for columns, rows, status, scored in run_benchmark(
                             dataset_label, texture_label, shot_mode_value, model_labels, lang,
                             include_profiling=include_profiling,
                             score_preset=score_preset,
                             custom_technical_weight=custom_weight,
                         ):
                             table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
-                            yield table, status
+                            metric = default_bar_metric(columns)
+                            axes = default_radar_axes(scored)
+                            models = default_radar_models(scored)
+                            yield (
+                                table,
+                                status,
+                                scored,
+                                gr.Dropdown(choices=metric_choices(columns), value=metric),
+                                gr.CheckboxGroup(choices=radar_axis_choices(scored), value=axes),
+                                gr.CheckboxGroup(choices=model_choices(scored), value=models),
+                                gr.BarPlot(
+                                    value=bar_frame(scored, metric), x="model",
+                                    y=metric or "model", y_lim=bar_y_limits(scored, metric),
+                                ),
+                                render_radar_svg(scored, axes, models, lang),
+                            )
+
+                    def bar_redraw_handler(scored, metric):
+                        return gr.BarPlot(
+                            value=bar_frame(scored, metric), x="model",
+                            y=metric or "model", y_lim=bar_y_limits(scored, metric),
+                        )
+
+                    def radar_redraw_handler(scored, axes, models, lang):
+                        return render_radar_svg(scored, axes or [], models or [], lang)
 
                     bench_dataset.change(
                         bench_dataset_change_handler,
@@ -389,8 +508,23 @@ def create_app():
                             bench_dataset, bench_texture, bench_shot_mode, bench_models,
                             bench_profiling, bench_score_preset, bench_custom_weight, lang_state,
                         ],
-                        outputs=[bench_results, bench_status],
+                        outputs=[
+                            bench_results, bench_status, bench_rows_state,
+                            chart_metric, radar_axes, radar_models,
+                            bench_bar_chart, bench_radar,
+                        ],
                     )
+                    chart_metric.change(
+                        bar_redraw_handler,
+                        inputs=[bench_rows_state, chart_metric],
+                        outputs=bench_bar_chart,
+                    )
+                    for radar_selector in (radar_axes, radar_models):
+                        radar_selector.change(
+                            radar_redraw_handler,
+                            inputs=[bench_rows_state, radar_axes, radar_models, lang_state],
+                            outputs=bench_radar,
+                        )
 
                 with gr.Tab(tr(lang0, "tab_run_history"), id="run-history") as tab_history:
                     history_header = gr.Markdown(tr(lang0, "history_header"))
@@ -502,6 +636,11 @@ def create_app():
                 gr.Dropdown(choices=score_preset_choices(lang), label=tr(lang, "benchmark_score_preset_label")),
                 gr.Slider(label=tr(lang, "benchmark_custom_weight_label")),
                 tr(lang, "benchmark_placeholder"),
+                gr.Dropdown(label=tr(lang, "chart_metric_label")),
+                gr.CheckboxGroup(label=tr(lang, "radar_axes_label")),
+                gr.CheckboxGroup(label=tr(lang, "radar_models_label", count=MAX_RADAR_MODELS)),
+                gr.BarPlot(label=tr(lang, "chart_bar_label")),
+                gr.HTML(label=tr(lang, "chart_radar_label")),
                 gr.Dataframe(label=tr(lang, "leaderboard_label")),
                 tr(lang, "history_header"),
                 gr.Textbox(label=tr(lang, "history_path_label")),
@@ -525,7 +664,8 @@ def create_app():
                 load_button, dataset_status,
                 bench_header, bench_dataset, bench_texture, bench_shot_mode, bench_models,
                 bench_run_button, bench_profiling, bench_score_preset, bench_custom_weight,
-                bench_status, bench_results,
+                bench_status, chart_metric, radar_axes, radar_models,
+                bench_bar_chart, bench_radar, bench_results,
                 history_header, history_path, history_metric, history_refresh_button,
                 history_status, history_table, history_chart,
             ],

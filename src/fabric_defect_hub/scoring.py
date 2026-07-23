@@ -19,6 +19,7 @@ updated in lockstep or raise on an unfamiliar key.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 MetricDirection = Literal["higher", "lower"]
@@ -79,6 +80,69 @@ def metric_group(name: str) -> Literal["technical", "overhead"] | None:
     return "overhead" if any(keyword in lowered for keyword in _OVERHEAD_KEYWORDS) else "technical"
 
 
+def normalize_metrics(
+    rows: list[dict[str, Any]],
+    metric_keys: set[str] | None = None,
+) -> tuple[list[str], list[dict[str, float]]]:
+    """Min-max normalize every recognized metric across `rows` onto a common
+    0-1 "higher is better" scale, inverting the lower-is-better ones.
+
+    Returns `(metric_names, per_row)` where `metric_names` is sorted (a
+    stable axis order, which the radar chart depends on -- see
+    `polygon_area`) and `per_row[i]` maps metric name -> normalized value
+    for `rows[i]`, omitting metrics that row doesn't carry.
+
+    This is the shared basis for both `score_rows` (which averages these
+    per group) and the radar chart in `web/charts.py` (which plots them as
+    polygon radii). Putting mixed-unit metrics -- an AUROC in [0, 1] beside
+    a latency in milliseconds beside a memory figure in MiB -- on one
+    comparable scale is exactly the same problem in both places, so it has
+    exactly one implementation.
+    """
+
+    names = sorted({
+        name
+        for row in rows
+        for name in row
+        if (metric_keys is None or name in metric_keys) and metric_group(name) is not None
+    })
+    normalized_by_name = {name: _normalize(rows, name) for name in names}
+    per_row = [
+        {
+            name: per_metric[index]
+            for name, per_metric in normalized_by_name.items()
+            if index in per_metric
+        }
+        for index in range(len(rows))
+    ]
+    return names, per_row
+
+
+def polygon_area(values: list[float]) -> float:
+    """Area of the polygon a radar chart traces through `values`, treated as
+    radii on `len(values)` evenly spaced axes: `0.5 * sin(2pi/n) * sum(r_i *
+    r_i+1)` around the ring.
+
+    This is the number behind "which model encloses more area" -- a single
+    summary of how a model does across every plotted axis at once.
+
+    It depends on the *order* of the axes (swapping two axes changes the
+    area), so it is only meaningful for comparing models **within one
+    chart**, never as an absolute score across charts with different axis
+    sets. `normalize_metrics` returns its names sorted precisely so that
+    order is fixed and every model on a given chart is measured the same
+    way. Fewer than 3 values cannot enclose anything, so they score 0.
+    """
+
+    count = len(values)
+    if count < 3:
+        return 0.0
+    wedge = math.sin(2 * math.pi / count)
+    return 0.5 * wedge * sum(
+        values[i] * values[(i + 1) % count] for i in range(count)
+    )
+
+
 def score_rows(
     rows: list[dict[str, Any]],
     technical_weight: float = 0.5,
@@ -107,30 +171,16 @@ def score_rows(
     if technical_weight + overhead_weight <= 0:
         raise ValueError("at least one of technical_weight/overhead_weight must be positive")
 
-    names_by_group: dict[str, list[str]] = {"technical": [], "overhead": []}
-    for name in {key for row in rows for key in row}:
-        if metric_keys is not None and name not in metric_keys:
-            continue
-        group = metric_group(name)
-        if group is not None:
-            names_by_group[group].append(name)
-
-    # normalized[group][name] maps row index -> normalized value in [0, 1],
-    # only for rows that actually have that metric.
-    normalized: dict[str, dict[str, dict[int, float]]] = {
-        group: {name: _normalize(rows, name) for name in names}
-        for group, names in names_by_group.items()
-    }
+    _, per_row = normalize_metrics(rows, metric_keys)
 
     weights = {"technical": technical_weight, "overhead": overhead_weight}
     scored_rows = []
     for index, row in enumerate(rows):
+        normalized = per_row[index]
         group_scores: dict[str, float | None] = {}
         for group in ("technical", "overhead"):
             values = [
-                per_metric[index]
-                for per_metric in normalized[group].values()
-                if index in per_metric
+                value for name, value in normalized.items() if metric_group(name) == group
             ]
             group_scores[group] = (sum(values) / len(values) * 100.0) if values else None
 

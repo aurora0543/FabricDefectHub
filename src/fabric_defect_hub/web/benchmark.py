@@ -174,7 +174,7 @@ def run_benchmark(
     score_preset: str = "balanced",
     custom_technical_weight: float | None = None,
     run_log_path: str | None = DEFAULT_RUN_LOG_PATH,
-) -> Iterator[tuple[list[str], list[list[Any]], str]]:
+) -> Iterator[tuple[list[str], list[list[Any]], str, list[dict[str, Any]]]]:
     """Evaluate every model in `model_labels` against the same dataset
     sample (test split only — the benchmark tab never trains), one model at
     a time: mount -> test -> unmount -> next model (`_release_model`).
@@ -195,12 +195,12 @@ def run_benchmark(
     """
 
     if not model_labels:
-        yield [], [], tr(lang, "bench_select_model")
+        yield [], [], tr(lang, "bench_select_model"), []
         return
 
     root = default_dataset_root(dataset_label)
     if not root:
-        yield [], [], tr(lang, "bench_dataset_unavailable", label=dataset_label)
+        yield [], [], tr(lang, "bench_dataset_unavailable", label=dataset_label), []
         return
 
     if score_preset == "custom":
@@ -228,7 +228,7 @@ def run_benchmark(
     errors: list[str] = []
     sample_count: int | None = None
     total = len(model_labels)
-    yield [], [], tr(lang, "bench_starting", total=total)
+    yield [], [], tr(lang, "bench_starting", total=total), []
 
     for index, model_label in enumerate(model_labels, start=1):
         model_spec = MODEL_CATALOG[model_label]
@@ -293,10 +293,17 @@ def _render(
     lang: str = DEFAULT_LANGUAGE,
     technical_weight: float = 0.5,
     overhead_weight: float = 0.5,
-) -> tuple[list[str], list[list[Any]], str]:
+) -> tuple[list[str], list[list[Any]], str, list[dict[str, Any]]]:
+    """Returns `(columns, table, status, scored)`. `table` is the
+    positional, display-formatted form the `gr.Dataframe` wants; `scored` is
+    the same rows as metric-name-keyed dicts, which is what `web/charts.py`
+    needs (a chart looks metrics up by name, it can't use column offsets).
+    Both come from one `score_rows` call so the charts and the table can
+    never show different numbers."""
+
     if not rows:
         base = tr(lang, "bench_no_results") if not errors else "🔴 " + "; ".join(errors)
-        return [], [], base
+        return [], [], base, []
 
     scored = score_rows(rows, technical_weight, overhead_weight)
     scored.sort(key=lambda row: (row["composite_score"] is None, -(row["composite_score"] or 0)))
@@ -318,7 +325,7 @@ def _render(
         )
     if errors:
         status += " ⚠️ " + "; ".join(errors)
-    return columns, table, status
+    return columns, table, status, scored
 
 
 def _display_value(value: Any, column: str, score_columns: list[str]) -> Any:
