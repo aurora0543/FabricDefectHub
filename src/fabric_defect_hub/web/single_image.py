@@ -133,6 +133,17 @@ DATASET_CATALOG = {
         "task": "anomaly",
         "tasks": ("anomaly", "segmentation"),
     },
+    # In-domain fabric, native bbox annotations (datasets/tianchi.py) --
+    # both a detection training source and, via its normal_Images pool, an
+    # anomaly-eligible / `fabric-train` member source. No pixel masks.
+    "Tianchi": {
+        "name": "tianchi",
+        "dir": "tianchi",
+        "env": "TIANCHI_ROOT",
+        "slice_kwarg": None,
+        "task": "detection",
+        "tasks": ("detection", "anomaly"),
+    },
 }
 # Backends whose `predict()` accepts `output_dir=` to persist pixel-level
 # anomaly maps for the heatmap overlay (`_overlay_anomaly_map`).
