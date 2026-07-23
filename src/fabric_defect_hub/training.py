@@ -35,6 +35,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
 
+from fabric_defect_hub.core.dataset_capabilities import default_dataset_roots, names_with_role
+
 ShotMode = Literal["full", "medium", "few", "test"]
 
 # "test" shot: a tiny end-to-end smoke run (per model/dataset combination)
@@ -63,18 +65,10 @@ DEFAULT_MODEL_CONFIG_DIR = Path("configs/models")
 # relative paths so a config's `data.dataset_root` doesn't have to be a
 # machine-specific absolute path or an `${ENV_VAR}` the caller has to
 # remember to export before every run.
-DEFAULT_DATASET_ROOTS: dict[str, str] = {
-    "zju-leaper": "data/ZJU-Leaper",
-    "raw-fabric": "data/RAW_FABRID",
-    "mvtec-ad": "data/MVTec AD",
-    "mvtec-loco": "data/MVTec LOCO",
-    "tilda-400": "data/TILDA_400",
-    "fabric-defects": "data/Fabric Defects Dataset",
-    "visa": "data/VisA",
-    # The fabric-train composite resolves its members under this base dir
-    # (see datasets/fabric_train.py::_MEMBERS), not a single dataset folder.
-    "fabric-train": "data",
-}
+#
+# Derived from `core.dataset_capabilities` (single declaration per dataset)
+# rather than hand-maintained here — see that module's docstring for why.
+DEFAULT_DATASET_ROOTS: dict[str, str] = default_dataset_roots()
 
 # Anomaly (one-class) training is deliberately restricted to *in-domain
 # fabric* sources: the individual fabric datasets and the `fabric-train`
@@ -84,13 +78,7 @@ DEFAULT_DATASET_ROOTS: dict[str, str] = {
 # (SDUST-FDD) belong to the ultralytics/torchvision backends, not the
 # one-class anomaly ones. `_enforce_trainable_dataset` rejects anything
 # outside this set for the one-class backends.
-ANOMALY_TRAINABLE_DATASETS: set[str] = {
-    "zju-leaper",
-    "raw-fabric",
-    "tilda-400",
-    "fabric-defects",
-    "fabric-train",
-}
+ANOMALY_TRAINABLE_DATASETS: set[str] = names_with_role("anomaly_train")
 
 # ...and the exact mirror image, for zero-shot (ZSAD) backends. MoECLIP
 # learns prompt-aligned anomaly features from labelled defects on an
@@ -101,11 +89,7 @@ ANOMALY_TRAINABLE_DATASETS: set[str] = {
 # benchmarks (eval-only for every other model) are the allowed training
 # corpora instead. Which fabric set it is then *evaluated* on is a
 # separate config key (`data.test_dataset`), unrestricted.
-ZERO_SHOT_TRAINABLE_DATASETS: set[str] = {
-    "visa",
-    "mvtec-ad",
-    "mvtec-loco",
-}
+ZERO_SHOT_TRAINABLE_DATASETS: set[str] = names_with_role("zero_shot_train")
 
 # Per backend: (train-split selection key, val/test-split selection key) in
 # that backend's `data` config section.

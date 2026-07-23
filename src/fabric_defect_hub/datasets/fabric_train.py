@@ -9,10 +9,13 @@ itself a registered `DatasetAdapter` whose `load_samples()` concatenates its
 members' samples -- so `data.dataset: fabric-train` flows through the
 existing one-dataset pipeline unchanged.
 
-Members (each a fabric, in-domain anomaly source): ZJU-Leaper, RAW_FABRID,
-TILDA-400, Fabric Defects Dataset. Each member is resolved through the same
-registry the loader uses, with a root of `<root>/<member subdir>` (default
-`root` is the project's `data/` directory).
+Members (each a fabric, in-domain anomaly source) are every dataset declared
+with the "fabric_train_member" role in `core.dataset_capabilities` (ZJU-Leaper,
+RAW_FABRID, TILDA-400, Fabric Defects Dataset, Tianchi as of this writing) --
+adding a new fabric dataset's capability declaration is enough to fold it
+into this union, no edit needed here. Each member is resolved through the
+same registry the loader uses, with a root of `<root>/<member subdir>`
+(default `root` is the project's `data/` directory).
 
 Selection semantics match the other adapters, applied to the *union*:
 `num_samples` is the global total across all members (None = everything);
@@ -27,19 +30,27 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
+from fabric_defect_hub.core.dataset_capabilities import all_capabilities
 from fabric_defect_hub.core.registry import get_dataset_cls, register_dataset
 from fabric_defect_hub.core.types import Sample, Task
 from fabric_defect_hub.datasets.base import DatasetAdapter
 
-# (registry name, subdirectory under `root`). Kept in step with
-# `training.DEFAULT_DATASET_ROOTS`; `root` defaults to the `data/` dir so a
-# member's resolved root is e.g. `data/ZJU-Leaper`.
-_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("zju-leaper", "ZJU-Leaper"),
-    ("raw-fabric", "RAW_FABRID"),
-    ("tilda-400", "TILDA_400"),
-    ("fabric-defects", "Fabric Defects Dataset"),
-)
+
+def _members() -> tuple[tuple[str, str], ...]:
+    """(registry name, subdirectory under `root`) for every dataset declared
+    with the "fabric_train_member" role -- each member's default root is
+    `data/<subdir>` (see `core.dataset_capabilities`), so the subdir is just
+    that default root with the `data/` prefix stripped."""
+
+    members = [
+        (name, caps.default_root.removeprefix("data/"))
+        for name, caps in all_capabilities().items()
+        if "fabric_train_member" in caps.roles and caps.default_root
+    ]
+    return tuple(sorted(members))
+
+
+_MEMBERS: tuple[tuple[str, str], ...] = _members()
 
 
 @register_dataset("fabric-train")

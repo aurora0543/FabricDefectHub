@@ -125,7 +125,8 @@ trained on the cross-domain corpora and *not* on fabric (see
 - **RAW-Fabric (RAW_FABRID)** — 709 high-res grayscale images + 204 masks, plus an MVTec-AD-style 256×256 patch set (14,196/4,969/687/687).
 - **TILDA-400** — fabric texture patches, `good/` + 4 defect types (hole / oil spot / thread error / objects); image-level labels, no pixel masks.
 - **Fabric Defects Dataset** — fabric, `defect free/` + 5 defect classes (hole / stain / lines / vertical / horizontal); hole/vertical/horizontal ship binary pixel masks (the dataset's `_processed` files), lines/stain are image-level only.
-- **`fabric-train`** — a composite (not a folder on disk) that unions the four fabric sources above for one-class training.
+- **Tianchi** (Guangdong fabric defect challenge) — fabric, native bbox annotations (34 defect types) across three labelled collections (`train1/partA`, `train1/partB`, `train2`), each with its own `defect_Images/` + `normal_Images/` + `Annotations/anno_train.json`; dual role — see [Models](#models)/detection track below for bbox training, and the normal-only pool below for anomaly training. The competition's unlabelled `testA`/`testB` submission images are never read (no ground truth, so they can't safely be treated as normal).
+- **`fabric-train`** — a composite (not a folder on disk) that unions every dataset declared with the `fabric_train_member` role for one-class training (currently ZJU-Leaper, RAW_FABRID, TILDA-400, Fabric Defects Dataset, Tianchi's normal images) — see `core/dataset_capabilities.py`, the single place each dataset's training/eval roles are now declared.
 
 **Cross-domain benchmarks (eval-only — except as MoECLIP's zero-shot
 training corpus, see [Models](#models)):**
@@ -134,9 +135,28 @@ training corpus, see [Models](#models)):**
 - **MVTec LOCO AD** — 5 categories with logical + structural anomalies; per-image ground-truth mask directories.
 - **VisA** — 12 object categories (Normal/Anomaly + pixel masks); cross-domain zero-shot evaluation.
 
-**Detection track (YOLO labels, not anomaly):**
+**Detection track (bbox labels, not anomaly):**
 
-- **SDUST-FDD** — fabric, YOLO bounding-box labels (6 defect classes); feeds the Ultralytics/torchvision detectors, not the one-class anomaly models.
+- **SDUST-FDD** — fabric, YOLO bounding-box labels (6 defect classes); a hand-staged folder used via `data.data_yaml` directly (no registered `DatasetAdapter`), feeds the Ultralytics/torchvision detectors, not the one-class anomaly models.
+- **Tianchi** — fabric, native xyxy bbox labels (34 defect classes) via a registered `DatasetAdapter` (`datasets/tianchi.py`); feeds the same detectors, and also see the in-domain fabric section above for its anomaly-training role.
+
+## Dataset capabilities
+
+`src/fabric_defect_hub/core/dataset_capabilities.py` is the single source of
+truth for what each registered dataset may be used for: a
+`register_capabilities(name, default_root=..., roles={...}, tasks=(...))`
+declaration per dataset, instead of the same decision being hand-copied
+across `training.py`'s trainable-dataset sets, `datasets/fabric_train.py`'s
+member list, and the default `data/<Dataset>` root fallback. Roles are
+`anomaly_train` (in-domain fabric, valid standalone training source for the
+one-class backends), `zero_shot_train` (cross-domain auxiliary corpus
+MoECLIP may train on), `detection_train` (bbox-labelled, feeds the
+Ultralytics/torchvision detectors), and `fabric_train_member` (contributes
+samples to the `fabric-train` composite). `training.ANOMALY_TRAINABLE_DATASETS`,
+`training.ZERO_SHOT_TRAINABLE_DATASETS`, `training.DEFAULT_DATASET_ROOTS`, and
+`fabric_train._MEMBERS` are all *derived* from this registry — declaring a new
+dataset's capabilities here is what makes it training-eligible and/or a
+`fabric-train` member, no other file needs editing for that part.
 
 ## Quick Start
 
@@ -237,7 +257,7 @@ class MyFabricDataset(DatasetAdapter):
 For segmentation, also fill `Annotations.masks`; for anomaly detection, fill `Annotations.is_anomalous` and, when available, `Annotations.anomaly_mask`.
 
 3. Import the new adapter in `datasets/__init__.py`. `load_dataset()` imports this package to trigger decorators, so omitting this import leaves the registry unaware of the dataset.
-4. Add `<dataset-name>: "data/<directory>"` to `DEFAULT_DATASET_ROOTS` in `training.py` if the dataset should work with the default local layout. Then use the registry name in a model YAML's `data.dataset` field or pass it with `--dataset`.
+4. Call `register_capabilities("<dataset-name>", default_root="data/<directory>", roles={...}, tasks=(...))` in `core/dataset_capabilities.py` (see [Dataset capabilities](#dataset-capabilities)) — this is what gives the dataset a default local-layout root, and what makes it eligible as a training source and/or a `fabric-train` member; skip the `roles` you don't want to grant (e.g. leave off `anomaly_train` for a detection-only set). Then use the registry name in a model YAML's `data.dataset` field or pass it with `--dataset`.
 5. Validate loading before a full run:
 
 ```bash
