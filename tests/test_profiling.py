@@ -11,6 +11,8 @@ module, and raises `OSError: could not get source code` against anything
 defined in a place Python can't retrieve source lines for.
 """
 
+import statistics
+
 import pytest
 import torch
 import torch.nn as nn
@@ -43,12 +45,30 @@ def test_summarize_latencies_exact_values():
     assert result["latency_ms_p99"] == 100.0
     assert result["fps"] == pytest.approx(2000.0 / 55.0)
     assert result["peak_memory_mb"] == 2.0
+    # no memory_samples_bytes given -> avg falls back to the single peak value
+    assert result["avg_memory_mb"] == 2.0
+    # instantaneous fps = 2000/latency for each of the 10 latencies above;
+    # hand-computed population stddev/mean of that series.
+    instantaneous_fps = [2000.0 / latency for latency in latencies]
+    assert result["fps_std"] == pytest.approx(statistics.pstdev(instantaneous_fps))
+    assert result["fps_cv"] == pytest.approx(statistics.pstdev(instantaneous_fps) / statistics.fmean(instantaneous_fps))
+
+
+def test_summarize_latencies_averages_memory_samples():
+    result = summarize_latencies(
+        [10.0, 10.0], batch_size=1, peak_memory_bytes=3 * 1024 * 1024,
+        memory_samples_bytes=[1 * 1024 * 1024, 3 * 1024 * 1024],
+    )
+    assert result["peak_memory_mb"] == 3.0
+    assert result["avg_memory_mb"] == 2.0
 
 
 def test_summarize_latencies_empty_zero_fps():
     result = summarize_latencies([], batch_size=1, peak_memory_bytes=0)
     assert result["fps"] == 0.0
     assert result["latency_ms_p50"] == 0.0
+    assert result["fps_std"] == 0.0
+    assert result["fps_cv"] == 0.0
 
 
 class _StubProfiler(BackendProfiler):
@@ -82,11 +102,15 @@ def test_pytorch_profiler_batched_input(tmp_path):
     metrics = PyTorchProfiler().profile(ExportedArtifact(path=str(path), target="torchscript"), config)
 
     assert set(metrics) == {
-        "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps", "peak_memory_mb",
+        "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps",
+        "fps_std", "fps_cv", "peak_memory_mb", "avg_memory_mb",
     }
     assert metrics["latency_ms_p50"] <= metrics["latency_ms_p95"] <= metrics["latency_ms_p99"]
     assert metrics["fps"] == pytest.approx((1000.0 / metrics["latency_ms_mean"]) * config.batch_size)
     assert metrics["peak_memory_mb"] >= 0
+    assert metrics["avg_memory_mb"] >= 0
+    assert metrics["fps_std"] >= 0
+    assert metrics["fps_cv"] >= 0
 
 
 def test_pytorch_profiler_list_style_input(tmp_path):
@@ -157,10 +181,12 @@ def test_onnxruntime_profiler_dynamic_batch(tmp_path):
     metrics = ONNXRuntimeProfiler().profile(ExportedArtifact(path=str(onnx_path), target="onnx"), config)
 
     assert set(metrics) == {
-        "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps", "peak_memory_mb",
+        "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps",
+        "fps_std", "fps_cv", "peak_memory_mb", "avg_memory_mb",
     }
     assert metrics["latency_ms_p50"] <= metrics["latency_ms_p95"] <= metrics["latency_ms_p99"]
     assert metrics["peak_memory_mb"] > 0
+    assert metrics["avg_memory_mb"] > 0
 
 
 def test_onnxruntime_profiler_rejects_wrong_target():

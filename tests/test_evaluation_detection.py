@@ -2,8 +2,16 @@
 below were computed by actually running the evaluator, not estimated.
 """
 
+import pytest
+
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
-from fabric_defect_hub.evaluation.detection import DetectionEvaluator, _box_iou, _precision_recall_f1
+from fabric_defect_hub.evaluation.detection import (
+    DetectionEvaluator,
+    _box_iou,
+    _precision_recall_f1,
+    quantization_recall_decay,
+    recall_by_size,
+)
 
 
 def test_box_iou_partial_overlap():
@@ -109,3 +117,53 @@ def test_precision_recall_f1_hand_computed_scenario():
     assert result["precision_at_threshold"] == 0.5
     assert result["recall_at_threshold"] == 0.5
     assert result["f1_at_threshold"] == 0.5
+
+
+def test_recall_by_size_buckets_small_and_normal_defects_separately():
+    # "small": an 8x8 gt box (shorter side 8 < 10px), matched -> tp
+    small_hit = Sample(
+        id="s1", image_path="s1.jpg", task="detection",
+        annotations=Annotations(boxes=[[0, 0, 8, 8]], labels=["defect"]),
+    )
+    small_hit_pred = Prediction(sample_id="s1", boxes=[[0, 0, 8, 8]], labels=["defect"], scores=[0.9])
+
+    # "small": another 8x8 gt box, missed entirely -> fn
+    small_miss = Sample(
+        id="s2", image_path="s2.jpg", task="detection",
+        annotations=Annotations(boxes=[[100, 100, 108, 108]], labels=["defect"]),
+    )
+    small_miss_pred = Prediction(sample_id="s2", boxes=[], labels=[], scores=[])
+
+    # "normal": a 50x50 gt box (shorter side 50 >= 10px), matched -> tp
+    normal_hit = Sample(
+        id="n1", image_path="n1.jpg", task="detection",
+        annotations=Annotations(boxes=[[0, 0, 50, 50]], labels=["defect"]),
+    )
+    normal_hit_pred = Prediction(sample_id="n1", boxes=[[0, 0, 50, 50]], labels=["defect"], scores=[0.9])
+
+    samples = [small_hit, small_miss, normal_hit]
+    predictions = [small_hit_pred, small_miss_pred, normal_hit_pred]
+
+    result = recall_by_size(samples, predictions, small_max_px=10.0)
+    assert result["recall_small"] == pytest.approx(0.5)  # 1 tp, 1 fn
+    assert result["recall_normal"] == pytest.approx(1.0)  # 1 tp, 0 fn
+
+
+def test_recall_by_size_empty_bucket_is_zero_not_error():
+    sample = Sample(
+        id="n1", image_path="n1.jpg", task="detection",
+        annotations=Annotations(boxes=[[0, 0, 50, 50]], labels=["defect"]),
+    )
+    prediction = Prediction(sample_id="n1", boxes=[[0, 0, 50, 50]], labels=["defect"], scores=[0.9])
+    result = recall_by_size([sample], [prediction], small_max_px=10.0)
+    assert result["recall_small"] == 0.0
+    assert result["recall_normal"] == pytest.approx(1.0)
+
+
+def test_quantization_recall_decay_hand_computed():
+    result = quantization_recall_decay(
+        recall_fp32_small=0.80, recall_quant_small=0.55,
+        recall_fp32_normal=0.90, recall_quant_normal=0.85,
+    )
+    assert result["delta_recall_small"] == pytest.approx(0.25)
+    assert result["delta_recall_normal"] == pytest.approx(0.05)

@@ -50,6 +50,7 @@ class PyTorchProfiler(BackendProfiler):
                 model(dummy_input)
 
             latencies_ms: list[float] = []
+            memory_samples_bytes: list[int] = []
             peak_memory_bytes = 0
             monitor = self.start_power_monitor(config)
             try:
@@ -59,10 +60,14 @@ class PyTorchProfiler(BackendProfiler):
                     model(dummy_input)
                     _synchronize(device)
                     latencies_ms.append((time.perf_counter() - start) * 1000.0)
-                    peak_memory_bytes = max(peak_memory_bytes, _peak_memory_bytes(device))
+                    sample_bytes = _peak_memory_bytes(device)
+                    memory_samples_bytes.append(sample_bytes)
+                    peak_memory_bytes = max(peak_memory_bytes, sample_bytes)
                     monitor.sample()
             finally:
-                metrics = summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
+                metrics = summarize_latencies(
+                    latencies_ms, config.batch_size, peak_memory_bytes, memory_samples_bytes
+                )
                 self.finish_power_monitor(monitor, metrics)
 
         return metrics

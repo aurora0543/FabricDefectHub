@@ -72,7 +72,7 @@ def test_texture_choices_are_safe_when_the_dataset_is_not_connected(monkeypatch,
 def test_raw_fabrid_is_registered_alongside_zju_leaper():
     assert set(DATASET_CATALOG) == {
         "ZJU-Leaper", "RAW-FABRID", "MVTec AD", "MVTec LOCO", "VisA",
-        "TILDA-400", "Fabric Defects",
+        "TILDA-400", "Fabric Defects", "Tianchi",
     }
     assert DATASET_CATALOG["RAW-FABRID"]["name"] == "raw-fabric"
     assert DATASET_CATALOG["MVTec AD"]["name"] == "mvtec-ad"
