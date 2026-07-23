@@ -947,40 +947,45 @@ class HungarianMatcher(nn.Module):
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
 
-    @torch.no_grad()
     def forward(self, outputs, targets):
+        # `@torch.no_grad()` would need `torch` at class-body/module-import
+        # time -- unlike every other torch use in this file, which is
+        # lazily inside a method body, so importing this module never
+        # requires torch to be installed. Doing it as a `with` block instead
+        # keeps that guarantee while still disabling autograd for the match.
         import torch
         from scipy.optimize import linear_sum_assignment
         from torchvision.ops import generalized_box_iou, box_convert
 
-        bs, num_queries = outputs["pred_logits"].shape[:2]
-        indices = []
-        for b in range(bs):
-            out_prob = outputs["pred_logits"][b].softmax(-1)
-            out_bbox = outputs["pred_boxes"][b]
+        with torch.no_grad():
+            bs, num_queries = outputs["pred_logits"].shape[:2]
+            indices = []
+            for b in range(bs):
+                out_prob = outputs["pred_logits"][b].softmax(-1)
+                out_bbox = outputs["pred_boxes"][b]
 
-            tgt_ids = targets[b]["labels"]
-            tgt_bbox = targets[b]["boxes"]
+                tgt_ids = targets[b]["labels"]
+                tgt_bbox = targets[b]["boxes"]
 
-            if len(tgt_ids) == 0:
-                indices.append((torch.empty(0, dtype=torch.int64), torch.empty(0, dtype=torch.int64)))
-                continue
+                if len(tgt_ids) == 0:
+                    indices.append((torch.empty(0, dtype=torch.int64), torch.empty(0, dtype=torch.int64)))
+                    continue
 
-            cost_class = -out_prob[:, tgt_ids]
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
-            out_bbox_xyxy = box_convert(out_bbox, "cxcywh", "xyxy")
-            tgt_bbox_xyxy = box_convert(tgt_bbox, "cxcywh", "xyxy")
-            cost_giou = -generalized_box_iou(out_bbox_xyxy, tgt_bbox_xyxy)
+                cost_class = -out_prob[:, tgt_ids]
+                cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+                out_bbox_xyxy = box_convert(out_bbox, "cxcywh", "xyxy")
+                tgt_bbox_xyxy = box_convert(tgt_bbox, "cxcywh", "xyxy")
+                cost_giou = -generalized_box_iou(out_bbox_xyxy, tgt_bbox_xyxy)
 
-            C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-            C = C.cpu()
-            
-            src_ind, tgt_ind = linear_sum_assignment(C.numpy())
-            indices.append((
-                torch.as_tensor(src_ind, dtype=torch.int64, device=out_bbox.device),
-                torch.as_tensor(tgt_ind, dtype=torch.int64, device=out_bbox.device)
-            ))
-        return indices
+                C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+                C = C.cpu()
+
+                src_ind, tgt_ind = linear_sum_assignment(C.numpy())
+                indices.append((
+                    torch.as_tensor(src_ind, dtype=torch.int64, device=out_bbox.device),
+                    torch.as_tensor(tgt_ind, dtype=torch.int64, device=out_bbox.device)
+                ))
+            return indices
 
 
 class SetCriterion(nn.Module):

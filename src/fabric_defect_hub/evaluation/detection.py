@@ -23,10 +23,12 @@ the after-the-fact, backend-agnostic scoring pass that produces the
 
 from __future__ import annotations
 
+from fabric_defect_hub.core.registry import register_evaluator
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.evaluation.base import Evaluator
 
 
+@register_evaluator
 class DetectionEvaluator(Evaluator):
     """COCO-style mAP + a fixed-threshold Precision/Recall/F1 summary."""
 

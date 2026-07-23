@@ -24,10 +24,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from fabric_defect_hub.core.registry import register_evaluator
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.evaluation.base import Evaluator
 
 
+@register_evaluator
 class SegmentationEvaluator(Evaluator):
     """Binary mIoU / Dice / pixel-F1 over samples with meaningful masks.
 

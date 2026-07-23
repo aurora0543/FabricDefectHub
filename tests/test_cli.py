@@ -1,6 +1,6 @@
 import pytest
 
-from fabric_defect_hub.cli import _infer_backend, build_parser
+from fabric_defect_hub.cli import _infer_backend, _run_list, build_parser
 
 
 @pytest.mark.parametrize(
@@ -18,6 +18,32 @@ def test_infer_backend(model, backend):
 def test_cli_parser_accepts_run_and_benchmark():
     assert build_parser().parse_args(["run", "model.yaml"]).command == "run"
     assert build_parser().parse_args(["benchmark", "benchmark.yaml"]).command == "benchmark"
+
+
+def test_cli_parser_accepts_list():
+    assert build_parser().parse_args(["list"]).command == "list"
+
+
+def test_run_list_reports_every_registry_category():
+    payload = _run_list()
+
+    assert set(payload) == {"datasets", "model_backends", "evaluators", "profilers"}
+    assert "zju-leaper" in payload["datasets"]
+    # Subset, not exact-equality: the registries are shared global state for
+    # the whole test session (see test_registry.py), so another test's fake
+    # registration can legitimately still be present here.
+    assert {"anomaly", "detection", "industrial", "segmentation"} <= set(payload["evaluators"])
+    assert {"onnxruntime", "pytorch", "tensorrt"} <= set(payload["profilers"])
+    # Not asserted: "available" ⊆ "known". That invariant genuinely holds in
+    # real usage (only the 6 real backend modules' @register_model calls
+    # ever populate the registry), but other test modules in this same
+    # session register their own fake backends (e.g. "fake-backend" in
+    # test_loader.py) straight into that same shared global registry, which
+    # legitimately breaks the subset relationship here without meaning
+    # anything is wrong.
+    assert {"ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"} <= set(
+        payload["model_backends"]["known"]
+    )
 
 
 def test_cli_parser_accepts_train():

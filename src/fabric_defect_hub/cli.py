@@ -8,6 +8,12 @@ from dataclasses import asdict
 from typing import Any
 
 
+def _model_backend_choices() -> tuple[str, ...]:
+    from fabric_defect_hub.loader import list_model_backends
+
+    return tuple(list_model_backends())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fdh", description="FabricDefectHub runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -15,12 +21,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="run a model or benchmark YAML config")
     run_parser.add_argument("config", help="path to YAML config")
     run_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
+        "--backend", choices=_model_backend_choices(),
         help="model backend; inferred from the config when omitted",
     )
 
     benchmark_parser = subparsers.add_parser("benchmark", help="run a benchmark YAML config")
     benchmark_parser.add_argument("config", help="path to benchmark YAML config")
+
+    subparsers.add_parser(
+        "list",
+        help="list every registered dataset/model-backend/evaluator/profiler "
+        "(self-describing platform catalog, not hardcoded documentation)",
+    )
 
     train_parser = subparsers.add_parser(
         "train",
@@ -43,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list", action="store_true", help="list resolvable model configs under --config-dir and exit"
     )
     train_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
+        "--backend", choices=_model_backend_choices(),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     train_parser.add_argument(
@@ -119,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory searched when 'model' is a filename stem or keyword (default: configs/models)",
     )
     predict_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
+        "--backend", choices=_model_backend_choices(),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     predict_parser.add_argument(
@@ -155,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "benchmark":
             payload = _run_benchmark(args.config)
+        elif args.command == "list":
+            payload = _run_list()
         elif args.command == "train":
             payload = _run_train(args)
         elif args.command == "predict":
@@ -203,6 +217,25 @@ def _run_benchmark(path: str) -> list[dict[str, Any]]:
 
     config = BenchmarkConfig.from_yaml(path)
     return [experiment_result_to_dict(result) for result in config.run()]
+
+
+def _run_list() -> Any:
+    import importlib
+
+    from fabric_defect_hub.core import registry
+    from fabric_defect_hub.loader import import_all_model_backends, list_model_backends
+
+    importlib.import_module("fabric_defect_hub.datasets")
+    importlib.import_module("fabric_defect_hub.evaluation")
+    importlib.import_module("fabric_defect_hub.profiling")
+    import_all_model_backends()
+
+    return {
+        "datasets": registry.list_datasets(),
+        "model_backends": {"known": list_model_backends(), "available": registry.list_models()},
+        "evaluators": registry.list_evaluators(),
+        "profilers": registry.list_profilers(),
+    }
 
 
 def _run_train(args: argparse.Namespace) -> Any:
