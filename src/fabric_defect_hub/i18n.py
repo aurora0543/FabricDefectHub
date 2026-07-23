@@ -123,6 +123,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "bench_progress": "🔵 Tested {index}/{total} — last: {model}.",
         "bench_done": "🟢 Evaluated {count} model(s) on {samples} samples ({shot}).",
         "bench_no_results": "🔴 No results produced.",
+        "benchmark_profiling_label": "Include performance profiling (FPS / latency / memory)",
+        "benchmark_score_preset_label": "Score preset",
+        "benchmark_custom_weight_label": "Technical vs. overhead weight (higher = favor accuracy)",
+        "choice_score_accuracy_first": "Accuracy-first",
+        "choice_score_balanced": "Balanced",
+        "choice_score_efficiency_first": "Efficiency-first",
+        "choice_score_custom": "Custom",
+        "tab_run_history": "Run History",
+        "history_header": (
+            "### Run history\n"
+            "Every completed benchmark run (from this UI or `fdh benchmark`) is "
+            "appended as one line to a shared JSONL log — this reads it back."
+        ),
+        "history_path_label": "Run log path",
+        "btn_history_refresh": "Refresh",
+        "history_metric_label": "Metric to chart",
+        "history_no_runs": "No runs found at this path yet.",
+        "history_load_error": "🔴 Could not read run log — {error}",
+        "history_table_label": "Runs",
+        "history_chart_label": "Metric by model (most recent run each)",
     },
     "zh": {
         "nav_links": "工作台 · 数据集 · 模型 · 结果",
@@ -222,6 +242,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "bench_progress": "🔵 已测试 {index}/{total} — 最近完成：{model}。",
         "bench_done": "🟢 已在 {samples} 个样本（{shot}）上评测 {count} 个模型。",
         "bench_no_results": "🔴 未产生任何结果。",
+        "benchmark_profiling_label": "启用性能画像（FPS / 延迟 / 显存）",
+        "benchmark_score_preset_label": "评分预设",
+        "benchmark_custom_weight_label": "技术 vs 开销权重（越高越偏重精度）",
+        "choice_score_accuracy_first": "精度优先",
+        "choice_score_balanced": "均衡",
+        "choice_score_efficiency_first": "效率优先",
+        "choice_score_custom": "自定义",
+        "tab_run_history": "运行历史",
+        "history_header": (
+            "### 运行历史\n"
+            "每一次完成的基准测试（无论来自本界面还是 `fdh benchmark`）都会作为一行"
+            "追加到共享的 JSONL 日志中——这里将其读取回来展示。"
+        ),
+        "history_path_label": "运行日志路径",
+        "btn_history_refresh": "刷新",
+        "history_metric_label": "图表指标",
+        "history_no_runs": "该路径下暂无运行记录。",
+        "history_load_error": "🔴 无法读取运行日志 — {error}",
+        "history_table_label": "运行记录",
+        "history_chart_label": "各模型指标对比（每个模型取最近一次运行）",
     },
 }
 

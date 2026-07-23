@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, LANGUAGES, tr
 from fabric_defect_hub.inference.session import InferenceSessionManager, format_session_status
-from fabric_defect_hub.web.benchmark import compatible_models, run_benchmark
+from fabric_defect_hub.reporting import flatten_run_log_rows, latest_run_per_model, read_run_log
+from fabric_defect_hub.web.benchmark import (
+    DEFAULT_RUN_LOG_PATH,
+    compatible_models,
+    run_benchmark,
+    score_preset_choices,
+)
 from fabric_defect_hub.web.single_image import (
     DATASET_CATALOG,
     MODEL_CATALOG,
@@ -95,6 +101,25 @@ def _nav_html(lang: str) -> str:
 
 def _lang_choices() -> list[tuple[str, str]]:
     return [(display, code) for code, display in LANGUAGES.items()]
+
+
+def _history_chart_data(rows: list[dict], metric: str | None):
+    """A `model -> metric` `pandas.DataFrame` for `gr.BarPlot`, one bar per
+    model (its most recent logged run, via `reporting.latest_run_per_model`)
+    -- `None` when there's no metric to chart yet."""
+
+    if not metric:
+        return None
+    import pandas as pd
+
+    data = [
+        {"model": row.get("model", {}).get("name", ""), metric: row.get("metrics", {}).get(metric)}
+        for row in latest_run_per_model(rows)
+    ]
+    data = [record for record in data if record[metric] is not None]
+    if not data:
+        return None
+    return pd.DataFrame(data)
 
 
 def create_app():
@@ -311,6 +336,21 @@ def create_app():
                             bench_run_button = gr.Button(
                                 tr(lang0, "btn_run_benchmark"), variant="primary", elem_classes="fdh-primary"
                             )
+                    with gr.Row():
+                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
+                            bench_profiling = gr.Checkbox(
+                                value=False, label=tr(lang0, "benchmark_profiling_label")
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            bench_score_preset = gr.Dropdown(
+                                choices=score_preset_choices(lang0), value="balanced",
+                                label=tr(lang0, "benchmark_score_preset_label"),
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            bench_custom_weight = gr.Slider(
+                                0, 1, value=0.5, step=0.05,
+                                label=tr(lang0, "benchmark_custom_weight_label"), visible=False,
+                            )
                     bench_status = gr.Markdown(tr(lang0, "benchmark_placeholder"), elem_classes="fdh-status")
                     bench_results = gr.Dataframe(label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True)
 
@@ -320,8 +360,16 @@ def create_app():
                             gr.CheckboxGroup(choices=compatible_models(dataset_label), value=[]),
                         )
 
-                    def bench_run_handler(dataset_label, texture_label, shot_mode_value, model_labels, lang):
-                        for columns, rows, status in run_benchmark(dataset_label, texture_label, shot_mode_value, model_labels, lang):
+                    def bench_run_handler(
+                        dataset_label, texture_label, shot_mode_value, model_labels,
+                        include_profiling, score_preset, custom_weight, lang,
+                    ):
+                        for columns, rows, status in run_benchmark(
+                            dataset_label, texture_label, shot_mode_value, model_labels, lang,
+                            include_profiling=include_profiling,
+                            score_preset=score_preset,
+                            custom_technical_weight=custom_weight,
+                        ):
                             table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
                             yield table, status
 
@@ -330,10 +378,76 @@ def create_app():
                         inputs=[bench_dataset, lang_state],
                         outputs=[bench_texture, bench_models],
                     )
+                    bench_score_preset.change(
+                        lambda preset: gr.Slider(visible=preset == "custom"),
+                        inputs=bench_score_preset,
+                        outputs=bench_custom_weight,
+                    )
                     bench_run_button.click(
                         bench_run_handler,
-                        inputs=[bench_dataset, bench_texture, bench_shot_mode, bench_models, lang_state],
+                        inputs=[
+                            bench_dataset, bench_texture, bench_shot_mode, bench_models,
+                            bench_profiling, bench_score_preset, bench_custom_weight, lang_state,
+                        ],
                         outputs=[bench_results, bench_status],
+                    )
+
+                with gr.Tab(tr(lang0, "tab_run_history"), id="run-history") as tab_history:
+                    history_header = gr.Markdown(tr(lang0, "history_header"))
+                    with gr.Row():
+                        with gr.Column(scale=5, elem_classes="fdh-control-card"):
+                            history_path = gr.Textbox(
+                                value=DEFAULT_RUN_LOG_PATH, label=tr(lang0, "history_path_label")
+                            )
+                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
+                            history_metric = gr.Dropdown(choices=[], label=tr(lang0, "history_metric_label"))
+                        with gr.Column(scale=2, elem_classes="fdh-control-card fdh-action-run"):
+                            history_refresh_button = gr.Button(
+                                tr(lang0, "btn_history_refresh"), variant="secondary"
+                            )
+                    history_status = gr.Markdown(tr(lang0, "history_no_runs"), elem_classes="fdh-status")
+                    history_table = gr.Dataframe(
+                        label=tr(lang0, "history_table_label"), interactive=False, wrap=True
+                    )
+                    history_chart = gr.BarPlot(label=tr(lang0, "history_chart_label"))
+
+                    def history_refresh_handler(path, metric, lang):
+                        try:
+                            rows = read_run_log(path)
+                        except (OSError, ValueError) as exc:
+                            return (
+                                gr.Dataframe(value=[]), gr.Dropdown(choices=[]), None,
+                                tr(lang, "history_load_error", error=exc),
+                            )
+                        if not rows:
+                            return gr.Dataframe(value=[]), gr.Dropdown(choices=[]), None, tr(lang, "history_no_runs")
+
+                        columns, table = flatten_run_log_rows(rows)
+                        excluded = {"timestamp_utc", "model", "backend", "task", "dataset", "device"}
+                        metric_choices = [column for column in columns if column not in excluded]
+                        selected_metric = metric if metric in metric_choices else (
+                            metric_choices[0] if metric_choices else None
+                        )
+                        return (
+                            gr.Dataframe(headers=columns, value=table),
+                            gr.Dropdown(choices=metric_choices, value=selected_metric),
+                            _history_chart_data(rows, selected_metric),
+                            tr(lang, "history_table_label"),
+                        )
+
+                    def history_metric_change_handler(path, metric, lang):
+                        rows = read_run_log(path)
+                        return _history_chart_data(rows, metric)
+
+                    history_refresh_button.click(
+                        history_refresh_handler,
+                        inputs=[history_path, history_metric, lang_state],
+                        outputs=[history_table, history_metric, history_chart, history_status],
+                    )
+                    history_metric.change(
+                        history_metric_change_handler,
+                        inputs=[history_path, history_metric, lang_state],
+                        outputs=history_chart,
                     )
 
         # -- Language toggle: rebuilds every static label/header/button/
@@ -352,6 +466,7 @@ def create_app():
                 _nav_html(lang),
                 gr.Tab(label=tr(lang, "tab_single_image")),
                 gr.Tab(label=tr(lang, "tab_benchmark")),
+                gr.Tab(label=tr(lang, "tab_run_history")),
                 tr(lang, "model_session_header"),
                 gr.Dropdown(label=tr(lang, "model_dropdown_label")),
                 model_status(model_label, lang),
@@ -383,15 +498,25 @@ def create_app():
                 gr.Radio(choices=shot_mode_choices(lang), label=tr(lang, "benchmark_shot_label")),
                 gr.CheckboxGroup(label=tr(lang, "benchmark_models_label")),
                 tr(lang, "btn_run_benchmark"),
+                gr.Checkbox(label=tr(lang, "benchmark_profiling_label")),
+                gr.Dropdown(choices=score_preset_choices(lang), label=tr(lang, "benchmark_score_preset_label")),
+                gr.Slider(label=tr(lang, "benchmark_custom_weight_label")),
                 tr(lang, "benchmark_placeholder"),
                 gr.Dataframe(label=tr(lang, "leaderboard_label")),
+                tr(lang, "history_header"),
+                gr.Textbox(label=tr(lang, "history_path_label")),
+                gr.Dropdown(label=tr(lang, "history_metric_label")),
+                tr(lang, "btn_history_refresh"),
+                tr(lang, "history_no_runs"),
+                gr.Dataframe(label=tr(lang, "history_table_label")),
+                gr.BarPlot(label=tr(lang, "history_chart_label")),
             )
 
         lang_choice.change(
             apply_language,
             inputs=[lang_choice, model_choice, dataset_choice, state],
             outputs=[
-                lang_state, nav_html, tab_single, tab_bench,
+                lang_state, nav_html, tab_single, tab_bench, tab_history,
                 model_header, model_choice, model_state,
                 load_model_button, unload_model_button, verify_model_button, detect_button,
                 source_image, position, previous, next_image, result_image,
@@ -399,7 +524,10 @@ def create_app():
                 dataset_header, dataset_choice, texture_choice, split, sample_count, image_scope, shot_mode,
                 load_button, dataset_status,
                 bench_header, bench_dataset, bench_texture, bench_shot_mode, bench_models,
-                bench_run_button, bench_status, bench_results,
+                bench_run_button, bench_profiling, bench_score_preset, bench_custom_weight,
+                bench_status, bench_results,
+                history_header, history_path, history_metric, history_refresh_button,
+                history_status, history_table, history_chart,
             ],
         )
     return app

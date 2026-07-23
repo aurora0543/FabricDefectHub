@@ -19,6 +19,26 @@ No heatmaps or bounding boxes are rendered here — anomaly-map-producing
 adapters (anomalib, Dinomaly) are called without `output_dir`, so only
 image-level metrics are computed and nothing is written to disk; this tab
 only ever needs numbers, not images.
+
+Two opt-in additions on top of the accuracy-only leaderboard above:
+
+- `include_profiling=True` runs each model through a `PyTorchProfiler` pass
+  too (export to TorchScript, then measure FPS/latency/memory the same way
+  `benchmark.py`'s YAML `profile:` block does for the CLI path) so the
+  leaderboard also carries overhead metrics, not just accuracy. Off by
+  default because it roughly doubles per-model time (export + N warmup/
+  measured forward passes) — the UI's own warmup/measured-run counts are
+  intentionally lower than the CLI default (`ProfileConfig`'s 10/100) to
+  stay responsive for an interactive click.
+- Every run always appends to `run_log_path` (default `runs/leaderboard_log.jsonl`)
+  via `reporting.append_run_log`, so leaderboard runs triggered from the UI
+  leave the same durable trace `fdh benchmark` runs already did — this is
+  what the "Run History" tab reads back.
+
+`score_preset`/`custom_technical_weight` blend the accumulated rows'
+technical (accuracy) and overhead (cost) metrics into one ranked
+`composite_score` via `scoring.score_rows` — recomputed after every model
+finishes so the ranking updates live as the leaderboard fills in.
 """
 
 from __future__ import annotations
@@ -27,10 +47,13 @@ import gc
 import time
 from typing import Any, Iterator
 
+from fabric_defect_hub.core.registry import get_profiler_cls
 from fabric_defect_hub.core.types import ModelInfo, RuntimeInfo
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 from fabric_defect_hub.inference.session import clear_accelerator_cache
 from fabric_defect_hub.loader import load_dataset, load_model, run_experiment
+from fabric_defect_hub.profiling.base import ProfileConfig
+from fabric_defect_hub.scoring import SCORE_PRESETS, score_rows
 from fabric_defect_hub.web.single_image import (
     DATASET_CATALOG,
     MODEL_CATALOG,
@@ -40,6 +63,22 @@ from fabric_defect_hub.web.single_image import (
     shot_regime_kwargs,
     slice_value,
 )
+
+DEFAULT_RUN_LOG_PATH = "runs/leaderboard_log.jsonl"
+
+
+def score_preset_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
+    """Gradio `(display_label, value)` tuples for the score-preset dropdown
+    — the value halves (`scoring.SCORE_PRESETS` keys, plus `"custom"`) are
+    compared elsewhere (`run_benchmark`'s `score_preset == "custom"` branch),
+    so only the display half is localized; see `i18n.py`'s module docstring."""
+
+    return [
+        (tr(lang, "choice_score_accuracy_first"), "accuracy_first"),
+        (tr(lang, "choice_score_balanced"), "balanced"),
+        (tr(lang, "choice_score_efficiency_first"), "efficiency_first"),
+        (tr(lang, "choice_score_custom"), "custom"),
+    ]
 
 
 def _dataset_task_for(model_task: str) -> str:
@@ -89,6 +128,26 @@ def _detect_device() -> str:
     return "cpu"
 
 
+def _profile_setup(model_spec: dict[str, Any], device: str):
+    """Build the (profiler, config, export_target) triple `run_experiment`
+    needs to also measure FPS/latency/memory for this model, mirroring
+    `benchmark.py::_profile_from_spec`'s pytorch-engine defaults but with
+    lighter warmup/measured-run counts so an interactive UI click doesn't
+    stall for as long as an unattended CLI benchmark would tolerate.
+    """
+
+    profiler = get_profiler_cls("pytorch")()
+    input_style = (
+        "list" if model_spec["backend"] == "torchvision" and model_spec["task"] in ("detection", "instance_segmentation")
+        else "batched"
+    )
+    config = ProfileConfig(
+        device=device, engine="pytorch", precision="fp32", input_size=(640, 640),
+        input_style=input_style, warmup_runs=5, measured_runs=20,
+    )
+    return profiler, config, "torchscript"
+
+
 def _release_model(model: Any) -> None:
     """Mirrors `InferenceSessionManager._unload_active` (which the Single
     Image tab uses): call the adapter's own `unload()` if it has one (only
@@ -111,6 +170,10 @@ def run_benchmark(
     shot_mode: str,
     model_labels: list[str],
     lang: str = DEFAULT_LANGUAGE,
+    include_profiling: bool = False,
+    score_preset: str = "balanced",
+    custom_technical_weight: float | None = None,
+    run_log_path: str | None = DEFAULT_RUN_LOG_PATH,
 ) -> Iterator[tuple[list[str], list[list[Any]], str]]:
     """Evaluate every model in `model_labels` against the same dataset
     sample (test split only — the benchmark tab never trains), one model at
@@ -119,6 +182,16 @@ def run_benchmark(
     fills in live instead of appearing all at once; `columns` is the
     superset of metric names produced by any model evaluated so far, so
     every row stays padded to the same shape.
+
+    `include_profiling` additionally runs a `PyTorchProfiler` pass per model
+    (see `_profile_setup`) so overhead metrics (fps, latency_ms_*,
+    peak_memory_mb, model_size_mb) land in the same row as the accuracy
+    metrics. `score_preset` (one of `scoring.SCORE_PRESETS`, or `"custom"`
+    with `custom_technical_weight` in [0, 1]) blends whatever technical/
+    overhead metrics are present into a `composite_score` column, recomputed
+    across all rows collected so far after every model. `run_log_path`, if
+    not `None`, appends every completed row to that shared JSONL log via
+    `reporting.append_run_log`.
     """
 
     if not model_labels:
@@ -129,6 +202,12 @@ def run_benchmark(
     if not root:
         yield [], [], tr(lang, "bench_dataset_unavailable", label=dataset_label)
         return
+
+    if score_preset == "custom":
+        weight = 0.5 if custom_technical_weight is None else custom_technical_weight
+        technical_weight, overhead_weight = weight, 1.0 - weight
+    else:
+        technical_weight, overhead_weight = SCORE_PRESETS.get(score_preset, SCORE_PRESETS["balanced"])
 
     spec = DATASET_CATALOG[dataset_label]
     dataset_tasks = spec["tasks"]
@@ -156,7 +235,10 @@ def run_benchmark(
         dataset_task = _dataset_task_for(model_spec["task"])
         if dataset_task not in dataset_tasks:
             errors.append(tr(lang, "bench_task_mismatch", model=model_label, dataset=dataset_label, task=model_spec["task"]))
-            yield _render(rows, sample_count, shot_mode, errors, lang=lang)
+            yield _render(
+                rows, sample_count, shot_mode, errors, lang=lang,
+                technical_weight=technical_weight, overhead_weight=overhead_weight,
+            )
             continue
 
         model = None
@@ -164,6 +246,9 @@ def run_benchmark(
             dataset = load_dataset(spec["name"], task=dataset_task, **base_dataset_kwargs)
             model = load_model(model_spec["backend"], model_spec["name"])
             evaluator = _evaluator_for_task(dataset_task)
+            profiler = profile_config = export_target = None
+            if include_profiling:
+                profiler, profile_config, export_target = _profile_setup(model_spec, device)
             started = time.perf_counter()
             result = run_experiment(
                 experiment_id=f"benchmark-{_slug(model_label)}",
@@ -175,6 +260,10 @@ def run_benchmark(
                 runtime=RuntimeInfo(device=device, engine="python", precision="fp32", input_size=(640, 640)),
                 evaluator=evaluator,
                 artifact=artifact_for_model(model_spec),
+                profiler=profiler,
+                profile_config=profile_config,
+                export_target=export_target,
+                run_log_path=run_log_path,
             )
             if sample_count is None:
                 sample_count = len(dataset.load_samples())
@@ -190,9 +279,9 @@ def run_benchmark(
                 _release_model(model)
 
         status = tr(lang, "bench_progress", index=index, total=total, model=model_label)
-        yield _render(rows, sample_count, shot_mode, errors, status, lang)
+        yield _render(rows, sample_count, shot_mode, errors, status, lang, technical_weight, overhead_weight)
 
-    yield _render(rows, sample_count, shot_mode, errors, lang=lang)
+    yield _render(rows, sample_count, shot_mode, errors, lang=lang, technical_weight=technical_weight, overhead_weight=overhead_weight)
 
 
 def _render(
@@ -202,14 +291,26 @@ def _render(
     errors: list[str],
     status: str | None = None,
     lang: str = DEFAULT_LANGUAGE,
+    technical_weight: float = 0.5,
+    overhead_weight: float = 0.5,
 ) -> tuple[list[str], list[list[Any]], str]:
     if not rows:
         base = tr(lang, "bench_no_results") if not errors else "🔴 " + "; ".join(errors)
         return [], [], base
 
-    metric_columns = sorted({key for row in rows for key in row if key not in ("model", "runtime_s")})
-    columns = ["model", "runtime_s", *metric_columns]
-    table = [[row.get(column, "") for column in columns] for row in rows]
+    scored = score_rows(rows, technical_weight, overhead_weight)
+    scored.sort(key=lambda row: (row["composite_score"] is None, -(row["composite_score"] or 0)))
+
+    score_columns = ["composite_score", "technical_score", "overhead_score"]
+    metric_columns = sorted({
+        key for row in scored if row
+        for key in row if key not in ("model", "runtime_s", *score_columns)
+    })
+    columns = ["model", *score_columns, "runtime_s", *metric_columns]
+    table = [
+        [_display_value(row.get(column, ""), column, score_columns) for column in columns]
+        for row in scored
+    ]
     if status is None:
         status = tr(
             lang, "bench_done", count=len(rows),
@@ -218,6 +319,12 @@ def _render(
     if errors:
         status += " ⚠️ " + "; ".join(errors)
     return columns, table, status
+
+
+def _display_value(value: Any, column: str, score_columns: list[str]) -> Any:
+    if column in score_columns and isinstance(value, (int, float)):
+        return round(value, 1)
+    return value
 
 
 def _slug(label: str) -> str:

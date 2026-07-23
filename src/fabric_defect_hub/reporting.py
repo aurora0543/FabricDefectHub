@@ -94,6 +94,73 @@ def append_run_log(result: ExperimentResult, path: str | Path) -> Path:
     return path
 
 
+def read_run_log(path: str | Path) -> list[dict]:
+    """Read back everything `append_run_log` has written to `path` (the
+    "Run History" tab's data source). A missing file returns `[]` rather
+    than raising -- a fresh deployment or a benchmark that hasn't run yet
+    shouldn't be an error, just an empty history.
+    """
+
+    path = Path(path)
+    if not path.is_file():
+        return []
+    rows = []
+    with path.open(encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def flatten_run_log_rows(rows: list[dict]) -> tuple[list[str], list[list[object]]]:
+    """Flatten `read_run_log` output into a `(columns, table)` pair for a
+    Gradio `Dataframe` -- pulls the same identifying fields as
+    `reporting.py`'s own `_flatten` (model/backend/dataset/device) plus
+    `provenance.timestamp_utc`, then every `metrics.*` key as its own
+    column (union across all rows, like `web/benchmark.py::_render` does
+    for a single run's rows, since different tasks produce different
+    metric-name sets).
+    """
+
+    metric_columns = sorted({key for row in rows for key in row.get("metrics", {})})
+    columns = ["timestamp_utc", "model", "backend", "task", "dataset", "device", *metric_columns]
+    table = []
+    for row in rows:
+        model = row.get("model", {})
+        dataset = row.get("dataset", {})
+        runtime = row.get("runtime", {})
+        provenance = row.get("provenance", {})
+        metrics = row.get("metrics", {})
+        record = {
+            "timestamp_utc": provenance.get("timestamp_utc", ""),
+            "model": model.get("name", ""),
+            "backend": model.get("backend", ""),
+            "task": model.get("task", ""),
+            "dataset": dataset.get("name", ""),
+            "device": runtime.get("device", ""),
+            **metrics,
+        }
+        table.append([record.get(column, "") for column in columns])
+    return columns, table
+
+
+def latest_run_per_model(rows: list[dict]) -> list[dict]:
+    """Collapse `read_run_log` output to one row per model name -- the most
+    recent by `provenance.timestamp_utc` -- for a "current standings" chart
+    where every historical run for the same model would otherwise clutter
+    the picture."""
+
+    latest: dict[str, dict] = {}
+    for row in rows:
+        name = row.get("model", {}).get("name", "")
+        timestamp = row.get("provenance", {}).get("timestamp_utc", "")
+        current_timestamp = latest.get(name, {}).get("provenance", {}).get("timestamp_utc", "")
+        if name not in latest or timestamp > current_timestamp:
+            latest[name] = row
+    return list(latest.values())
+
+
 def _provenance() -> dict[str, str]:
     try:
         git_commit = subprocess.run(
