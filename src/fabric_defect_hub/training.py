@@ -92,11 +92,28 @@ ANOMALY_TRAINABLE_DATASETS: set[str] = {
     "fabric-train",
 }
 
+# ...and the exact mirror image, for zero-shot (ZSAD) backends. MoECLIP
+# learns prompt-aligned anomaly features from labelled defects on an
+# *auxiliary* corpus and is then applied to categories it has never seen —
+# that transfer is the claim being benchmarked. Training it on fabric
+# would make its fabric numbers in-domain and quietly void that claim, so
+# the fabric sources above are rejected here and the cross-domain object
+# benchmarks (eval-only for every other model) are the allowed training
+# corpora instead. Which fabric set it is then *evaluated* on is a
+# separate config key (`data.test_dataset`), unrestricted.
+ZERO_SHOT_TRAINABLE_DATASETS: set[str] = {
+    "visa",
+    "mvtec-ad",
+    "mvtec-loco",
+}
+
 # Per backend: (train-split selection key, val/test-split selection key) in
 # that backend's `data` config section.
 _BACKEND_DATA_SELECTIONS: dict[str, tuple[str, str]] = {
     "anomalib": ("train_selection", "test_selection"),
     "dinomaly": ("train_selection", "test_selection"),
+    "moeclip": ("train_selection", "test_selection"),
+    "mambaad": ("train_selection", "test_selection"),
     "torchvision": ("train_selection", "val_selection"),
     "ultralytics": ("train_selection", "val_selection"),
 }
@@ -106,6 +123,8 @@ _BACKEND_PIPELINE_MODULES = {
     "torchvision": "fabric_defect_hub.models.torchvision.pipeline",
     "anomalib": "fabric_defect_hub.models.anomalib.pipeline",
     "dinomaly": "fabric_defect_hub.models.dinomaly.pipeline",
+    "moeclip": "fabric_defect_hub.models.moeclip.pipeline",
+    "mambaad": "fabric_defect_hub.models.mambaad.pipeline",
 }
 
 _BACKEND_CONFIG_CLASSES = {
@@ -113,6 +132,8 @@ _BACKEND_CONFIG_CLASSES = {
     "torchvision": ("fabric_defect_hub.models.torchvision.config", "TorchvisionConfig"),
     "anomalib": ("fabric_defect_hub.models.anomalib.config", "AnomalibConfig"),
     "dinomaly": ("fabric_defect_hub.models.dinomaly.config", "DinomalyConfig"),
+    "moeclip": ("fabric_defect_hub.models.moeclip.config", "MoECLIPConfig"),
+    "mambaad": ("fabric_defect_hub.models.mambaad.config", "MambaADConfig"),
 }
 
 # Per backend: which key under `model:` selects which model gets trained.
@@ -123,14 +144,36 @@ _BACKEND_CONFIG_CLASSES = {
 _BACKEND_MODEL_KEY: dict[str, str] = {
     "anomalib": "name",
     "dinomaly": "name",
+    "moeclip": "name",
+    "mambaad": "name",
     "torchvision": "variant",
     "ultralytics": "variant",
 }
 
 # Backends whose adapter trains one-class (normal-only) -- their train
 # split's `use_defect` is always forced to False regardless of CLI/UI
-# overrides (see `apply_dataset_overrides`).
-_ONE_CLASS_BACKENDS = {"anomalib", "dinomaly"}
+# overrides (see `apply_dataset_overrides`). MoECLIP is deliberately not
+# here: it is a zero-shot detector that learns from *labelled* anomalies
+# (image label + pixel mask), so forcing its train split normal-only would
+# leave its segmentation loss with nothing to learn from.
+_ONE_CLASS_BACKENDS = {"anomalib", "dinomaly", "mambaad"}
+
+# Every anomaly backend, one-class or not. These all produce a fabric
+# anomaly model, so they share the same training-source restriction
+# (`_enforce_trainable_dataset`) even though they differ on what their
+# train split may contain.
+_ANOMALY_BACKENDS = _ONE_CLASS_BACKENDS | {"moeclip"}
+
+# Per anomaly backend: which datasets it may *train* on, and a short label
+# for the error message explaining why the other kind is refused.
+_ZERO_SHOT_BACKENDS = {"moeclip"}
+
+_BACKEND_TRAINABLE_DATASETS: dict[str, tuple[set[str], str]] = {
+    "anomalib": (ANOMALY_TRAINABLE_DATASETS, "one-class"),
+    "dinomaly": (ANOMALY_TRAINABLE_DATASETS, "one-class"),
+    "mambaad": (ANOMALY_TRAINABLE_DATASETS, "one-class"),
+    "moeclip": (ZERO_SHOT_TRAINABLE_DATASETS, "zero-shot"),
+}
 
 
 @dataclass
@@ -142,10 +185,18 @@ class DatasetOverrides:
     `val_num_samples` is given, the val/test split's) `num_samples`; the
     rest map straight onto the per-split selection dict's matching key
     (`use_defect`, `defect_ratio`, `pattern`, `category`, `seed`).
+
+    `test_dataset`/`test_dataset_root` only apply to the zero-shot
+    backends, whose evaluation target is a different dataset from their
+    training corpus (see `MoECLIPConfig.DataSpec`); passing them for any
+    other backend is an error rather than a silent no-op, since it would
+    otherwise read as "evaluate on X" and quietly not.
     """
 
     dataset: str | None = None
     dataset_root: str | None = None
+    test_dataset: str | None = None
+    test_dataset_root: str | None = None
     mode: ShotMode | None = None
     num_samples: int | None = None
     val_num_samples: int | None = None
@@ -166,9 +217,11 @@ def infer_backend(raw: dict[str, Any]) -> str:
     1. An explicit top-level `backend:` key (always wins).
     2. `model.name` present -> resolved against anomalib's model aliases
        first (e.g. 'PatchCore'), then Dinomaly's encoder presets (e.g.
-       'dinov2reg_vit_base_14') -- both are keyed by `name` rather than
-       `variant`, so a config using this key should set an explicit
-       top-level `backend:` if the two ever collide on a name.
+       'dinov2reg_vit_base_14'), then MoECLIP's backbones (e.g.
+       'ViT-L-14-336'), then MambaAD's encoder presets (e.g. 'resnet34')
+       -- all four are keyed by `name` rather than `variant`, so a config
+       using this key should set an explicit top-level `backend:` if any
+       two ever collide on a name.
     3. `model.variant` keyword: `yolo*` -> `ultralytics`,
        `fasterrcnn*`/`maskrcnn*` -> `torchvision`.
     """
@@ -189,6 +242,8 @@ def infer_backend(raw: dict[str, Any]) -> str:
         name = str(model["name"])
         from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
         from fabric_defect_hub.models.dinomaly.presets import ENCODER_PRESETS
+        from fabric_defect_hub.models.mambaad.presets import ENCODER_PRESETS as MAMBAAD_ENCODER_PRESETS
+        from fabric_defect_hub.models.moeclip.presets import MODEL_PRESETS
 
         try:
             resolve_model_class_name(name)
@@ -197,9 +252,14 @@ def infer_backend(raw: dict[str, Any]) -> str:
             pass
         if name in ENCODER_PRESETS:
             return "dinomaly"
+        if name in MODEL_PRESETS:
+            return "moeclip"
+        if name in MAMBAAD_ENCODER_PRESETS:
+            return "mambaad"
         raise ValueError(
-            f"model.name={name!r} matches neither an anomalib model alias nor a Dinomaly "
-            "encoder preset; pass backend explicitly or add a 'backend' key to the config"
+            f"model.name={name!r} matches no anomalib model alias, Dinomaly encoder preset, "
+            "MoECLIP backbone, or MambaAD encoder preset; pass backend explicitly or add a "
+            "'backend' key to the config"
         )
     variant = str(model.get("variant", "")).lower()
     if variant.startswith("yolo"):
@@ -365,6 +425,20 @@ def apply_dataset_overrides(
     if overrides.dataset_root is not None:
         data["dataset_root"] = overrides.dataset_root
 
+    if overrides.test_dataset is not None or overrides.test_dataset_root is not None:
+        if backend not in _ZERO_SHOT_BACKENDS:
+            raise ValueError(
+                f"--test-dataset/--test-dataset-root only apply to the zero-shot backends "
+                f"({', '.join(sorted(_ZERO_SHOT_BACKENDS))}); the '{backend}' backend evaluates "
+                "on the same dataset it trains on, so use --dataset."
+            )
+        if overrides.test_dataset is not None:
+            data["test_dataset"] = overrides.test_dataset
+            if overrides.test_dataset_root is None:
+                data.pop("test_dataset_root", None)
+        if overrides.test_dataset_root is not None:
+            data["test_dataset_root"] = overrides.test_dataset_root
+
     if not data.get("dataset"):
         raise ValueError(
             "dataset-selection overrides (--mode/--num-samples/--use-defect/...) require "
@@ -394,9 +468,10 @@ def apply_dataset_overrides(
 
 
 def apply_default_dataset_root(raw: dict[str, Any]) -> dict[str, Any]:
-    """Fall back `data.dataset_root` to this project's `data/<Dataset>`
-    symlink (see `DEFAULT_DATASET_ROOTS`) when the config doesn't already
-    have a usable one for its `data.dataset`.
+    """Fall back `data.dataset_root` (and `data.test_dataset_root`, where a
+    backend has one) to this project's `data/<Dataset>` symlink (see
+    `DEFAULT_DATASET_ROOTS`) when the config doesn't already have a usable
+    one for the corresponding dataset.
 
     Runs unconditionally (unlike `apply_dataset_overrides`, which is a
     no-op with no CLI overrides) — a bare `fdh train some_config.yaml`,
@@ -411,19 +486,30 @@ def apply_default_dataset_root(raw: dict[str, Any]) -> dict[str, Any]:
     data = raw.get("data")
     if not isinstance(data, dict):
         return raw
-    dataset = data.get("dataset")
-    if not dataset or dataset not in DEFAULT_DATASET_ROOTS:
-        return raw
 
-    current_root = data.get("dataset_root")
-    has_usable_root = isinstance(current_root, str) and current_root.strip() and "${" not in current_root
-    if has_usable_root:
-        return raw
+    resolved = dict(data)
+    changed = False
+    # ("dataset", "dataset_root") is every backend's training corpus;
+    # ("test_dataset", "test_dataset_root") only exists for the zero-shot
+    # backends, whose evaluation target is a *different* dataset from the
+    # one they train on (see `MoECLIPConfig.DataSpec`) — a no-op elsewhere.
+    for dataset_key, root_key in (("dataset", "dataset_root"), ("test_dataset", "test_dataset_root")):
+        dataset = data.get(dataset_key)
+        if not dataset or dataset not in DEFAULT_DATASET_ROOTS:
+            continue
+        current_root = data.get(root_key)
+        has_usable_root = (
+            isinstance(current_root, str) and current_root.strip() and "${" not in current_root
+        )
+        if has_usable_root:
+            continue
+        resolved[root_key] = DEFAULT_DATASET_ROOTS[dataset]
+        changed = True
 
+    if not changed:
+        return raw
     raw = dict(raw)
-    data = dict(data)
-    data["dataset_root"] = DEFAULT_DATASET_ROOTS[dataset]
-    raw["data"] = data
+    raw["data"] = resolved
     return raw
 
 
@@ -502,10 +588,41 @@ def _apply_test_speed_overrides(raw: dict[str, Any], backend: str) -> dict[str, 
         train["batch_size"] = min(int(train.get("batch_size", TEST_SHOT_NUM_SAMPLES)), TEST_SHOT_NUM_SAMPLES)
         train["image_size"] = 98
         train["crop_size"] = 84
+    elif backend == "moeclip":
+        # Same reasoning as Dinomaly's branch: one epoch over the 8 staged
+        # images, at the smallest image size the backbone's 14px patch grid
+        # allows, so the smoke run proves the wiring in seconds rather than
+        # forward+backwarding a ViT-L at 518px on CPU.
+        train["epochs"] = 1
+        train["batch_size"] = min(int(train.get("batch_size", 2)), 2)
+        raw = _apply_test_speed_model_overrides(raw, {"img_size": 112})
+    elif backend == "mambaad":
+        # A handful of iterations over the 8 staged images at the smallest
+        # image size its teacher's 32x total downsampling allows (a
+        # power-of-two multiple of 32, since the default scan_type
+        # 'hilbert' also requires each decoder stage's grid to be a power
+        # of two -- see scan.py) -- proves the wiring, not a usable model.
+        train["total_iters"] = TEST_SHOT_NUM_SAMPLES
+        train["batch_size"] = min(int(train.get("batch_size", TEST_SHOT_NUM_SAMPLES)), TEST_SHOT_NUM_SAMPLES)
+        train["image_size"] = 64
     else:
         train["epochs"] = 1
         train["patience"] = 1
     raw["train"] = train
+    return raw
+
+
+def _apply_test_speed_model_overrides(raw: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """`mode == "test"` overrides that live under `model:` rather than
+    `train:` (MoECLIP's `img_size` is an architecture knob, not a training
+    one -- it has to match at inference time, so it is declared where the
+    rest of the architecture is).
+    """
+
+    raw = dict(raw)
+    model = dict(raw.get("model") or {})
+    model.update(overrides)
+    raw["model"] = model
     return raw
 
 
@@ -519,27 +636,44 @@ class TrainRunResult:
 
 
 def _enforce_trainable_dataset(raw: dict[str, Any], backend: str) -> None:
-    """Reject training a one-class (anomaly) backend on an eval-only or
-    detection dataset. No-op for detection backends (which legitimately
-    train on detection sets) and for the `data_root`/`datamodule_kwargs`
-    on-disk modes, where no registered dataset name is involved and the
-    caller has taken explicit responsibility for the folder.
+    """Reject training an anomaly backend on a dataset that isn't a valid
+    training source *for that backend* — which cuts in opposite directions
+    for the one-class and zero-shot backends (see
+    `ANOMALY_TRAINABLE_DATASETS` / `ZERO_SHOT_TRAINABLE_DATASETS`). No-op
+    for detection backends (which legitimately train on detection sets)
+    and for the `data_root`/`datamodule_kwargs` on-disk modes, where no
+    registered dataset name is involved and the caller has taken explicit
+    responsibility for the folder.
+
+    Only the *training* corpus (`data.dataset`) is checked; a zero-shot
+    backend's evaluation target (`data.test_dataset`) is deliberately
+    unrestricted — evaluating on fabric is the whole point.
     """
 
-    if backend not in _ONE_CLASS_BACKENDS:
+    if backend not in _BACKEND_TRAINABLE_DATASETS:
         return
     data = raw.get("data")
     dataset = data.get("dataset") if isinstance(data, dict) else None
-    if not dataset or dataset in ANOMALY_TRAINABLE_DATASETS:
+    allowed_set, kind = _BACKEND_TRAINABLE_DATASETS[backend]
+    if not dataset or dataset in allowed_set:
         return
-    allowed = ", ".join(sorted(ANOMALY_TRAINABLE_DATASETS))
+    allowed = ", ".join(sorted(allowed_set))
+    if kind == "zero-shot":
+        raise ValueError(
+            f"dataset {dataset!r} is not a training source for the zero-shot "
+            f"'{backend}' backend. It is trained on an auxiliary cross-domain "
+            f"corpus and applied to unseen categories, so training is restricted "
+            f"to: {allowed}. Training it on fabric would make its fabric scores "
+            "in-domain and void the zero-shot claim — point data.test_dataset at "
+            "the fabric set you want it evaluated on instead."
+        )
     raise ValueError(
         f"dataset {dataset!r} is not a training source for the one-class "
         f"'{backend}' backend. Anomaly training is restricted to in-domain "
         f"fabric sources: {allowed}. Cross-domain benchmarks (mvtec-ad, "
-        "mvtec-loco, visa) are eval-only — use them for inference/benchmark, "
-        "not training. To train on the combined fabric corpus use "
-        "'fabric-train'."
+        "mvtec-loco, visa) are eval-only for these models — use them for "
+        "inference/benchmark, not training. To train on the combined fabric "
+        "corpus use 'fabric-train'."
     )
 
 

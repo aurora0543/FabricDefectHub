@@ -136,14 +136,15 @@ DATASET_CATALOG = {
 }
 # Backends whose `predict()` accepts `output_dir=` to persist pixel-level
 # anomaly maps for the heatmap overlay (`_overlay_anomaly_map`).
-_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly"}
+_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly", "moeclip", "mambaad"}
 
 # `model_status` probes `importlib.util.find_spec(package)` to check a
 # backend is installed. That only works when the backend name IS the pip
 # package name (true for "anomalib"/"torchvision"/"ultralytics") -- Dinomaly
-# is vendored code (see components/README.md), not a pip package named
-# "dinomaly", so it's probed via its actual hard dependency instead.
-_BACKEND_PROBE_MODULE = {"dinomaly": "timm"}
+# and MoECLIP are vendored code (see components/README.md), not pip packages
+# named "dinomaly"/"moeclip", so they're probed via their actual hard
+# dependencies instead.
+_BACKEND_PROBE_MODULE = {"dinomaly": "timm", "moeclip": "kornia", "mambaad": "einops"}
 
 ALL_TEXTURES = "All textures"
 ALL_IMAGES = "All images"

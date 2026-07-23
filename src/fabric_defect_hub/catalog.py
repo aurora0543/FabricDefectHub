@@ -15,7 +15,8 @@ models this project trains and exposes to the frontend: 3 Ultralytics
 variants, 6 torchvision model families (one representative backbone each —
 Faster R-CNN, Mask R-CNN, Cascade R-CNN, DETR, UNet++, DeepLabV3+ — not
 every VGG16/ShuffleNet backbone swap of each), all 6 Anomalib models
-(including zero-shot WinCLIP), and the vendored Dinomaly research model.
+(including zero-shot WinCLIP), and the vendored Dinomaly and MoECLIP
+research models.
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ PUBLISHED_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "published"
 @dataclass(frozen=True)
 class CanonicalModel:
     key: str  # stable id, also the published filename stem
-    backend: str  # "ultralytics" | "torchvision" | "anomalib" | "dinomaly"
-    variant: str  # model.variant (ultralytics/torchvision) or model.name (anomalib/dinomaly)
+    backend: str  # "ultralytics" | "torchvision" | "anomalib" | "dinomaly" | "moeclip" | "mambaad"
+    variant: str  # model.variant (ultralytics/torchvision) or model.name (anomalib/dinomaly/moeclip/mambaad)
     task: str  # "detection" | "instance_segmentation" | "segmentation" | "anomaly"
     config: str  # config filename under configs/models/ used to train + publish this model
     label: str  # frontend dropdown label
@@ -78,10 +79,26 @@ CANONICAL_MODELS: list[CanonicalModel] = [
     # -- Dinomaly: anomaly (vendored research model, see components/README.md) --
     CanonicalModel("Dinomaly", "dinomaly", "dinov2reg_vit_base_14", "anomaly",
                     "dinomaly_example.yaml", "Dinomaly · Normal Lab trained", "Normal Lab"),
+    # -- MoECLIP: anomaly (vendored research model, see components/README.md).
+    # The only entry here trained on a *non-fabric* corpus, deliberately: it
+    # is a zero-shot detector, trained on VisA's labelled defects + masks
+    # and applied to fabric it has never seen (see
+    # training.ZERO_SHOT_TRAINABLE_DATASETS). Its fabric scores are transfer
+    # results, which is what the `source` string has to say on the
+    # leaderboard so they aren't read as in-domain ones.
+    CanonicalModel("MoECLIP", "moeclip", "ViT-L-14-336", "anomaly",
+                    "moeclip_example.yaml", "MoECLIP · Zero-shot", "Zero-shot CLIP (VisA-trained)"),
+    # -- MambaAD: anomaly (clean-room reimplementation, see components/README.md
+    # and models/mambaad/adapter.py -- no components/mambaad submodule) --
+    CanonicalModel("MambaAD", "mambaad", "resnet34", "anomaly",
+                    "mambaad_example.yaml", "MambaAD · Normal Lab trained", "Normal Lab"),
 ]
 
 _BY_KEY: dict[str, CanonicalModel] = {model.key: model for model in CANONICAL_MODELS}
-_EXTENSION = {"ultralytics": ".pt", "torchvision": ".pt", "anomalib": ".ckpt", "dinomaly": ".pth"}
+_EXTENSION = {
+    "ultralytics": ".pt", "torchvision": ".pt", "anomalib": ".ckpt",
+    "dinomaly": ".pth", "moeclip": ".pth", "mambaad": ".pth",
+}
 
 
 def find_canonical_model(backend: str, variant: str) -> CanonicalModel | None:
@@ -112,7 +129,11 @@ def metadata_for(model: CanonicalModel) -> dict:
     `model_class` (the literal anomalib class name, e.g. "Patchcore" for
     the "PatchCore" alias); Dinomaly needs `encoder_name`/`target_layers`/
     `image_size`/`crop_size` (the architecture it was built with -- see
-    `DinomalyAdapter._build_model`) — both resolved here rather than
+    `DinomalyAdapter._build_model`); MoECLIP needs its backbone + MoE knobs
+    (`img_size`, `moe_layers`, `moe_num_experts`, ... — see
+    `MoECLIPAdapter._build_model`); MambaAD needs its decoder knobs
+    (`dims_decoder`, `depths_decoder`, `scan_type`, `num_direction`, ... —
+    see `MambaADAdapter._build_model`) — all resolved here rather than
     hand-typed onto each `CanonicalModel` entry, so a presets.py rename
     can't silently drift out of sync with this catalog.
     """
@@ -136,6 +157,35 @@ def metadata_for(model: CanonicalModel) -> dict:
             "target_layers": encoder_preset(model.variant)["target_layers"],
             "image_size": DEFAULT_TRAIN_KWARGS["image_size"],
             "crop_size": DEFAULT_TRAIN_KWARGS["crop_size"],
+        }
+    if model.backend == "moeclip":
+        from fabric_defect_hub.models.moeclip.presets import default_arch_kwargs
+
+        return {
+            "trusted": True,
+            "source": model.source,
+            "model_class": "MoECLIP",
+            "model_name": model.variant,
+            **default_arch_kwargs(),
+        }
+    if model.backend == "mambaad":
+        from fabric_defect_hub.models.mambaad.presets import (
+            DEFAULT_TRAIN_KWARGS, D_STATE, DEPTHS_DECODER, DIMS_DECODER,
+            DEFAULT_NUM_DIRECTION, DEFAULT_SCAN_TYPE, DROP_PATH_RATE,
+        )
+
+        return {
+            "trusted": True,
+            "source": model.source,
+            "model_class": "MambaADNet",
+            "encoder_name": model.variant,
+            "image_size": DEFAULT_TRAIN_KWARGS["image_size"],
+            "dims_decoder": list(DIMS_DECODER),
+            "depths_decoder": list(DEPTHS_DECODER),
+            "d_state": D_STATE,
+            "drop_path_rate": DROP_PATH_RATE,
+            "scan_type": DEFAULT_SCAN_TYPE,
+            "num_direction": DEFAULT_NUM_DIRECTION,
         }
     return {"trusted": True, "source": model.source}
 

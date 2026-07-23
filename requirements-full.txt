@@ -42,6 +42,28 @@ timm
 scipy
 tabulate
 
+# -- moeclip extra: vendored research model, see components/README.md.
+# Needs the OpenCLIP ViT-L-14-336px checkpoint dropped into
+# components/moeclip/model/ as well -- nothing installs that (see
+# models/moeclip/presets.py::CHECKPOINT_DOWNLOAD_URL).
+kornia
+transformers
+einops
+ftfy
+regex
+ipdb
+opencv-python
+pandas
+
+# -- mambaad extra: clean-room reimplementation, see components/README.md
+# and models/mambaad/adapter.py -- no submodule, no mamba_ssm dependency.
+# On a CUDA training host, additionally `pip install -e ".[mambaad-cuda]"`
+# to let it pick up upstream's fused selective-scan kernel automatically
+# (models/mambaad/ssm.py detects it at run time; it is CUDA-only, which is
+# why it is not listed here). --
+timm
+einops
+
 # -- quantization + profiling-onnxruntime extras: fp16/INT8 export, ONNX runtime profiling --
 onnx
 onnxruntime

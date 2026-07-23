@@ -26,6 +26,24 @@ anomalib = ["anomalib", "scikit-learn", "scikit-image"]
 # Dinomaly (components/dinomaly, vendored -- not an anomalib model, see
 # components/README.md). torch/torchvision come from anomalib/dev extras.
 dinomaly = ["timm", "scipy", "scikit-learn", "tabulate"]
+# MoECLIP (components/moeclip, vendored -- CLIP + mixture-of-LoRA-experts).
+# kornia: the gaussian blur in its anomaly-map path; transformers: ACT2FN in
+# its MoE config; einops/ftfy/regex: its vendored OpenCLIP tokenizer/blocks;
+# ipdb: imported unconditionally at the top of two of its modules.
+moeclip = [
+  "kornia", "transformers", "einops", "ftfy", "regex", "ipdb",
+  "opencv-python", "pandas", "scipy", "scikit-learn",
+]
+# MambaAD (models/mambaad/, clean-room reimplementation -- no
+# components/mambaad submodule, no mamba_ssm; see adapter.py's module
+# docstring). timm: the frozen teacher backbone; einops: decoder reshapes.
+mambaad = ["timm", "einops"]
+# Optional CUDA-only accelerator for the MambaAD backend. Not required:
+# models/mambaad/ssm.py detects it at run time and uses upstream's fused
+# selective-scan kernel when present, falling back to its own portable
+# implementations otherwise. Only installable on a CUDA host with a
+# matching nvcc toolchain -- hence a separate group, like profiling-tensorrt.
+mambaad-cuda = ["mamba-ssm", "causal-conv1d"]
 # BackendProfiler runtimes (profiling/pytorch.py needs only torch itself,
 # already pulled in by any of the extras above).
 profiling-onnxruntime = ["onnxruntime", "psutil"]
