@@ -51,6 +51,7 @@ class ONNXRuntimeProfiler(BackendProfiler):
             session.run(output_names, feed)
 
         latencies_ms: list[float] = []
+        memory_samples_bytes: list[int] = []
         peak_rss_bytes = 0
         monitor = self.start_power_monitor(config)
         try:
@@ -58,10 +59,14 @@ class ONNXRuntimeProfiler(BackendProfiler):
                 start = time.perf_counter()
                 session.run(output_names, feed)
                 latencies_ms.append((time.perf_counter() - start) * 1000.0)
-                peak_rss_bytes = max(peak_rss_bytes, process.memory_info().rss)
+                rss_bytes = process.memory_info().rss
+                memory_samples_bytes.append(rss_bytes)
+                peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
                 monitor.sample()
         finally:
-            metrics = summarize_latencies(latencies_ms, config.batch_size, peak_rss_bytes)
+            metrics = summarize_latencies(
+                latencies_ms, config.batch_size, peak_rss_bytes, memory_samples_bytes
+            )
             self.finish_power_monitor(monitor, metrics)
 
         return metrics

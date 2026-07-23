@@ -196,3 +196,82 @@ def _precision_recall_f1(pairs, class_map: dict[str, int], score_threshold: floa
         "false_positives": float(fp),
         "false_negatives": float(fn),
     }
+
+
+def _shorter_side(box: list[float]) -> float:
+    x1, y1, x2, y2 = box
+    return min(abs(x2 - x1), abs(y2 - y1))
+
+
+def recall_by_size(
+    samples: list[Sample],
+    predictions: list[Prediction],
+    small_max_px: float = 10.0,
+    score_threshold: float = 0.5,
+    iou_threshold: float = 0.5,
+) -> dict[str, float]:
+    """Recall computed separately for 'small' ground-truth boxes (shorter
+    side < `small_max_px`) and 'normal' ones (>= `small_max_px`), so a
+    model/precision change's effect on tiny-defect detection can be read
+    off against its effect on ordinarily-sized defects instead of being
+    averaged away into one aggregate `recall_at_threshold` number -- a
+    quantized model that trades small-defect recall for a faster/smaller
+    model would otherwise look like a wash.
+    """
+
+    pred_by_id = {p.sample_id: p for p in predictions}
+    pairs = [(s, pred_by_id[s.id]) for s in samples if s.id in pred_by_id]
+
+    counts = {"small": {"tp": 0, "fn": 0}, "normal": {"tp": 0, "fn": 0}}
+    for sample, pred in pairs:
+        gt_boxes = sample.annotations.boxes or []
+        kept_preds = [
+            box for box, score in zip(
+                pred.boxes or [], pred.scores or [1.0] * len(pred.boxes or [])
+            )
+            if score >= score_threshold
+        ]
+
+        matched_pred: set[int] = set()
+        for gt_box in gt_boxes:
+            bucket = "small" if _shorter_side(gt_box) < small_max_px else "normal"
+            best_iou, best_idx = 0.0, -1
+            for i, pred_box in enumerate(kept_preds):
+                if i in matched_pred:
+                    continue
+                iou = _box_iou(gt_box, pred_box)
+                if iou > best_iou:
+                    best_iou, best_idx = iou, i
+            if best_iou >= iou_threshold:
+                matched_pred.add(best_idx)
+                counts[bucket]["tp"] += 1
+            else:
+                counts[bucket]["fn"] += 1
+
+    def _recall(bucket: dict[str, int]) -> float:
+        total = bucket["tp"] + bucket["fn"]
+        return bucket["tp"] / total if total > 0 else 0.0
+
+    return {
+        "recall_small": _recall(counts["small"]),
+        "recall_normal": _recall(counts["normal"]),
+    }
+
+
+def quantization_recall_decay(
+    recall_fp32_small: float,
+    recall_quant_small: float,
+    recall_fp32_normal: float,
+    recall_quant_normal: float,
+) -> dict[str, float]:
+    """DeltaRecall_small vs DeltaRecall_normal: how much more (or less) a
+    precision change (e.g. INT8 quantization) hurts small-defect recall
+    compared to normal-sized-defect recall -- the two numbers a single
+    aggregate recall delta would hide from each other, since small defects
+    typically degrade faster under quantization than normal-sized ones.
+    """
+
+    return {
+        "delta_recall_small": recall_fp32_small - recall_quant_small,
+        "delta_recall_normal": recall_fp32_normal - recall_quant_normal,
+    }
