@@ -7,7 +7,12 @@ from fabric_defect_hub.core.registry import register_dataset, register_model
 from fabric_defect_hub.core.types import Annotations, ModelInfo, RuntimeInfo, Sample
 from fabric_defect_hub.datasets.base import DatasetAdapter
 from fabric_defect_hub.evaluation.base import Evaluator
-from fabric_defect_hub.loader import load_dataset, load_model, run_experiment
+from fabric_defect_hub.loader import (
+    list_model_backends,
+    load_dataset,
+    load_model,
+    run_experiment,
+)
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig
 from fabric_defect_hub.profiling.power import PowerCapability, PowerReport
@@ -166,6 +171,35 @@ def test_output_dir_persists_predictions_and_result(tmp_path):
     assert reloaded.model == result.model
     assert reloaded.dataset == result.dataset
     assert reloaded.runtime == result.runtime
+
+
+def test_list_model_backends_is_the_cli_choices_source_of_truth():
+    backends = list_model_backends()
+    assert backends == sorted(backends)
+    assert {"ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"} <= set(backends)
+
+
+def test_run_log_path_accumulates_across_separate_runs(tmp_path):
+    import json
+
+    dataset = FakeDataset(root="data/fake")
+    log_path = tmp_path / "runs_log.jsonl"
+
+    for experiment_id in ("exp-a", "exp-b"):
+        run_experiment(
+            experiment_id=experiment_id,
+            dataset=dataset,
+            model=FakeModel(),
+            model_info=ModelInfo(name="fake-model", backend="fake-backend", task="detection"),
+            runtime=RuntimeInfo(device="cpu", engine="python", precision="fp32", input_size=(640, 640)),
+            train_config={},
+            evaluator=FakeEvaluator(),
+            run_log_path=str(log_path),
+        )
+
+    rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert [row["experiment_id"] for row in rows] == ["exp-a", "exp-b"]
+    assert all("provenance" in row for row in rows)
 
 
 class _ExportingModel(FakeModel):

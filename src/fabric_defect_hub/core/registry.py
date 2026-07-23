@@ -1,11 +1,28 @@
-"""Name-based registries so the loader can resolve datasets and models by
-string name/backend instead of importing every framework eagerly.
+"""Name-based registries so the loader can resolve datasets, models,
+evaluators, and profilers by string name instead of importing every
+framework eagerly, and so `benchmark.py`'s YAML-driven config doesn't have
+to hardcode "which class does 'detection' mean" anywhere.
 
 Framework-specific packages (`models/ultralytics`, `models/torchvision`,
 `models/anomalib`, individual `datasets/*` modules) register themselves via
-the decorators below when imported. Optional backends are only imported on
-demand inside `loader.py`, so a machine without, say, Anomalib installed
-can still use the Ultralytics or torchvision paths.
+`register_dataset`/`register_model` when imported. Optional backends are
+only imported on demand inside `loader.py`, so a machine without, say,
+Anomalib installed can still use the Ultralytics or torchvision paths.
+
+`register_evaluator`/`register_profiler` are plain class decorators (no
+name argument) rather than decorator factories like the two above: every
+`Evaluator` already carries a `task` class attribute and every
+`BackendProfiler` an `engine` one (read by `evaluation/base.py` and
+`profiling/base.py` respectively, and already relied on elsewhere, e.g.
+`evaluation/base.py`'s docstring example `{'map50': 0.81}` keyed by task).
+Requiring a *second*, separately-typed-out string at the registration site
+would just be a second name that can silently drift from the first; reading
+`cls.task`/`cls.engine` directly makes that impossible. Both evaluator and
+profiler modules are safe to import unconditionally regardless of which
+optional ML framework is installed — every concrete class only imports its
+actual dependency (`sklearn`, `torchmetrics`, `torch`, `onnxruntime`, ...)
+lazily inside its methods, never at module level — so, unlike datasets and
+models, there is no lazy-module-path dance needed for these two.
 """
 
 from __future__ import annotations
@@ -16,6 +33,8 @@ T = TypeVar("T")
 
 _DATASET_REGISTRY: dict[str, type] = {}
 _MODEL_REGISTRY: dict[str, type] = {}
+_EVALUATOR_REGISTRY: dict[str, type] = {}
+_PROFILER_REGISTRY: dict[str, type] = {}
 
 
 def register_dataset(name: str) -> Callable[[type[T]], type[T]]:
@@ -38,6 +57,22 @@ def register_model(backend: str) -> Callable[[type[T]], type[T]]:
     return decorator
 
 
+def register_evaluator(cls: type[T]) -> type[T]:
+    task = cls.task
+    if task in _EVALUATOR_REGISTRY:
+        raise ValueError(f"evaluator for task '{task}' is already registered")
+    _EVALUATOR_REGISTRY[task] = cls
+    return cls
+
+
+def register_profiler(cls: type[T]) -> type[T]:
+    engine = cls.engine
+    if engine in _PROFILER_REGISTRY:
+        raise ValueError(f"profiler for engine '{engine}' is already registered")
+    _PROFILER_REGISTRY[engine] = cls
+    return cls
+
+
 def get_dataset_cls(name: str) -> type:
     try:
         return _DATASET_REGISTRY[name]
@@ -54,6 +89,22 @@ def get_model_cls(backend: str) -> type:
         raise KeyError(f"unknown model backend '{backend}'. Known backends: {known}") from exc
 
 
+def get_evaluator_cls(task: str) -> type:
+    try:
+        return _EVALUATOR_REGISTRY[task]
+    except KeyError as exc:
+        known = ", ".join(sorted(_EVALUATOR_REGISTRY)) or "<none registered>"
+        raise KeyError(f"unknown evaluator task '{task}'. Known tasks: {known}") from exc
+
+
+def get_profiler_cls(engine: str) -> type:
+    try:
+        return _PROFILER_REGISTRY[engine]
+    except KeyError as exc:
+        known = ", ".join(sorted(_PROFILER_REGISTRY)) or "<none registered>"
+        raise KeyError(f"unknown profiler engine '{engine}'. Known engines: {known}") from exc
+
+
 def list_datasets() -> list[str]:
     return sorted(_DATASET_REGISTRY)
 
@@ -62,8 +113,18 @@ def list_models() -> list[str]:
     return sorted(_MODEL_REGISTRY)
 
 
+def list_evaluators() -> list[str]:
+    return sorted(_EVALUATOR_REGISTRY)
+
+
+def list_profilers() -> list[str]:
+    return sorted(_PROFILER_REGISTRY)
+
+
 def clear_registries() -> None:
     """Clear registrations for isolated tests and interactive-session resets."""
 
     _DATASET_REGISTRY.clear()
     _MODEL_REGISTRY.clear()
+    _EVALUATOR_REGISTRY.clear()
+    _PROFILER_REGISTRY.clear()

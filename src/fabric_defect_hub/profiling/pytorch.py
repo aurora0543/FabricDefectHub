@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import time
 
+from fabric_defect_hub.core.registry import register_profiler
 from fabric_defect_hub.models.base import ExportedArtifact
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig, summarize_latencies
 
 
+@register_profiler
 class PyTorchProfiler(BackendProfiler):
     """Profiles a TorchScript-exported model under real (or CPU-simulated)
     latency conditions.

@@ -111,6 +111,8 @@ def test_pixel_level_perfect_separation(tmp_path):
     assert metrics["pixel_f1"] == 1.0
     assert 0.0 <= metrics["pixel_aupro"] <= 1.0
     assert metrics["pixel_aupro"] > 0.9
+    assert 0.0 <= metrics["iap"] <= 1.0
+    assert metrics["iap"] > 0.9
 
 
 def _mixed_pixel_dataset(tmp_path):
@@ -142,6 +144,40 @@ def _mixed_pixel_dataset(tmp_path):
             Prediction(sample_id=str(i), anomaly_score=float(score_map.max()), anomaly_map=str(map_path))
         )
     return samples, predictions
+
+
+def test_iap_equal_weights_small_missed_region_against_large_found_one(tmp_path):
+    """A large region perfectly found + a tiny region completely missed:
+    plain pixel-level metrics barely notice the miss (dominated by the
+    large region's pixel count), but IAP equal-weights both regions, so it
+    should sit well below the near-perfect pixel_auroc/pixel_f1 those two
+    give here.
+    """
+
+    from PIL import Image
+
+    shape = (20, 20)
+    mask = np.zeros(shape, dtype=np.uint8)
+    mask[0:10, 0:10] = 255  # large region: 100px, found
+    mask[15:16, 15:16] = 255  # tiny region: 1px, missed
+    mask_path = tmp_path / "mask.png"
+    Image.fromarray(mask).save(mask_path)
+
+    score_map = np.zeros(shape, dtype=np.float32)
+    score_map[0:10, 0:10] = 1.0  # large region scored at the dataset max
+    map_path = tmp_path / "map.npy"
+    np.save(map_path, score_map)
+
+    sample = Sample(
+        id="a", image_path="a.jpg", task="anomaly",
+        annotations=Annotations(is_anomalous=True, anomaly_mask=str(mask_path)),
+    )
+    prediction = Prediction(sample_id="a", anomaly_score=1.0, anomaly_map=str(map_path))
+
+    metrics = AnomalyEvaluator().evaluate([sample], [prediction])
+    assert metrics["pixel_auroc"] > 0.99  # barely dented by missing 1 of 101 positive px
+    assert 0.0 <= metrics["iap"] <= 1.0
+    assert metrics["iap"] < 0.95
 
 
 def test_pixel_level_subsampling_is_deterministic_for_same_seed(tmp_path):

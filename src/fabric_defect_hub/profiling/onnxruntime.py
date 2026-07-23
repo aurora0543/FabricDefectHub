@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import time
 
+from fabric_defect_hub.core.registry import register_profiler
 from fabric_defect_hub.models.base import ExportedArtifact
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig, summarize_latencies
 
 
+@register_profiler
 class ONNXRuntimeProfiler(BackendProfiler):
     """Profiles an ONNX-exported model via a real `onnxruntime.InferenceSession`."""
 

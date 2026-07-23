@@ -163,6 +163,16 @@ def test_run_benchmark_persists_output(tmp_path):
         assert (tmp_path / result.experiment_id / "result.json").exists()
 
 
+def test_run_benchmark_appends_every_run_to_the_same_log(tmp_path):
+    import json
+
+    log_path = tmp_path / "runs_log.jsonl"
+    results = run_benchmark(_two_runs(), run_log_path=str(log_path))
+
+    rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert [row["experiment_id"] for row in rows] == [result.experiment_id for result in results]
+
+
 def test_benchmark_config_builds_and_runs_framework_free(tmp_path):
     config = BenchmarkConfig.from_dict(
         {
@@ -190,3 +200,33 @@ def test_benchmark_config_builds_and_runs_framework_free(tmp_path):
     assert [result.experiment_id for result in results] == ["configured"]
     assert (tmp_path / "results" / "configured" / "result.json").exists()
     assert (tmp_path / "leaderboard.md").read_text().startswith("| experiment_id |")
+
+
+def test_benchmark_config_wires_run_log_path(tmp_path):
+    import json
+
+    config = BenchmarkConfig.from_dict(
+        {
+            "output_dir": str(tmp_path / "results"),
+            "run_log_path": str(tmp_path / "runs_log.jsonl"),
+            "runs": [
+                {
+                    "experiment_id": "configured",
+                    "dataset": {"name": "fake-fabric-bench", "root": "data/fake"},
+                    "model": {
+                        "backend": "fake-backend-bench-a",
+                        "name": "model-a",
+                        "task": "detection",
+                    },
+                    "runtime": {"device": "cpu", "engine": "python"},
+                    "train": {},
+                    "evaluator": False,
+                }
+            ],
+        }
+    )
+
+    config.run()
+
+    rows = [json.loads(line) for line in (tmp_path / "runs_log.jsonl").read_text().splitlines()]
+    assert [row["experiment_id"] for row in rows] == ["configured"]

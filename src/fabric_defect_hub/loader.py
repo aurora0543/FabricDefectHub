@@ -22,6 +22,7 @@ from fabric_defect_hub.core.serialization import save_experiment_result, save_pr
 from fabric_defect_hub.core.types import DatasetInfo, ExperimentResult, ModelInfo, RuntimeInfo
 from fabric_defect_hub.datasets.base import DatasetAdapter
 from fabric_defect_hub.models.base import Artifact, ModelAdapter
+from fabric_defect_hub.reporting import append_run_log
 
 # Backend package import paths, used to lazily register model/dataset
 # implementations without requiring every optional framework to be
@@ -34,6 +35,34 @@ _MODEL_BACKEND_MODULES = {
     "moeclip": "fabric_defect_hub.models.moeclip",
     "mambaad": "fabric_defect_hub.models.mambaad",
 }
+
+
+def list_model_backends() -> list[str]:
+    """Every model backend keyword `load_model`/`fdh` accepts. The single
+    source of truth for `cli.py`'s several `--backend` argument `choices`
+    tuples, which used to each hardcode their own copy of this list —
+    a backend added here without updating every copy would silently accept
+    it in `fdh run` but reject it in `fdh train`/`fdh predict`.
+    """
+
+    return sorted(_MODEL_BACKEND_MODULES)
+
+
+def import_all_model_backends() -> None:
+    """Best-effort import every registered backend's module, so its
+    `@register_model` decorator runs even on a machine that only has some
+    of the optional ML frameworks installed — one missing framework just
+    means that one backend's import is skipped, not that the rest fail.
+    After this call, `core.registry.list_models()` reflects what's actually
+    usable *here*, not just what the project knows how to talk to (that
+    static list is `list_model_backends()`). Used by `fdh list`.
+    """
+
+    for module_path in _MODEL_BACKEND_MODULES.values():
+        try:
+            importlib.import_module(module_path)
+        except ImportError:
+            continue
 
 
 def load_dataset(name: str, root: str, split: str = "test", **kwargs) -> DatasetAdapter:
@@ -68,6 +97,7 @@ def run_experiment(
     profile_config=None,
     export_target: str | None = None,
     export_config: dict[str, Any] | None = None,
+    run_log_path: str | None = None,
 ) -> ExperimentResult:
     """Run the end-to-end loop: (train/load) -> predict -> evaluate -> profile.
 
@@ -84,6 +114,13 @@ def run_experiment(
     their paths in the returned `ExperimentResult.artifacts`. This is what
     a leaderboard/frontend would actually read from disk; without it you
     only get the in-memory `ExperimentResult`.
+
+    `run_log_path`, if given, appends one JSON line for this run (see
+    `reporting.append_run_log`) to a single shared log file -- distinct
+    from `output_dir`'s per-experiment `result.json`, which a *rerun* of the
+    same `experiment_id` overwrites. This is the append-only, never-
+    overwritten history: point every run, across every backend, at the same
+    path and they accumulate there for later cross-run plotting.
     """
 
     samples = dataset.load_samples()
@@ -140,5 +177,8 @@ def run_experiment(
     if output_dir is not None:
         result_path = save_experiment_result(result, f"{output_dir.rstrip('/')}/{experiment_id}/result.json")
         result.artifacts["result"] = str(result_path)
+
+    if run_log_path is not None:
+        append_run_log(result, run_log_path)
 
     return result

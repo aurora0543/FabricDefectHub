@@ -97,7 +97,9 @@ class BenchmarkRun:
         return config
 
 
-def run_benchmark(runs: list[BenchmarkRun], output_dir: str | None = None) -> list[ExperimentResult]:
+def run_benchmark(
+    runs: list[BenchmarkRun], output_dir: str | None = None, run_log_path: str | None = None
+) -> list[ExperimentResult]:
     """Execute every `BenchmarkRun` in order and return their `ExperimentResult`s.
 
     A failure in one run is not swallowed — if you need partial results
@@ -105,6 +107,12 @@ def run_benchmark(runs: list[BenchmarkRun], output_dir: str | None = None) -> li
     yourself; silently continuing past a broken run would make the
     leaderboard's comparability claim (identical metric code across rows)
     untrustworthy.
+
+    `run_log_path`, if given, is passed through to every row's
+    `run_experiment(..., run_log_path=...)` call, so every model/backend in
+    the benchmark appends to the same shared, never-overwritten run log
+    (see `reporting.append_run_log`) — one accumulating source of truth for
+    plotting across benchmarks, not just within this one call's `results`.
     """
 
     results: list[ExperimentResult] = []
@@ -125,6 +133,7 @@ def run_benchmark(runs: list[BenchmarkRun], output_dir: str | None = None) -> li
             profile_config=run.profile_config,
             export_target=run.export_target,
             export_config=run.export_config,
+            run_log_path=run_log_path,
         )
         results.append(result)
     return results
@@ -156,6 +165,7 @@ class BenchmarkConfig:
     leaderboard_metric: str | None = None
     descending: bool = True
     report_path: str | None = None
+    run_log_path: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "BenchmarkConfig":
@@ -169,7 +179,7 @@ class BenchmarkConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "BenchmarkConfig":
-        allowed = {"runs", "output_dir", "leaderboard", "report_path"}
+        allowed = {"runs", "output_dir", "leaderboard", "report_path", "run_log_path"}
         unknown = set(raw) - allowed
         if unknown:
             raise ValueError(f"BenchmarkConfig: unknown keys {sorted(unknown)}.")
@@ -188,10 +198,11 @@ class BenchmarkConfig:
             leaderboard_metric=board.get("metric"),
             descending=bool(board.get("descending", True)),
             report_path=_expand_path(raw["report_path"]) if raw.get("report_path") else None,
+            run_log_path=_expand_path(raw["run_log_path"]) if raw.get("run_log_path") else None,
         )
 
     def run(self) -> list[ExperimentResult]:
-        results = run_benchmark(self.runs, output_dir=self.output_dir)
+        results = run_benchmark(self.runs, output_dir=self.output_dir, run_log_path=self.run_log_path)
         if self.leaderboard_metric:
             results = leaderboard(results, self.leaderboard_metric, self.descending)
         if self.report_path:
@@ -306,21 +317,14 @@ def _evaluator_from_spec(raw: object, default_task: str, index: int) -> Evaluato
         raise ValueError(f"runs[{index}].evaluator: unknown keys {sorted(unknown)}.")
     evaluator_type = str(raw.get("type", default_task))
     kwargs = _mapping_dict(raw, "kwargs", f"runs[{index}].evaluator")
-    from fabric_defect_hub.evaluation import (
-        AnomalyEvaluator, DetectionEvaluator, IndustrialEvaluator, SegmentationEvaluator,
-    )
+    import fabric_defect_hub.evaluation  # noqa: F401 -- triggers @register_evaluator
+    from fabric_defect_hub.core.registry import get_evaluator_cls, list_evaluators
 
-    evaluators = {
-        "anomaly": AnomalyEvaluator,
-        "detection": DetectionEvaluator,
-        "industrial": IndustrialEvaluator,
-        "segmentation": SegmentationEvaluator,
-    }
     try:
-        return evaluators[evaluator_type](**kwargs)
+        return get_evaluator_cls(evaluator_type)(**kwargs)
     except KeyError as exc:
         raise ValueError(
-            f"runs[{index}].evaluator.type must be one of {sorted(evaluators)}."
+            f"runs[{index}].evaluator.type must be one of {list_evaluators()}."
         ) from exc
 
 
@@ -349,11 +353,13 @@ def _profile_from_spec(raw: object, runtime: RuntimeInfo, index: int):
     if unknown:
         raise ValueError(f"runs[{index}].profile: unknown keys {sorted(unknown)}.")
     engine = str(raw.get("engine", runtime.engine)).lower()
-    profilers = _profiler_types()
+    import fabric_defect_hub.profiling  # noqa: F401 -- triggers @register_profiler
+    from fabric_defect_hub.core.registry import get_profiler_cls, list_profilers
+
     try:
-        profiler = profilers[engine]()
+        profiler = get_profiler_cls(engine)()
     except KeyError as exc:
-        raise ValueError(f"runs[{index}].profile.engine must be one of {sorted(profilers)}.") from exc
+        raise ValueError(f"runs[{index}].profile.engine must be one of {list_profilers()}.") from exc
     config_raw = _mapping_dict(raw, "config", f"runs[{index}].profile")
     size = config_raw.pop("input_size", runtime.input_size)
     if not isinstance(size, (list, tuple)) or len(size) != 2:
@@ -369,16 +375,6 @@ def _profile_from_spec(raw: object, runtime: RuntimeInfo, index: int):
     return profiler, config, str(target), _mapping_dict(
         raw, "export_config", f"runs[{index}].profile"
     )
-
-
-def _profiler_types() -> dict[str, type]:
-    from fabric_defect_hub.profiling import ONNXRuntimeProfiler, PyTorchProfiler, TensorRTProfiler
-
-    return {
-        "onnxruntime": ONNXRuntimeProfiler,
-        "pytorch": PyTorchProfiler,
-        "tensorrt": TensorRTProfiler,
-    }
 
 
 def _required_mapping(raw: dict[str, Any], key: str, index: int) -> dict[str, Any]:

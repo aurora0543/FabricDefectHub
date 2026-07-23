@@ -21,10 +21,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from fabric_defect_hub.core.registry import register_evaluator
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.evaluation.base import Evaluator
 
 
+@register_evaluator
 class IndustrialEvaluator(Evaluator):
     """Under-detection rate / over-detection rate / (optional) alarms per
     unit fabric length, at a recall-first threshold.

@@ -50,10 +50,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from fabric_defect_hub.core.registry import register_profiler
 from fabric_defect_hub.models.base import ExportedArtifact
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig, summarize_latencies
 
 
+@register_profiler
 class TensorRTProfiler(BackendProfiler):
     """Profiles a pre-built TensorRT engine via `execute_async_v3` + CUDA-event timing."""
 

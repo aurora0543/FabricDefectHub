@@ -1,5 +1,5 @@
 """Anomaly `Evaluator`: image-level AUROC/F1/precision/recall (at an
-F1-optimal threshold, not a hardcoded 0.5), plus pixel-level AUROC/AUPRO
+F1-optimal threshold, not a hardcoded 0.5), plus pixel-level AUROC/AUPRO/IAP
 when `Prediction.anomaly_map` files are available (see
 `AnomalibAdapter.predict(..., output_dir=...)`).
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from fabric_defect_hub.core.registry import register_evaluator
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.evaluation.base import Evaluator
 
@@ -27,6 +28,7 @@ DEFAULT_MAX_PIXELS = 1_000_000
 DEFAULT_MAX_AUPRO_IMAGES = 50
 
 
+@register_evaluator
 class AnomalyEvaluator(Evaluator):
     """Image-level (always) + pixel-level (when maps are present) anomaly metrics."""
 
@@ -155,17 +157,15 @@ def _pixel_level_metrics(
         f1_score(flat_true, (flat_score >= px_threshold).astype(int), zero_division=0)
     )
     metrics["pixel_aupro"] = _compute_aupro(pixel_pairs, max_aupro_images, seed)
+    metrics["iap"] = _compute_iap(pixel_pairs, max_aupro_images, seed)
     return metrics
 
 
-def _compute_aupro(pixel_pairs: list, max_images: int, seed: int, num_thresholds: int = 100) -> float:
-    """Area under the per-region overlap (PRO) curve, integrated over FPR.
-
-    Each ground-truth defect region (connected component of the mask)
-    contributes its own recall at each threshold; PRO is the mean recall
-    across regions, plotted against the false-positive rate on normal
-    pixels — this rewards detecting every defect region at least partially,
-    rather than letting one large region dominate a plain pixel AUROC.
+def _labeled_regions(pixel_pairs: list, max_images: int, seed: int):
+    """Per-region (connected-component) pixel score arrays, plus the pooled
+    negative-pixel scores, subsampled to whole images (so components stay
+    intact) rather than individual pixels. Shared by AUPRO and IAP, which
+    both equal-weight ground-truth defect regions instead of raw pixels.
     """
 
     import numpy as np
@@ -184,11 +184,24 @@ def _compute_aupro(pixel_pairs: list, max_images: int, seed: int, num_thresholds
             region_preds.append(score_map[labeled == region_id])
         neg_chunks.append(score_map[mask == 0])
 
-    if not region_preds:
-        return float("nan")
-
     neg_preds = np.concatenate(neg_chunks) if neg_chunks else np.array([])
-    if neg_preds.size == 0:
+    return region_preds, neg_preds
+
+
+def _compute_aupro(pixel_pairs: list, max_images: int, seed: int, num_thresholds: int = 100) -> float:
+    """Area under the per-region overlap (PRO) curve, integrated over FPR.
+
+    Each ground-truth defect region (connected component of the mask)
+    contributes its own recall at each threshold; PRO is the mean recall
+    across regions, plotted against the false-positive rate on normal
+    pixels — this rewards detecting every defect region at least partially,
+    rather than letting one large region dominate a plain pixel AUROC.
+    """
+
+    import numpy as np
+
+    region_preds, neg_preds = _labeled_regions(pixel_pairs, max_images, seed)
+    if not region_preds or neg_preds.size == 0:
         return float("nan")
 
     all_scores = np.concatenate([*region_preds, neg_preds])
@@ -203,6 +216,59 @@ def _compute_aupro(pixel_pairs: list, max_images: int, seed: int, num_thresholds
     fprs_sorted = np.asarray(fprs)[order]
     pro_sorted = np.asarray(pro_scores)[order]
     return _integrate_trapezoid(np, pro_sorted, fprs_sorted)
+
+
+def _compute_iap(pixel_pairs: list, max_images: int, seed: int, num_thresholds: int = 100) -> float:
+    """Instance Average Precision: each ground-truth defect region
+    (connected component) gets its own precision/recall integral —
+    *global* pixel precision (over every positive + negative pixel in the
+    subsample) as the height, integrated over that one region's own recall
+    axis — then regions are averaged with equal weight.
+
+    This is the precision-side counterpart to `_compute_aupro`'s recall-side
+    region weighting: a plain pixel-level AP lets one large defect region
+    dominate the recall axis simply by pixel count, which is exactly what
+    IAP is meant to avoid (see the module docstring / this evaluator's
+    calling docstring).
+    """
+
+    import numpy as np
+
+    region_preds, neg_preds = _labeled_regions(pixel_pairs, max_images, seed)
+    if not region_preds or neg_preds.size == 0:
+        return float("nan")
+
+    pos_preds = np.concatenate(region_preds)
+    all_scores = np.concatenate([pos_preds, neg_preds])
+    thresholds = np.linspace(all_scores.min(), all_scores.max(), num_thresholds)
+
+    tp_counts = np.array([(pos_preds >= th).sum() for th in thresholds], dtype=float)
+    fp_counts = np.array([(neg_preds >= th).sum() for th in thresholds], dtype=float)
+    denom = tp_counts + fp_counts
+    # No positive or negative pixel yet flagged (threshold above every
+    # score): undefined precision defaults to 1.0, matching
+    # `sklearn.precision_recall_curve`'s convention at recall 0.
+    global_precision = np.divide(tp_counts, denom, out=np.ones_like(denom), where=denom > 0)
+
+    # Walk thresholds strictest -> most lenient (descending) so each
+    # region's own recall comes out non-decreasing -- the correct x-axis
+    # order for a precision/recall integral -- then prepend the implicit
+    # recall=0/precision=1 anchor for "threshold above every score, nothing
+    # flagged yet" (mirroring `sklearn.precision_recall_curve`'s own
+    # convention). Sorting by recall *value* instead (as `_compute_aupro`
+    # does for FPR) breaks down whenever a region's pixels all sit at the
+    # dataset's single highest score: recall is then 1.0 at *every* sampled
+    # threshold, and a value-sort's tie-breaking hides which precision the
+    # recall 0->1 jump actually happened at (it can pair the transition
+    # with the wrong, much-later threshold's precision instead).
+    precision_desc = global_precision[::-1]
+    instance_aps = []
+    for preds in region_preds:
+        recall_desc = np.array([(preds >= th).sum() / preds.size for th in thresholds])[::-1]
+        recall_seq = np.concatenate([[0.0], recall_desc])
+        precision_seq = np.concatenate([[1.0], precision_desc])
+        instance_aps.append(_integrate_trapezoid(np, precision_seq, recall_seq))
+    return float(np.mean(instance_aps))
 
 
 def _integrate_trapezoid(np_module, values, coordinates) -> float:
