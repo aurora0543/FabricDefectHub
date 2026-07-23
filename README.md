@@ -2,13 +2,13 @@
 
 FabricDefectHub is a unified benchmarking hub for classical fabric defect detection models, developed for real-world industrial textile quality inspection. It consolidates SOTA fabric defect datasets within a full-stack system architecture designed to streamline benchmarking and facilitate practical deployment.
 
-For data collection, two SOTA fabric defect datasets were assembled, supplemented by an additional dataset targeting general-purpose defect inspection (see [Datasets](#datasets)). With respect to algorithms, a total of 14 models spanning anomaly detection and defect detection are integrated and systematically categorized (see [Models](#models)).
+For data collection, two SOTA fabric defect datasets were assembled, supplemented by an additional dataset targeting general-purpose defect inspection (see [Datasets](#datasets)). With respect to algorithms, a total of 18 models spanning anomaly detection and defect detection are integrated and systematically categorized (see [Models](#models)).
 
 The system architecture comprises a frontend and a backend. The frontend provides a web-based interface supporting single-image inference across datasets and models, together with a dedicated Benchmark module that evaluates all models concurrently and automatically produces a leaderboard. The backend implements the underlying logic required by the frontend and additionally furnishes automation scripts for model training, inference, benchmark scoring, and performance validation.
 
 ## Models
 
-14 models across two branches: 5 unsupervised, zero-shot anomaly detectors (**Anomalib**), and 9 supervised defect detectors/segmenters (**Ultralytics**, **torchvision**).
+18 models across two branches: 9 anomaly detectors (**Anomalib**, the vendored research models under `components/`, and one clean-room reimplementation, see [components/README.md](components/README.md)), and 9 supervised defect detectors/segmenters (**Ultralytics**, **torchvision**).
 
 | # | Model | Architecture | Setting |
 | - | --- | --- | --- |
@@ -26,6 +26,72 @@ The system architecture comprises a frontend and a backend. The frontend provide
 | 12 | RD4AD | Teacher-Student | Zero-shot (unsupervised) |
 | 13 | EfficientAD | Teacher-Student | Zero-shot (unsupervised) |
 | 14 | SuperSimpleNet | Feature embedding | Zero-shot (unsupervised) |
+| 15 | WinCLIP | CLIP (vision-language) | Zero-shot (no fabric training) |
+| 16 | Dinomaly | DINOv2 encoder-decoder | Zero-shot (unsupervised) |
+| 17 | MoECLIP | CLIP + LoRA mixture-of-experts | Zero-shot (trained on labelled defects) |
+| 18 | MambaAD | CNN encoder + Mamba (SSM) decoder | Zero-shot (unsupervised) |
+
+Dinomaly and MoECLIP (16, 17) are vendored research code rather than
+pip-installable libraries — they live as git submodules under
+`components/` and each has an adapter under
+`src/fabric_defect_hub/models/<name>/` that translates between this
+project's `Sample`/`Prediction`/`Artifact` contracts and whatever the
+upstream repo natively uses. Two extra setup steps apply:
+`git submodule update --init --recursive` to populate them, and, for
+MoECLIP, dropping the OpenCLIP ViT-L-14-336px checkpoint into
+`components/moeclip/model/` (nothing downloads it — the path and link are
+in the error the adapter raises).
+
+MambaAD (`models/mambaad/`) is the one entry that is a **clean-room
+reimplementation**, not a vendored submodule: the official repo
+(`lewandofskee/MambaAD`) is a plugin that only runs inside an ADer
+checkout (its own `model.py`/`trainer.py` import ADer's `util`/`data`/
+`optim`/`loss` packages, absent from MambaAD's own repo) and its
+selective-scan core needs `mamba_ssm`, a CUDA-only compiled kernel that
+does not install on this project's dev machine. The published architecture
+and recipe are ported directly instead. No extra install step: unlike
+Dinomaly/MoECLIP there is no submodule to `git submodule update` and no
+manually-placed checkpoint.
+
+Two things about it are worth knowing:
+
+- **It is the only *multi-class unified* model here.** That is the paper's
+  actual claim: ONE model trained across every category at once, rather
+  than anomalib's one-model-per-category. Train it across the whole corpus
+  (`--dataset fabric-train --mode full`, or all 19 ZJU-Leaper patterns) to
+  use it as intended.
+- **On a CUDA box it uses upstream's real kernel.** `models/mambaad/ssm.py`
+  detects `mamba_ssm` at run time and dispatches to its fused
+  `selective_scan_fn` when the tensors are on CUDA — exact upstream
+  semantics *and* speed, no configuration. Install it with the optional
+  `mambaad-cuda` extra on the training host. Without it (CPU/MPS, or CUDA
+  without the package) the backend still runs, on portable implementations
+  of the same recurrence that are tested against each other for numerical
+  equality — a good deal slower, which is fine for development, CI and
+  inference but not for a full reproduction run.
+
+MoECLIP is the one model here trained under a **zero-shot (ZSAD)**
+protocol, and its data rules are the mirror image of every other anomaly
+model's:
+
+- It trains on an **auxiliary cross-domain corpus** (VisA, MVTec AD or
+  MVTec LOCO — the sets that are *eval-only* for everything else) and is
+  then applied to fabric it has never seen. `data.test_dataset` names that
+  zero-shot evaluation target separately from `data.dataset`, and
+  `fdh train` **rejects a fabric training corpus** for this backend: it
+  would make its fabric scores in-domain and void the transfer claim the
+  benchmark measures. Override the target with
+  `--test-dataset raw-fabric` / `--test-dataset-root ...`.
+- It learns from *labelled* defects rather than one-class, so its train
+  split needs `use_defect: true` and a mask-bearing task; defective
+  training samples without a pixel mask are dropped and counted on the
+  resulting artifact.
+
+Its leaderboard provenance therefore reads `Zero-shot CLIP (VisA-trained)`
+rather than `local trained artifact` — a fabric number from MoECLIP is a
+transfer result. One caveat when running the Benchmark tab: evaluating it
+against the same dataset it was trained on (VisA by default) is not a
+zero-shot measurement; pick a fabric dataset there.
 
 ## Web UI
 
@@ -43,10 +109,15 @@ We built a Gradio-based UI hub for the benchmark, providing an intuitive interfa
 
 Datasets fall into three roles. Anomaly (one-class) training is restricted
 to the **in-domain fabric** sources; the cross-domain object benchmarks are
-**eval-only** (training a fabric model on them is rejected — see
-`training.ANOMALY_TRAINABLE_DATASETS`); YOLO-labelled sets belong to the
-**detection** backends. The `fabric-train` composite unions every fabric
-source into one training corpus so no model is trained on a single dataset.
+**eval-only** for those models (training a fabric model on them is rejected
+— see `training.ANOMALY_TRAINABLE_DATASETS`); YOLO-labelled sets belong to
+the **detection** backends. The `fabric-train` composite unions every
+fabric source into one training corpus so no model is trained on a single
+dataset.
+
+The zero-shot backend inverts the first two roles: MoECLIP may *only* be
+trained on the cross-domain corpora and *not* on fabric (see
+`training.ZERO_SHOT_TRAINABLE_DATASETS` and [Models](#models)).
 
 **In-domain fabric (train + eval):**
 
@@ -56,7 +127,8 @@ source into one training corpus so no model is trained on a single dataset.
 - **Fabric Defects Dataset** — fabric, `defect free/` + 5 defect classes (hole / stain / lines / vertical / horizontal); hole/vertical/horizontal ship binary pixel masks (the dataset's `_processed` files), lines/stain are image-level only.
 - **`fabric-train`** — a composite (not a folder on disk) that unions the four fabric sources above for one-class training.
 
-**Cross-domain benchmarks (eval-only):**
+**Cross-domain benchmarks (eval-only — except as MoECLIP's zero-shot
+training corpus, see [Models](#models)):**
 
 - **MVTec AD** — 5,354 images (3,629/1,725), 15 non-fabric categories; cross-domain zero-shot evaluation, not training.
 - **MVTec LOCO AD** — 5 categories with logical + structural anomalies; per-image ground-truth mask directories.

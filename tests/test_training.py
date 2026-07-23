@@ -8,6 +8,7 @@ import pytest
 from fabric_defect_hub.training import (
     ANOMALY_TRAINABLE_DATASETS,
     DEFAULT_DATASET_ROOTS,
+    ZERO_SHOT_TRAINABLE_DATASETS,
     TEST_SHOT_NUM_SAMPLES,
     DatasetOverrides,
     _apply_test_speed_overrides,
@@ -81,6 +82,9 @@ def test_find_model_configs_empty_dir_returns_empty(tmp_path):
         ({"model": {"variant": "yolov8n"}}, "ultralytics"),
         ({"model": {"variant": "fasterrcnn_resnet50_fpn"}}, "torchvision"),
         ({"model": {"name": "PatchCore"}}, "anomalib"),
+        ({"model": {"name": "dinov2reg_vit_base_14"}}, "dinomaly"),
+        ({"model": {"name": "ViT-L-14-336"}}, "moeclip"),
+        ({"model": {"name": "resnet34"}}, "mambaad"),
         ({"backend": "torchvision", "model": {"variant": "yolov8n"}}, "torchvision"),
     ],
 )
@@ -93,12 +97,53 @@ def test_enforce_allows_trainable_fabric_datasets(dataset):
     # Should not raise for any one-class backend.
     _enforce_trainable_dataset({"data": {"dataset": dataset}}, "anomalib")
     _enforce_trainable_dataset({"data": {"dataset": dataset}}, "dinomaly")
+    _enforce_trainable_dataset({"data": {"dataset": dataset}}, "mambaad")
 
 
 @pytest.mark.parametrize("dataset", ["visa", "mvtec-ad", "mvtec-loco"])
 def test_enforce_rejects_eval_only_datasets_for_anomaly_backends(dataset):
     with pytest.raises(ValueError, match="not a training source"):
         _enforce_trainable_dataset({"data": {"dataset": dataset}}, "anomalib")
+    with pytest.raises(ValueError, match="not a training source"):
+        _enforce_trainable_dataset({"data": {"dataset": dataset}}, "mambaad")
+
+
+@pytest.mark.parametrize("dataset", sorted(ZERO_SHOT_TRAINABLE_DATASETS))
+def test_enforce_allows_cross_domain_corpora_for_zero_shot_backend(dataset):
+    # The mirror image of the one-class rule: MoECLIP is trained on an
+    # auxiliary cross-domain corpus and applied to unseen fabric.
+    _enforce_trainable_dataset({"data": {"dataset": dataset}}, "moeclip")
+
+
+@pytest.mark.parametrize("dataset", sorted(ANOMALY_TRAINABLE_DATASETS))
+def test_enforce_rejects_fabric_training_for_zero_shot_backend(dataset):
+    # Training MoECLIP on fabric would make its fabric scores in-domain and
+    # void the zero-shot claim the benchmark is measuring.
+    with pytest.raises(ValueError, match="zero-shot"):
+        _enforce_trainable_dataset({"data": {"dataset": dataset}}, "moeclip")
+
+
+def test_test_dataset_override_sets_zero_shot_eval_target():
+    raw = {"data": {"dataset": "visa", "test_dataset": "raw-fabric"}}
+    result = apply_dataset_overrides(
+        raw, "moeclip", DatasetOverrides(test_dataset="tilda-400")
+    )
+    assert result["data"]["test_dataset"] == "tilda-400"
+    assert result["data"]["dataset"] == "visa"  # training corpus untouched
+
+
+def test_test_dataset_override_is_rejected_for_other_backends():
+    with pytest.raises(ValueError, match="only apply to the zero-shot backends"):
+        apply_dataset_overrides(
+            {"data": {"dataset": "raw-fabric"}}, "dinomaly",
+            DatasetOverrides(test_dataset="tilda-400"),
+        )
+
+
+def test_default_dataset_root_resolves_zero_shot_eval_target():
+    raw = apply_default_dataset_root({"data": {"dataset": "visa", "test_dataset": "raw-fabric"}})
+    assert raw["data"]["dataset_root"] == DEFAULT_DATASET_ROOTS["visa"]
+    assert raw["data"]["test_dataset_root"] == DEFAULT_DATASET_ROOTS["raw-fabric"]
 
 
 def test_enforce_is_noop_for_detection_backends():

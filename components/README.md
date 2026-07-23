@@ -59,11 +59,36 @@ Rules for anything placed here:
   `Sample`/`Prediction`/`Artifact` types and whatever the vendored code
   natively uses.
 
+Not everything that could plausibly live here does. `models/mambaad/`
+(see its own module docstring) is a clean-room reimplementation, not a
+submodule: the official repo is a plugin that only runs inside a second,
+larger framework (`ADer`) it doesn't ship, and its selective-scan core
+needs a CUDA-only compiled kernel (`mamba_ssm`) that won't install without
+a matching CUDA toolchain. Vendoring it here would mean vendoring ADer
+too — a general-purpose framework, not a single model's own code, which
+would break "one subdirectory per repo" below — and would gate the
+backend to a CUDA host exactly as hard as the CUDA-only kernel already
+does on its own. When a target repo isn't runnable on its own (needs a
+second framework present to import, needs a compiled extension with no
+portable fallback), reimplementing the published architecture directly
+against this project's contracts, the way `models/mambaad/` does, is the
+better fit than forcing it through this vendoring convention.
+
 Known collision risk: these repos define generic top-level module names
 (`utils`, `dataset`, `models`, `optimizers`, ...) rather than a namespaced
 package. Once one is imported, it occupies that name in `sys.modules` for
 the rest of the process — two vendored repos that both define, say,
-`utils.py` cannot be imported in the same process. Not an issue running
-one backend at a time (the normal case here), but don't try to `import`
-two different `components/*` backends' internals side by side without
-checking for name clashes first.
+`utils.py` would otherwise shadow each other. This is no longer
+hypothetical: `components/dinomaly` and `components/moeclip` both ship a
+top-level `utils` and `dataset`, and the Benchmark tab runs every model
+back to back in one process.
+
+The resolution lives on the *later* adapter, not in the vendored source:
+`models/moeclip/vendor.py::import_vendor()` imports MoECLIP's modules with
+the colliding names temporarily evicted from `sys.modules`, then takes its
+own modules back out again and restores what was there before, keeping
+them in a private cache. Dinomaly's plain `sys.path` bootstrap keeps
+working untouched. Anything added here after MoECLIP should follow the
+same pattern rather than the plain one — and note it relies on the
+vendored code not importing those names lazily from inside a function
+body (verified against the pinned commits).

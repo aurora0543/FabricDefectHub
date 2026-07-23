@@ -15,8 +15,8 @@ from fabric_defect_hub.catalog import (
 )
 
 
-def test_canonical_models_has_sixteen_entries():
-    assert len(CANONICAL_MODELS) == 16
+def test_canonical_models_has_eighteen_entries():
+    assert len(CANONICAL_MODELS) == 18
 
 
 def test_canonical_model_keys_are_unique():
@@ -43,6 +43,9 @@ def test_canonical_model_labels_are_unique():
         ("anomalib", "WinClip", "WinCLIP"),
         ("anomalib", "winclip", "WinCLIP"),  # case-insensitive
         ("dinomaly", "dinov2reg_vit_base_14", "Dinomaly"),
+        ("moeclip", "ViT-L-14-336", "MoECLIP"),
+        ("moeclip", "vit-l-14-336", "MoECLIP"),  # case-insensitive
+        ("mambaad", "resnet34", "MambaAD"),
     ],
 )
 def test_find_canonical_model_matches(backend, variant, expected_key):
@@ -74,6 +77,16 @@ def test_published_path_uses_ckpt_for_anomalib():
 
 def test_published_path_uses_pth_for_dinomaly():
     model = find_canonical_model("dinomaly", "dinov2reg_vit_base_14")
+    assert published_path(model).suffix == ".pth"
+
+
+def test_published_path_uses_pth_for_moeclip():
+    model = find_canonical_model("moeclip", "ViT-L-14-336")
+    assert published_path(model).suffix == ".pth"
+
+
+def test_published_path_uses_pth_for_mambaad():
+    model = find_canonical_model("mambaad", "resnet34")
     assert published_path(model).suffix == ".pth"
 
 
@@ -111,6 +124,29 @@ def test_metadata_for_dinomaly_resolves_architecture_fields():
     assert metadata["target_layers"] == [2, 3, 4, 5, 6, 7, 8, 9]
     assert metadata["image_size"] == 448
     assert metadata["crop_size"] == 392
+
+
+def test_metadata_for_moeclip_resolves_architecture_fields():
+    model = find_canonical_model("moeclip", "ViT-L-14-336")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert metadata["model_class"] == "MoECLIP"
+    assert metadata["model_name"] == "ViT-L-14-336"
+    # The architecture knobs predict() needs to rebuild the same model.
+    assert metadata["img_size"] == 518
+    assert metadata["moe_layers"] == [5, 11, 17, 23]
+    assert metadata["moe_num_experts"] == 4
+
+
+def test_metadata_for_mambaad_resolves_architecture_fields():
+    model = find_canonical_model("mambaad", "resnet34")
+    metadata = metadata_for(model)
+    assert metadata["trusted"] is True
+    assert metadata["model_class"] == "MambaADNet"
+    assert metadata["encoder_name"] == "resnet34"
+    assert metadata["dims_decoder"] == [512, 256, 128, 64]
+    assert metadata["scan_type"] == "hilbert"
+    assert metadata["num_direction"] == 8
 
 
 def test_publish_artifact_returns_none_for_non_canonical_variant(tmp_path):

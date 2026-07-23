@@ -31,6 +31,8 @@ _MODEL_BACKEND_MODULES = {
     "torchvision": "fabric_defect_hub.models.torchvision.adapter",
     "anomalib": "fabric_defect_hub.models.anomalib",
     "dinomaly": "fabric_defect_hub.models.dinomaly",
+    "moeclip": "fabric_defect_hub.models.moeclip",
+    "mambaad": "fabric_defect_hub.models.mambaad",
 }
 
 

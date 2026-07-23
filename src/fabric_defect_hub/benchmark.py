@@ -86,9 +86,14 @@ class BenchmarkRun:
         elif self.model_backend == "torchvision":
             config.setdefault("train_samples", train_samples)
             config.setdefault("val_samples", validation_samples)
-        elif self.model_backend == "anomalib":
+        elif self.model_backend in ("anomalib", "dinomaly"):
             config.setdefault("train_samples", train_samples)
             config.setdefault("test_samples", validation_samples)
+        elif self.model_backend in ("moeclip", "mambaad"):
+            # Neither takes a validation split during train(): MoECLIP has
+            # no in-loop validation pass, and MambaADAdapter.train() only
+            # ever consumes train_samples too (see their adapters).
+            config.setdefault("train_samples", train_samples)
         return config
 
 

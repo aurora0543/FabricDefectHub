@@ -40,11 +40,13 @@ _ADAPTER_MODULES: dict[str, tuple[str, str]] = {
     "torchvision": ("fabric_defect_hub.models.torchvision.adapter", "TorchvisionAdapter"),
     "anomalib": ("fabric_defect_hub.models.anomalib.adapter", "AnomalibAdapter"),
     "dinomaly": ("fabric_defect_hub.models.dinomaly.adapter", "DinomalyAdapter"),
+    "moeclip": ("fabric_defect_hub.models.moeclip.adapter", "MoECLIPAdapter"),
+    "mambaad": ("fabric_defect_hub.models.mambaad.adapter", "MambaADAdapter"),
 }
 
 # Backends whose `predict()` accepts `output_dir=` to persist pixel-level
 # anomaly maps (see `_run_predict`/`--output-dir` in cli.py).
-_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly"}
+_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly", "moeclip", "mambaad"}
 
 
 @dataclass

@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="run a model or benchmark YAML config")
     run_parser.add_argument("config", help="path to YAML config")
     run_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
         help="model backend; inferred from the config when omitted",
     )
 
@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list", action="store_true", help="list resolvable model configs under --config-dir and exit"
     )
     train_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     train_parser.add_argument(
@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "override which model in the backend's family gets trained: written to "
             "model.variant for ultralytics/torchvision (e.g. yolov8n, yolov8s, yolo11n, "
-            "fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn) or model.name for anomalib/dinomaly "
+            "fasterrcnn_resnet50_fpn, maskrcnn_resnet50_fpn) or model.name for anomalib/dinomaly/moeclip/mambaad "
             "(e.g. PatchCore, PaDiM, RD4AD, EfficientAD, SuperSimpleNet, dinov2reg_vit_base_14); "
             "lets one config file train any model its backend supports instead of needing one "
             "YAML per model"
@@ -61,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset", help="registered dataset name (e.g. zju-leaper, raw-fabric, mvtec-ad); overrides data.dataset"
     )
     train_parser.add_argument("--dataset-root", help="dataset root path; overrides data.dataset_root")
+    train_parser.add_argument(
+        "--test-dataset",
+        help="zero-shot backends (moeclip) only: the dataset to *evaluate* on, when it differs "
+        "from the training corpus (overrides data.test_dataset)",
+    )
+    train_parser.add_argument(
+        "--test-dataset-root", help="root path for --test-dataset; falls back to data/<Dataset>"
+    )
     train_parser.add_argument(
         "--mode", choices=("full", "medium", "few", "test"), default=None,
         help=(
@@ -111,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory searched when 'model' is a filename stem or keyword (default: configs/models)",
     )
     predict_parser.add_argument(
-        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly"),
+        "--backend", choices=("ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad"),
         help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
     )
     predict_parser.add_argument(
@@ -137,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     predict_parser.add_argument(
         "--output-dir",
-        help="anomalib/dinomaly only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
+        help="anomalib/dinomaly/moeclip/mambaad only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
     )
     return parser
 
@@ -173,6 +181,10 @@ def _run_config(path: str, backend: str | None) -> Any:
         from fabric_defect_hub.models.torchvision.pipeline import run_from_yaml
     elif selected == "dinomaly":
         from fabric_defect_hub.models.dinomaly.pipeline import run_from_yaml
+    elif selected == "moeclip":
+        from fabric_defect_hub.models.moeclip.pipeline import run_from_yaml
+    elif selected == "mambaad":
+        from fabric_defect_hub.models.mambaad.pipeline import run_from_yaml
     else:
         from fabric_defect_hub.models.anomalib.pipeline import run_from_yaml
     result = run_from_yaml(path)
@@ -207,6 +219,8 @@ def _run_train(args: argparse.Namespace) -> Any:
     overrides = DatasetOverrides(
         dataset=args.dataset,
         dataset_root=args.dataset_root,
+        test_dataset=args.test_dataset,
+        test_dataset_root=args.test_dataset_root,
         mode=args.mode,
         num_samples=args.num_samples,
         val_num_samples=args.val_num_samples,
