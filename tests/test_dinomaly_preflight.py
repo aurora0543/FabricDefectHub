@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from fabric_defect_hub.core.types import Annotations, Sample
+from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
 from fabric_defect_hub.models.dinomaly.adapter import DinomalyAdapter
 
 
@@ -27,3 +28,19 @@ def test_dinomaly_preflight_accepts_existing_masks(tmp_path: Path):
         _sample("normal", anomalous=False),
         _sample("defect", anomalous=True, mask_path=str(mask)),
     ])
+
+
+def test_dinomaly_staging_normalizes_mask_suffix(tmp_path: Path):
+    image = tmp_path / "image.jpg"
+    mask = tmp_path / "mask.jpg"
+    image.write_bytes(b"image")
+    mask.write_bytes(b"mask")
+    train = _sample("train", anomalous=False)
+    train.image_path = str(image)
+    defect = _sample("defect", anomalous=True, mask_path=str(mask))
+    defect.image_path = str(image)
+
+    with anomalib_folder_staging_dir([train], [defect], mask_suffix=".png") as layout:
+        staged_mask = layout.root / "ground_truth" / "defect" / "defect.png"
+        assert staged_mask.is_symlink()
+        assert staged_mask.resolve() == mask

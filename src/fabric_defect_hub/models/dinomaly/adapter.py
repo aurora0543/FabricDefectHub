@@ -236,7 +236,11 @@ class DinomalyAdapter(ModelAdapter):
         test_samples = config.get("test_samples")
         if train_samples is not None and test_samples is not None:
             self._validate_test_masks(test_samples)
-            with anomalib_folder_staging_dir(train_samples, test_samples) as layout:
+            # Dinomaly's vendored MVTecDataset only discovers ground-truth
+            # masks through a '*.png' glob, regardless of source extension.
+            with anomalib_folder_staging_dir(
+                train_samples, test_samples, mask_suffix=".png"
+            ) as layout:
                 return _run(str(layout.root))
         return _run(config["data_root"])
 

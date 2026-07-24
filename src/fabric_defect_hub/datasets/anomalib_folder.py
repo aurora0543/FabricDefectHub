@@ -58,6 +58,7 @@ def anomalib_folder_staging_dir(
     train_samples: list[Sample],
     test_samples: list[Sample],
     tmp_root: str | None = None,
+    mask_suffix: str | None = None,
 ) -> Iterator[FolderLayout]:
     """Stage `train_samples` (must be all-normal — PatchCore/PaDiM/RD4AD/
     EfficientAD/SuperSimpleNet train one-class on normal data only, e.g.
@@ -69,7 +70,8 @@ def anomalib_folder_staging_dir(
     *every* defective test sample has one — anomalib requires a 1:1 match
     between abnormal images and ground-truth masks, so a partial set would
     fail at `Folder` construction; falling back to image-level-only
-    (`mask_dir=None`) is safer than guessing.
+    (`mask_dir=None`) is safer than guessing. `mask_suffix` can normalize
+    staged filenames for a backend with a fixed mask-extension convention.
 
     Deleted automatically when the `with` block exits, success or failure.
     """
@@ -99,7 +101,8 @@ def anomalib_folder_staging_dir(
         if use_masks:
             for sample in defect_samples:
                 mask_src = Path(sample.annotations.anomaly_mask)
-                _link(mask_src, root / "ground_truth" / "defect" / f"{sample.id}{mask_src.suffix}")
+                suffix = mask_suffix or mask_src.suffix
+                _link(mask_src, root / "ground_truth" / "defect" / f"{sample.id}{suffix}")
 
         yield FolderLayout(root=root, mask_dir="ground_truth/defect" if use_masks else None)
     finally:
