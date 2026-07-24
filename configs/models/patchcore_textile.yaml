@@ -1,12 +1,12 @@
 # ============================================================================
-# Research-Grade Config: PatchCore Domain Memory Bank Adaptation (DMBA)
+# Config: PatchCore fabric profile
 # ============================================================================
 
 model:
   name: PatchCore
   backend: anomalib
   task: anomaly
-  recipe: patchcore_dmba               # Academic Recipe: DMBA (Domain Memory Bank Adaptation)
+  recipe: patchcore               # config profile (WideResNet-50 memory bank + 10% coreset)
 
 data:
   dataset: raw-fabric
@@ -30,5 +30,5 @@ predict:
 
 checkpoint:
   project: runs/fabric_defect_hub
-  name: patchcore_dmba
+  name: patchcore
   registry_dir: artifacts/models

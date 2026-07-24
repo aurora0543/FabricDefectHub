@@ -5,6 +5,7 @@ overlay logic, without importing any ML framework or running training.
 
 import pytest
 
+from fabric_defect_hub import training
 from fabric_defect_hub.training import (
     ANOMALY_TRAINABLE_DATASETS,
     DEFAULT_DATASET_ROOTS,
@@ -13,9 +14,11 @@ from fabric_defect_hub.training import (
     DatasetOverrides,
     _apply_test_speed_overrides,
     _enforce_trainable_dataset,
+    apply_available_dataset,
     apply_dataset_overrides,
     apply_default_dataset_root,
     apply_model_overrides,
+    apply_raw_overrides,
     find_model_configs,
     infer_backend,
     resolve_model_config,
@@ -482,3 +485,87 @@ def test_dataset_override_with_explicit_root_keeps_it():
         raw, "ultralytics", DatasetOverrides(dataset="raw-fabric", dataset_root="/custom/raw-fabric")
     )
     assert out["data"]["dataset_root"] == "/custom/raw-fabric"
+
+
+# --------------------------------------------------------------------------- #
+# apply_available_dataset — substitute a *staged* alternative rather than
+# failing deep inside a backend when a config names a dataset this machine
+# doesn't have (a cloud training box especially won't have every dataset the
+# project knows about). Fully isolates `_BACKEND_TRAINABLE_DATASETS` /
+# `DEFAULT_DATASET_ROOTS` per test so this never touches this machine's own
+# real `data/<Dataset>` symlinks.
+# --------------------------------------------------------------------------- #
+def test_apply_available_dataset_is_a_true_noop_when_requested_is_staged(tmp_path, monkeypatch):
+    (tmp_path / "f.jpg").write_text("x")
+    monkeypatch.setattr(training, "DEFAULT_DATASET_ROOTS", {"zju-leaper": str(tmp_path), "raw-fabric": "/nope"})
+    monkeypatch.setattr(
+        training, "_BACKEND_TRAINABLE_DATASETS", {"anomalib": ({"zju-leaper", "raw-fabric"}, "one-class")}
+    )
+    raw = {"data": {"dataset": "zju-leaper", "dataset_root": str(tmp_path)}}
+
+    assert apply_available_dataset(raw, "anomalib") is raw
+
+
+def test_apply_available_dataset_substitutes_a_staged_alternative_and_warns(tmp_path, monkeypatch):
+    (tmp_path / "f.jpg").write_text("x")
+    monkeypatch.setattr(training, "DEFAULT_DATASET_ROOTS", {"zju-leaper": str(tmp_path), "raw-fabric": "/nope"})
+    monkeypatch.setattr(
+        training, "_BACKEND_TRAINABLE_DATASETS", {"anomalib": ({"zju-leaper", "raw-fabric"}, "one-class")}
+    )
+    raw = {"data": {"dataset": "raw-fabric", "dataset_root": "/nope"}}
+
+    with pytest.warns(UserWarning, match="substituted"):
+        out = apply_available_dataset(raw, "anomalib")
+
+    assert out["data"]["dataset"] == "zju-leaper"
+    assert out["data"]["dataset_root"] == str(tmp_path)
+
+
+def test_apply_available_dataset_raises_when_nothing_is_staged(monkeypatch):
+    monkeypatch.setattr(training, "DEFAULT_DATASET_ROOTS", {"zju-leaper": "/nope1", "raw-fabric": "/nope2"})
+    monkeypatch.setattr(
+        training, "_BACKEND_TRAINABLE_DATASETS", {"anomalib": ({"zju-leaper", "raw-fabric"}, "one-class")}
+    )
+    raw = {"data": {"dataset": "zju-leaper"}}
+
+    with pytest.raises(FileNotFoundError, match="stageable"):
+        apply_available_dataset(raw, "anomalib")
+
+
+def test_apply_available_dataset_is_noop_for_detection_backends():
+    raw = {"data": {"dataset": "sdust-fdd"}}
+    assert apply_available_dataset(raw, "ultralytics") is raw
+
+
+def test_apply_available_dataset_is_noop_without_a_named_dataset():
+    # data_root / datamodule_kwargs mode -- mirrors `_enforce_trainable_dataset`'s
+    # own no-op there, since no registered dataset name is involved.
+    raw = {"data": {"data_root": "/some/mvtec/bottle"}}
+    assert apply_available_dataset(raw, "anomalib") is raw
+
+
+# --------------------------------------------------------------------------- #
+# apply_raw_overrides — the tuning window: dotted-path config overrides
+# --------------------------------------------------------------------------- #
+def test_apply_raw_overrides_sets_a_nested_existing_path():
+    raw = {"train": {"epochs": 10, "model_kwargs": {"lr": 0.01}}}
+
+    out = apply_raw_overrides(raw, {"train.model_kwargs.lr": 0.0005, "train.epochs": 50})
+
+    assert out["train"]["epochs"] == 50
+    assert out["train"]["model_kwargs"]["lr"] == 0.0005
+    # Original is untouched -- every other apply_* function in this module
+    # returns a new dict rather than mutating the caller's.
+    assert raw["train"]["epochs"] == 10
+    assert raw["train"]["model_kwargs"]["lr"] == 0.01
+
+
+def test_apply_raw_overrides_creates_missing_intermediate_sections():
+    out = apply_raw_overrides({}, {"a.b.c": 1})
+    assert out == {"a": {"b": {"c": 1}}}
+
+
+def test_apply_raw_overrides_is_a_noop_for_none_or_empty():
+    raw = {"train": {"epochs": 10}}
+    assert apply_raw_overrides(raw, None) is raw
+    assert apply_raw_overrides(raw, {}) is raw

@@ -1,4 +1,4 @@
-"""Unit tests for FabricDefectHub (UTAD-Framework) Modular SDK and MORR Recipes."""
+"""Unit tests for FabricDefectHub (UTAD-Framework) Modular SDK and config profiles."""
 
 from __future__ import annotations
 
@@ -17,18 +17,19 @@ from fabric_defect_hub.reporting.latex_generator import generate_latex_table
 
 
 def test_recipe_registry():
-    """Test that all MORR recipes are registered and retrievable."""
+    """Test that all config profiles are registered and retrievable."""
     recipe_ids = list_recipes()
-    assert "yolov8_sd_attn" in recipe_ids
-    assert "patchcore_dmba" in recipe_ids
-    assert "rd4ad_msfa_d" in recipe_ids
-    assert "mambaad_ss_tst" in recipe_ids
-    assert "moeclip_tpo_peft" in recipe_ids
+    assert "yolov8" in recipe_ids
+    assert "patchcore" in recipe_ids
+    assert "rd4ad" in recipe_ids
+    assert "mambaad" in recipe_ids
+    assert "moeclip" in recipe_ids
+    assert "dinomaly" in recipe_ids
 
     # Check model name resolution
     recipe_yolo = get_recipe("yolov8n")
-    assert recipe_yolo.recipe_id == "yolov8_sd_attn"
-    assert "SD-Attn" in recipe_yolo.academic_nomenclature
+    assert recipe_yolo.recipe_id == "yolov8"
+    assert "arXiv" in recipe_yolo.paper_reference
 
 
 def test_afd_loss():

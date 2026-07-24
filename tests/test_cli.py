@@ -1,6 +1,6 @@
 import pytest
 
-from fabric_defect_hub.cli import _infer_backend, _run_list, build_parser
+from fabric_defect_hub.cli import _infer_backend, _parse_set_overrides, _run_doctor, _run_list, build_parser
 
 
 @pytest.mark.parametrize(
@@ -166,3 +166,63 @@ def test_cli_parser_predict_accepts_dataset_selection_and_variant():
 def test_cli_parser_predict_requires_weights():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["predict", "model.yaml"])
+
+
+def test_cli_parser_accepts_doctor():
+    assert build_parser().parse_args(["doctor"]).command == "doctor"
+
+
+def test_cli_parser_train_set_is_repeatable():
+    args = build_parser().parse_args(
+        [
+            "train", "model.yaml",
+            "--set", "train.model_kwargs.lr=0.0005",
+            "--set", "train.model_kwargs.coreset_sampling_ratio=0.05",
+        ]
+    )
+    assert args.set_overrides == [
+        "train.model_kwargs.lr=0.0005",
+        "train.model_kwargs.coreset_sampling_ratio=0.05",
+    ]
+
+
+def test_cli_parser_train_set_defaults_to_empty_list():
+    args = build_parser().parse_args(["train", "model.yaml"])
+    assert args.set_overrides == []
+
+
+def test_parse_set_overrides_yaml_parses_values():
+    overrides = _parse_set_overrides(
+        ["train.model_kwargs.lr=0.0005", "train.model_kwargs.pre_trained=false", "train.epochs=50"]
+    )
+    assert overrides == {
+        "train.model_kwargs.lr": 0.0005,
+        "train.model_kwargs.pre_trained": False,
+        "train.epochs": 50,
+    }
+
+
+def test_parse_set_overrides_rejects_missing_equals():
+    with pytest.raises(ValueError, match="path.to.key=value"):
+        _parse_set_overrides(["train.epochs"])
+
+
+def test_parse_set_overrides_empty_list_is_empty_dict():
+    assert _parse_set_overrides([]) == {}
+
+
+def test_run_doctor_reports_every_known_backend_runnable_first():
+    payload = _run_doctor()
+
+    backends = payload["backends"]
+    from fabric_defect_hub.loader import list_model_backends
+
+    assert set(backends) == set(list_model_backends())
+    for entry in backends.values():
+        assert "framework_installed" in entry
+        assert "trainable_now" in entry
+        assert "reason" in entry
+    # Runnable-first ordering: no non-runnable backend precedes a runnable one.
+    trainable_flags = [entry["trainable_now"] for entry in backends.values()]
+    first_false = next((i for i, flag in enumerate(trainable_flags) if not flag), len(trainable_flags))
+    assert all(trainable_flags[:first_false]), "all runnable backends must sort before any non-runnable one"

@@ -1,6 +1,6 @@
 """FabricDefectHub (UTAD-Framework): Unified Modular SDK & Benchmark for Fabric Defect Inspection.
 
-Provides paper-driven optimization recipes, adaptive loading strategies, autonomous neural network modules (fdh.nn), losses, metric evaluators, and paper-grade reporting tools.
+Provides per-model config profiles, adaptive loading strategies, in-house neural network modules (fdh.nn), losses, metric evaluators, and reporting tools.
 
 Quick Usage:
     import fabric_defect_hub as fdh

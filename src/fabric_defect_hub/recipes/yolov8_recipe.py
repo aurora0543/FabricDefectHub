@@ -1,7 +1,8 @@
-"""Paper-Driven Recipe for YOLO Series (YOLOv8, YOLOv11).
+"""Config profile for the YOLO series (YOLOv8, YOLO11) on fabric detection.
 
-Implements Small-Defect Attention (SD-Attn / SPD-Conv) integration and
-Dynamic Anchor Loss Scaling tuned for microscopic fabric defects.
+Just the training settings we run these variants with, in Ultralytics' real
+argument vocabulary, anchored to the SPD-Conv paper for the small-object
+motivation. No architectural change is claimed here.
 """
 
 from __future__ import annotations
@@ -17,36 +18,38 @@ from fabric_defect_hub.core.registry import register_recipe
 from fabric_defect_hub.optim.losses import AFDLoss, DynamicLossScaler
 
 
-@register_recipe("yolov8_sd_attn")
+@register_recipe("yolov8")
 class YOLOv8Recipe(BaseModelRecipe):
-    """Optimization Recipe for YOLOv8 & YOLO11 tuned for fabric defect inspection."""
+    """Config profile for YOLOv8 & YOLO11 fabric defect detection."""
 
     @property
     def recipe_id(self) -> str:
-        return "yolov8_sd_attn"
+        return "yolov8"
 
     @property
     def target_models(self) -> List[str]:
         return ["yolov8n", "yolov8s", "yolov11n", "yolov11s"]
 
     @property
-    def academic_nomenclature(self) -> str:
-        return "SD-Attn & DLW (Small-Defect Attention + Dynamic Loss Weighting)"
-
-    @property
     def paper_reference(self) -> str:
-        return "Sarr et al., 'Space-to-Depth Downsampling for Micro-Object Detection', IEEE T-CSVT 2023."
+        return "Sunkara & Luo, 'No More Strided Convolutions or Pooling: A New CNN Building Block for Low-Resolution Images and Small Objects', ECML PKDD 2022 (arXiv:2208.03641)."
 
     def get_default_hyperparameters(self) -> Dict[str, Any]:
+        # Trainer knobs use Ultralytics' *real* `YOLO.train` argument names
+        # (`box`/`cls`/`dfl` are its loss gains, not `*_loss_weight`), so
+        # `UltralyticsAdapter.train` folds them in directly via
+        # `recipe_trainer_overrides`. The two trailing flags are NOT trainer
+        # args — they drive `adapt_architecture` (SPD-Conv) and
+        # `configure_augmentations`, and are filtered out of the train kwargs.
         return {
             "lr0": 0.01,
             "lrf": 0.01,
             "momentum": 0.937,
             "weight_decay": 0.0005,
             "warmup_epochs": 3.0,
-            "box_loss_weight": 7.5,
-            "cls_loss_weight": 0.5,
-            "dfl_loss_weight": 1.5,
+            "box": 7.5,
+            "cls": 0.5,
+            "dfl": 1.5,
             "spd_conv_downsample": True,
             "fabric_aug_enabled": True,
         }

@@ -104,6 +104,15 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--pattern", help="ZJU-Leaper pattern/group filter override")
     train_parser.add_argument("--category", help="MVTec-AD category filter override")
     train_parser.add_argument("--seed", type=int, help="subsampling RNG seed override")
+    train_parser.add_argument(
+        "--set", dest="set_overrides", action="append", default=[], metavar="path.to.key=value",
+        help=(
+            "tuning window: override any config value by dotted path, repeatable "
+            "(e.g. --set train.model_kwargs.coreset_sampling_ratio=0.05 --set train.model_kwargs.lr=0.0005). "
+            "Value is YAML-parsed (numbers/booleans/lists work unquoted); wins over the config file, "
+            "the recipe/profile defaults, and every other --* override"
+        ),
+    )
 
     predict_parser = subparsers.add_parser(
         "predict",
@@ -149,7 +158,17 @@ def build_parser() -> argparse.ArgumentParser:
     predict_parser.add_argument("--dataset-root", help="dataset root path; falls back to data/<Dataset> if omitted")
     subparsers.add_parser(
         "recipes",
-        help="list every paper-driven model optimization recipe (MORR Engine)",
+        help="list every model config profile",
+    )
+
+    subparsers.add_parser(
+        "doctor",
+        help=(
+            "the availability decision tree: for every model backend, report whether it's "
+            "trainable right now on this machine (framework installed + a matching dataset "
+            "actually staged under data/<Dataset>), which dataset would be picked, and why — "
+            "runnable backends first"
+        ),
     )
 
     export_latex_parser = subparsers.add_parser(
@@ -183,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_list()
         elif args.command == "recipes":
             payload = _run_recipes()
+        elif args.command == "doctor":
+            payload = _run_doctor()
         elif args.command == "export-latex":
             payload = _run_export_latex(args.results_json, args.output)
         elif args.command == "train":
@@ -209,6 +230,48 @@ def _run_recipes() -> dict[str, Any]:
         recipe = get_recipe(recipe_id)
         summary[recipe_id] = recipe.get_recipe_summary()
     return summary
+
+
+def _run_doctor() -> dict[str, Any]:
+    """The availability decision tree, surfaced: for every known model
+    backend, whether it's trainable right now on *this* machine, which
+    dataset would actually be used, and why — runnable backends first, so
+    "what can I train given what's staged here" is one command instead of
+    reading tracebacks from a training run that got partway through.
+    """
+
+    import importlib
+
+    from fabric_defect_hub.core.availability import backend_is_importable
+    from fabric_defect_hub.core.decision import decide_dataset
+    from fabric_defect_hub.loader import list_model_backends
+    from fabric_defect_hub.training import DEFAULT_DATASET_ROOTS, _BACKEND_TRAINABLE_DATASETS
+
+    importlib.import_module("fabric_defect_hub.datasets")  # populate dataset_capabilities-derived roles
+
+    report: dict[str, dict[str, Any]] = {}
+    for backend in list_model_backends():
+        framework_installed = backend_is_importable(backend)
+        entry: dict[str, Any] = {"framework_installed": framework_installed}
+
+        if backend in _BACKEND_TRAINABLE_DATASETS:
+            allowed_set, kind = _BACKEND_TRAINABLE_DATASETS[backend]
+            decision = decide_dataset(None, allowed_set, root_map=DEFAULT_DATASET_ROOTS)
+            entry["dataset_kind"] = kind
+            entry["dataset"] = decision.dataset
+            entry["trainable_now"] = framework_installed and decision.runnable
+            entry["reason"] = decision.reason if framework_installed else "framework not installed"
+        else:
+            # Detection backends (ultralytics/torchvision) train on
+            # whatever detection dataset the caller's config names; there
+            # is no fixed allowed-set to pick a default from here.
+            entry["trainable_now"] = framework_installed
+            entry["reason"] = "framework installed" if framework_installed else "framework not installed"
+
+        report[backend] = entry
+
+    ordered = sorted(report, key=lambda b: (not report[b]["trainable_now"], b))
+    return {"backends": {name: report[name] for name in ordered}}
 
 
 def _run_export_latex(json_path: str, output_path: str | None = None) -> str:
@@ -284,6 +347,27 @@ def _run_list() -> Any:
     }
 
 
+def _parse_set_overrides(raw_items: list[str]) -> dict[str, Any]:
+    """Parse repeated `--set path.to.key=value` CLI args into the dotted-path
+    dict `training.apply_raw_overrides` expects. `value` is YAML-parsed so
+    `--set train.epochs=50` and `--set train.model_kwargs.pre_trained=false`
+    both come through as the right Python type, not the literal string.
+    """
+
+    import yaml
+
+    overrides: dict[str, Any] = {}
+    for item in raw_items:
+        if "=" not in item:
+            raise ValueError(f"--set expects path.to.key=value, got {item!r}")
+        path, _, value = item.partition("=")
+        path = path.strip()
+        if not path:
+            raise ValueError(f"--set expects a non-empty dotted path, got {item!r}")
+        overrides[path] = yaml.safe_load(value)
+    return overrides
+
+
 def _run_train(args: argparse.Namespace) -> Any:
     from fabric_defect_hub.training import DatasetOverrides, find_model_configs, run_train
 
@@ -309,8 +393,14 @@ def _run_train(args: argparse.Namespace) -> Any:
         category=args.category,
         seed=args.seed,
     )
+    set_overrides = _parse_set_overrides(args.set_overrides)
     run = run_train(
-        args.model, backend=args.backend, overrides=overrides, config_dir=args.config_dir, variant=args.variant
+        args.model,
+        backend=args.backend,
+        overrides=overrides,
+        config_dir=args.config_dir,
+        variant=args.variant,
+        set_overrides=set_overrides,
     )
     result = run.result
     return {

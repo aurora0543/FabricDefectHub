@@ -7,29 +7,31 @@
 
 **FabricDefectHub (UTAD-Framework)** is a unified, modular Python SDK and benchmarking framework for industrial textile anomaly detection and defect segmentation. 
 
-It integrates 18 state-of-the-art architectures, paper-driven optimization recipes (MORR Engine), strategy-driven data loading (SDLP Engine), autonomous neural network modules (`fdh.nn`), and paper-ready LaTeX table generation.
+It integrates 18 model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, in-house neural-network modules (`fdh.nn`), and LaTeX table generation.
 
 ---
 
 ## 🏛️ System Architecture & Model Matrix
 
-The benchmark consolidates **18 models** categorized into supervised detectors and unsupervised anomaly segmenters, equipped with paper-driven fine-tuning recipes:
+The benchmark consolidates **18 models** across supervised detectors and unsupervised anomaly segmenters. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
 
-| # | Model Architecture | Paradigm | Academic Recipe (`recipe_id`) | Core Mechanism / Nomenclature |
+| # | Model Architecture | Paradigm | Config profile (`recipe_id`) | Backbone / Notes |
 | :-: | --- | --- | --- | --- |
-| 1 | **YOLOv8n / YOLOv8s** | Supervised (CNN) | `yolov8_sd_attn` | **SD-Attn (SPD-Conv)** + AFDLoss (Adaptive Focal-Dice) |
-| 2 | **YOLO11n** | Supervised (CNN) | `yolov8_sd_attn` | Space-to-Depth Downsampling + Dynamic Loss Scaler |
-| 3 | **Faster / Cascade R-CNN** | Supervised (R-CNN) | Standard R-CNN | FPN Multi-Scale Feature Weighting |
-| 4 | **DETR** | Supervised (ViT) | Deformable Matching | DINO-style Query Initialization & Hungarian Matching |
-| 5 | **Mask R-CNN / UNet++** | Supervised (FCN) | Segmentation | Multi-level Pixel Mask Supervision |
-| 6 | **DeepLabV3+** | Supervised (FCN) | Atrous Conv | ASPP Dense Context Aggregation |
-| 7 | **PatchCore** | Feature Embedding | `patchcore_dmba` | **DMBA** (Domain Memory Bank Adaptation & Coreset Subsampling) |
-| 8 | **PaDiM / SuperSimpleNet** | Feature Embedding | `patchcore_dmba` | Gaussian Smooth Feature Subspace Estimation |
-| 9 | **RD4AD** | Teacher-Student | `rd4ad_msfa_d` | **MSFA-D** (Multi-Scale Feature Alignment Distillation & Temp Anneal) |
-| 10 | **EfficientAD** | Teacher-Student | `rd4ad_msfa_d` | Logical & Structural Student Anomaly Distillation |
-| 11 | **MambaAD** | State Space (SSM) | `mambaad_ss_tst` | **SS-TST** (Selective Scan Texture State Space Tuning) |
-| 12 | **Dinomaly** | DINOv2 Enc-Dec | Zero-shot Anomaly | DINOv2 Feature Alignment Bottleneck |
-| 13 | **MoECLIP / WinCLIP** | Vision-Language | `moeclip_tpo_peft` | **TPO-PEFT** (Text Prompt Optimization & LoRA Adapter) |
+| 1 | **YOLOv8n / YOLOv8s** | Supervised (CNN) | `yolov8` | Ultralytics detector; fabric training settings (SPD-Conv motivation) |
+| 2 | **YOLO11n** | Supervised (CNN) | `yolov8` | Ultralytics YOLO11 detector |
+| 3 | **Faster / Cascade R-CNN** | Supervised (R-CNN) | — *(torchvision baseline)* | FPN multi-scale features |
+| 4 | **DETR** | Supervised (ViT) | — *(torchvision baseline)* | Query init & Hungarian matching |
+| 5 | **Mask R-CNN / UNet++** | Supervised (FCN) | — *(torchvision baseline)* | Pixel mask supervision |
+| 6 | **DeepLabV3+** | Supervised (FCN) | — *(torchvision baseline)* | ASPP dense context |
+| 7 | **PatchCore** | Feature Embedding | `patchcore` | WideResNet-50 memory bank + 10% coreset (paper settings) |
+| 8 | **PaDiM / SuperSimpleNet** | Feature Embedding | `patchcore` | Feature-embedding baselines |
+| 9 | **RD4AD** | Teacher-Student | `rd4ad` | WideResNet-50 reverse distillation (paper settings) |
+| 10 | **EfficientAD** | Teacher-Student | `rd4ad` | Teacher-student distillation |
+| 11 | **MambaAD** | State Space (SSM) | `mambaad` | State-space decoder; upstream defaults |
+| 12 | **Dinomaly** | DINOv2 Enc-Dec | `dinomaly` | DINOv2 encoder-decoder (ViTill); upstream defaults |
+| 13 | **MoECLIP / WinCLIP** | Vision-Language | `moeclip` | CLIP + LoRA mixture-of-experts; upstream defaults |
+
+Coverage: the six `recipe_id`s supply run settings for the anomaly/detection methods (rows 1–2, 7–13). The torchvision detectors/segmenters (rows 3–6) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
 
 ---
 
@@ -59,7 +61,7 @@ pro_score = fdh.compute_pro_score(gt_masks, pred_anomaly_maps)
 ### 3. CLI Commands
 ```bash
 # Train using research-grade config
-fdh train configs/models/yolov8_sd_attn_textile.yaml
+fdh train configs/models/yolov8_textile.yaml
 
 # List all academic recipes
 fdh recipes
@@ -78,9 +80,10 @@ fdh-ui
 Detailed technical specifications and user guides are organized under `docs/`:
 
 - 📐 **[SDK & In-House NN Engine Guide](docs/SDK_AND_NN.md)**: Modular SDK usage and autonomous `fdh.nn` (Feature Hooks, Necks, Heads).
-- 🔬 **[Academic Recipes & Loss Tuning Guide](docs/RECIPES_AND_LOSSES.md)**: MORR Recipes, AFDLoss, TPA Textile Augmenter, and Hyperparameter Optimization.
+- 🔬 **[Config Profiles & Loss Guide](docs/RECIPES_AND_LOSSES.md)**: per-model config profiles, AFDLoss, textile augmenter, and hyperparameters.
 - 🚀 **[SDLP Loading & Testing Strategies](docs/SDLP_STRATEGIES.md)**: Sparse ratio sampling (`sparse_ratio`), 4K Sliding-Window Tiling, TTA, and BN Calibration.
 - 📊 **[Benchmark Protocols & LaTeX Generator](docs/BENCHMARK_AND_LATEX.md)**: PRO-Score, LMEI Edge Index calculation, and automated LaTeX table rendering.
+- 🌳 **[Extending FabricDefectHub](docs/EXTENDING.md)**: the dataset/backend availability decision tree (`fdh doctor`), the `--set` tuning window, and how to add a new dataset, backend, or config profile.
 
 ---
 

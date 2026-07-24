@@ -43,8 +43,8 @@ fdh export-latex results/benchmark.json --output paper_table.tex
 import fabric_defect_hub as fdh
 
 results = [
-    {"model": "YOLOv8n", "recipe": "SD-Attn", "I-AUROC": 0.9820, "PRO-Score": 0.9410, "FPS": 145.0, "LMEI": 1.25},
-    {"model": "PatchCore", "recipe": "DMBA", "I-AUROC": 0.9650, "PRO-Score": 0.9120, "FPS": 85.0, "LMEI": 0.88},
+    {"model": "YOLOv8n", "recipe": "yolov8", "I-AUROC": 0.9820, "PRO-Score": 0.9410, "FPS": 145.0, "LMEI": 1.25},
+    {"model": "PatchCore", "recipe": "patchcore", "I-AUROC": 0.9650, "PRO-Score": 0.9120, "FPS": 85.0, "LMEI": 0.88},
 ]
 
 latex_code = fdh.generate_latex_table(
@@ -68,8 +68,8 @@ print(latex_code)
 \toprule
 Model & Recipe / Acronym & I-AUROC & PRO-Score & FPS & LMEI \\
 \midrule
-YOLOv8n & SD-Attn & \textbf{0.9820} & \textbf{0.9410} & \textbf{145.0000} & \textbf{1.2500} \\
-PatchCore & DMBA & \underline{0.9650} & \underline{0.9120} & 85.0000 & 0.8800 \\
+YOLOv8n & yolov8 & \textbf{0.9820} & \textbf{0.9410} & \textbf{145.0000} & \textbf{1.2500} \\
+PatchCore & patchcore & \underline{0.9650} & \underline{0.9120} & 85.0000 & 0.8800 \\
 \bottomrule
 \end{tabular}%
 }

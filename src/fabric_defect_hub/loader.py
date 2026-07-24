@@ -112,11 +112,15 @@ def load_model(
     tta_mode: str | None = None,
     calibrate_bn: bool = False,
     precision_mode: str | None = None,
+    recipe: str | None = None,
     **kwargs,
 ) -> ModelAdapter:
     """Resolve and instantiate a registered `ModelAdapter` by backend + name,
 
-    with opt-in Test-Time Augmentation (TTA) and BatchNorm calibration wrappers.
+    with opt-in Test-Time Augmentation (TTA), BatchNorm calibration, and a
+    paper-anchored config `recipe` (see `fabric_defect_hub.recipes`). When
+    given, the recipe is resolved and attached here; its hooks fire in
+    `run_experiment` just before training (see `recipes.apply`).
     """
     module_path = _MODEL_BACKEND_MODULES.get(backend)
     if module_path is not None:
@@ -128,6 +132,11 @@ def load_model(
         from fabric_defect_hub.strategies.loader_strategies import TTAInferenceWrapper
 
         model_adapter = TTAInferenceWrapper(model_adapter, tta_mode=tta_mode)
+
+    if recipe is not None:
+        from fabric_defect_hub.recipes.apply import attach_recipe
+
+        attach_recipe(model_adapter, recipe)
 
     return model_adapter
 
@@ -150,7 +159,17 @@ def run_experiment(
 ) -> ExperimentResult:
 
     samples = dataset.load_samples()
+
+    # Fire any attached recipe's hooks (loss / hyperparameters / architecture)
+    # right before training, and record which recipe tuned the resulting model.
+    if train_config is not None:
+        from fabric_defect_hub.recipes.apply import apply_recipe_to_training
+
+        train_config = apply_recipe_to_training(model, train_config)
     active_artifact = model.train(train_config) if train_config is not None else artifact
+    _recipe = getattr(model, "_recipe", None)
+    if _recipe is not None and active_artifact is not None:
+        active_artifact.metadata.setdefault("recipe", _recipe.recipe_id)
 
     # Check if sliding-window tiling strategy is enabled on dataset
     if getattr(dataset, "_tiling_enabled", False):

@@ -60,6 +60,17 @@ class UltralyticsAdapter(ModelAdapter):
 
     backend = "ultralytics"
 
+    # Ultralytics `YOLO.train` argument names that a recipe is allowed to set.
+    # A recipe's raw hyperparameter dict also carries architecture/aug flags
+    # (e.g. `spd_conv_downsample`) and differently-named loss gains; forwarding
+    # those to `train()` would raise, so only these curated keys are injected.
+    _RECIPE_TRAINER_ARGS = frozenset(
+        {
+            "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "epochs", "batch", "optimizer",
+            "box", "cls", "dfl",  # Ultralytics loss gains
+        }
+    )
+
     def __init__(self, name: str = "yolov8n", **kwargs):
         super().__init__(name=name, **kwargs)
         self._model = None
@@ -150,6 +161,16 @@ class UltralyticsAdapter(ModelAdapter):
                 "UltralyticsAdapter.train: provide either config['data'] "
                 "(a data.yaml path) or config['samples'] (a DatasetAdapter selection)."
             )
+
+        # Fold in a recipe's trainer hyperparameters as defaults (anything the
+        # caller set explicitly in `config` wins). `_recipe_hparams` is attached
+        # by `recipes.apply.apply_recipe_to_training` when a recipe is active.
+        recipe_hparams = getattr(self, "_recipe_hparams", None)
+        if recipe_hparams:
+            from fabric_defect_hub.recipes.apply import recipe_trainer_overrides
+
+            for key, value in recipe_trainer_overrides(recipe_hparams, self._RECIPE_TRAINER_ARGS).items():
+                cfg.setdefault(key, value)
 
         # Initialise weights before training.
         if weights is not None:

@@ -1,12 +1,12 @@
 # ============================================================================
-# Research-Grade Config: YOLOv8 Small-Defect Attention (SD-Attn) for Fabric Inspection
+# Config: YOLOv8 fabric detection profile
 # ============================================================================
 
 model:
   variant: yolov8n
   pretrained: true
   task: detect
-  recipe: yolov8_sd_attn             # Academic Recipe: SD-Attn (Space-to-Depth Downsampling)
+  recipe: yolov8             # config profile (Ultralytics fabric training settings)
   loss_fn: AFDLoss                    # Adaptive Focal-Dice Loss for micro-defects
 
 data:
@@ -55,5 +55,5 @@ predict:
 
 checkpoint:
   project: runs/fabric_defect_hub
-  name: yolov8n_sd_attn
+  name: yolov8n_fabric
   registry_dir: artifacts/models

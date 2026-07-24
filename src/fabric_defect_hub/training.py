@@ -497,6 +497,87 @@ def apply_default_dataset_root(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def apply_available_dataset(raw: dict[str, Any], backend: str) -> dict[str, Any]:
+    """After `apply_default_dataset_root` has resolved paths and
+    `_enforce_trainable_dataset` has checked role-legality, substitute an
+    actually-*staged* alternative dataset when the configured one isn't
+    present on this machine (see `core.decision.decide_dataset`), instead of
+    failing deep inside the backend's training loop the moment a dataset
+    this particular machine doesn't have gets requested.
+
+    No-op for detection backends (not in `_BACKEND_TRAINABLE_DATASETS`) and
+    for the `data_root`/`datamodule_kwargs` on-disk modes (no `data.dataset`
+    key at all -- mirrors `_enforce_trainable_dataset`'s own no-op there).
+    Raises `FileNotFoundError` -- not deep inside a dataloader, but here,
+    with an actionable message -- when nothing in the backend's allowed set
+    is staged at all.
+    """
+
+    if backend not in _BACKEND_TRAINABLE_DATASETS:
+        return raw
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        return raw
+    requested = data.get("dataset")
+    if not requested:
+        return raw
+
+    from fabric_defect_hub.core.decision import decide_dataset
+
+    allowed_set, _ = _BACKEND_TRAINABLE_DATASETS[backend]
+    decision = decide_dataset(requested, allowed_set, root_map=DEFAULT_DATASET_ROOTS)
+    if not decision.runnable:
+        raise FileNotFoundError(f"'{backend}' has no stageable training dataset available. {decision.reason}")
+    if not decision.substituted:
+        return raw
+
+    import warnings
+
+    warnings.warn(f"[{backend}] {decision.reason}", stacklevel=2)
+    resolved = dict(data)
+    resolved["dataset"] = decision.dataset
+    resolved["dataset_root"] = DEFAULT_DATASET_ROOTS[decision.dataset]
+    raw = dict(raw)
+    raw["data"] = resolved
+    return raw
+
+
+def apply_raw_overrides(raw: dict[str, Any], overrides: dict[str, Any] | None) -> dict[str, Any]:
+    """The hyperparameter/config "tuning window": layer arbitrary
+    dotted-path overrides (e.g. `{"train.model_kwargs.coreset_sampling_ratio":
+    0.05}`) onto a parsed config, highest priority of any layer -- above the
+    model config file, above a recipe/config-profile's defaults, above every
+    other override in this module. Lets one run tweak a single knob (`fdh
+    train ... --set train.model_kwargs.lr=0.0005`) without hand-editing or
+    forking the YAML.
+
+    Each key is a `.`-separated path; intermediate mappings are created (as
+    plain dicts) if they don't already exist, so a profile-only knob can be
+    set even when the config file never mentioned that section. A `None`/
+    empty `overrides` is a no-op, matching every other `apply_*` function's
+    "no CLI input -> leave the config alone" contract.
+    """
+
+    if not overrides:
+        return raw
+    raw = dict(raw)
+    for dotted_path, value in overrides.items():
+        *parents, leaf = dotted_path.split(".")
+        cursor = raw
+        for key in parents:
+            existing = cursor.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+                cursor[key] = existing
+            else:
+                # Don't mutate a dict shared with an earlier layer in place.
+                existing = dict(existing)
+                cursor[key] = existing
+            cursor = existing
+        cursor[leaf] = value
+    return raw
+
+
 def _resolve_num_samples(
     overrides: DatasetOverrides, current: int | None, *, is_train_split: bool
 ) -> tuple[bool, int | None]:
@@ -668,6 +749,7 @@ def run_train(
     config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR,
     variant: str | None = None,
     publish: bool = True,
+    set_overrides: dict[str, Any] | None = None,
 ) -> TrainRunResult:
     """The unified training entry point.
 
@@ -683,9 +765,18 @@ def run_train(
        convention (see `apply_default_dataset_root`) — so this works the
        same on every machine that has its datasets staged there, with no
        environment variable or machine-specific path required.
-    4. Build that backend's own config dataclass and run its full
+    4. If the resolved dataset isn't actually staged *on this machine*,
+       substitute an available alternative from the same allowed set rather
+       than failing deep inside the backend (see `apply_available_dataset` /
+       `core.decision.decide_dataset`) — not every machine (a cloud training
+       box especially) has every dataset this project knows about staged.
+    5. Layer `set_overrides` on top of everything else — the tuning window:
+       arbitrary dotted-path config overrides (e.g.
+       `{"train.model_kwargs.lr": 0.0005}`), highest priority of any layer
+       (see `apply_raw_overrides`).
+    6. Build that backend's own config dataclass and run its full
        train/val/export lifecycle via `models.<backend>.pipeline.run_from_config`.
-    5. If `publish` (default) and the resolved (backend, variant) is one of
+    7. If `publish` (default) and the resolved (backend, variant) is one of
        `catalog.CANONICAL_MODELS`, copy the registered artifact to its fixed
        published path — the location the frontend's `MODEL_CATALOG` (see
        `web/single_image.py`) actually reads from. A no-op for any run that
@@ -707,8 +798,10 @@ def run_train(
     raw = apply_dataset_overrides(raw, resolved_backend, overrides)
     _enforce_trainable_dataset(raw, resolved_backend)
     raw = apply_default_dataset_root(raw)
+    raw = apply_available_dataset(raw, resolved_backend)
     if overrides.mode == "test":
         raw = _apply_test_speed_overrides(raw, resolved_backend)
+    raw = apply_raw_overrides(raw, set_overrides)
 
     config_module_name, config_cls_name = _BACKEND_CONFIG_CLASSES[resolved_backend]
     config_cls = getattr(importlib.import_module(config_module_name), config_cls_name)

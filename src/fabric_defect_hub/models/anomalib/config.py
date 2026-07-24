@@ -255,9 +255,25 @@ class AnomalibConfig:
         self.data.validate()
 
     def resolved_model_kwargs(self) -> dict[str, Any]:
-        """Fabric preset defaults, with `train.model_kwargs` overrides layered on top."""
+        """Constructor kwargs for the anomalib model, layered:
+
+            fabric preset  <  recipe (`model.recipe`)  <  `train.model_kwargs`
+
+        The recipe layer lets a config profile (e.g. `patchcore`)
+        set the backbone/coreset/neighbours the paper reproduces with, while
+        `recipe_model_kwargs` intersects the recipe's hyperparameters with this
+        model's known constructor arguments (the preset keys, which are
+        introspection-verified in `presets.py`) so a recipe can never inject an
+        unknown kwarg that would raise inside the anomalib model's `__init__`.
+        Anything set explicitly in `train.model_kwargs` still wins.
+        """
 
         merged = default_model_kwargs(self.model.name)
+        if self.model.recipe:
+            from fabric_defect_hub.recipes.apply import recipe_model_kwargs, resolve_recipe
+
+            recipe_obj = resolve_recipe(self.model.recipe)
+            merged.update(recipe_model_kwargs(recipe_obj.get_default_hyperparameters(), set(merged)))
         merged.update(self.train.model_kwargs)
         return merged
 
