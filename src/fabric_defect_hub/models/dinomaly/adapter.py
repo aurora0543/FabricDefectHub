@@ -235,9 +235,32 @@ class DinomalyAdapter(ModelAdapter):
         train_samples = config.get("train_samples")
         test_samples = config.get("test_samples")
         if train_samples is not None and test_samples is not None:
+            self._validate_test_masks(test_samples)
             with anomalib_folder_staging_dir(train_samples, test_samples) as layout:
                 return _run(str(layout.root))
         return _run(config["data_root"])
+
+    @staticmethod
+    def _validate_test_masks(test_samples: list[Sample]) -> None:
+        """Require the one-to-one anomaly masks expected by Dinomaly's loader."""
+
+        missing = [
+            sample.id
+            for sample in test_samples
+            if sample.annotations.is_anomalous
+            and (
+                not sample.annotations.anomaly_mask
+                or not Path(sample.annotations.anomaly_mask).is_file()
+            )
+        ]
+        if missing:
+            preview = ", ".join(repr(sample_id) for sample_id in missing[:5])
+            suffix = "..." if len(missing) > 5 else ""
+            raise ValueError(
+                "Dinomaly requires a readable pixel mask for every defective test sample; "
+                f"missing masks for {len(missing)} sample(s): {preview}{suffix}. "
+                "Use a dataset/task selection that attaches anomaly_mask paths."
+            )
 
     # ------------------------------------------------------------------ #
     # Predict

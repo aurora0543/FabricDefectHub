@@ -49,6 +49,8 @@ Cloud setup checklist (do this once per host, not per run):
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -91,32 +93,45 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    from fabric_defect_hub.training import DatasetOverrides, run_train
+    project_root = Path(__file__).resolve().parents[1]
+    child_env = os.environ.copy()
+    source_root = str(project_root / "src")
+    child_env["PYTHONPATH"] = source_root + os.pathsep + child_env.get("PYTHONPATH", "")
 
     results: list[tuple[str, bool, str]] = []
     for model in selected:
         print(f"\n{'=' * 70}\n>>> {model.key} ({model.backend} / {model.variant})\n{'=' * 70}")
         started = time.monotonic()
-        try:
-            run = run_train(
-                model.config,
-                variant=model.variant,
-                overrides=DatasetOverrides(mode=args.mode) if args.mode else None,
-            )
-            elapsed = time.monotonic() - started
-            published = run.published_path or "NOT PUBLISHED (backend/variant mismatch — check catalog.py)"
+        command = [
+            sys.executable, "-m", "fabric_defect_hub.cli", "train", model.config,
+            "--variant", model.variant,
+        ]
+        if args.mode:
+            command.extend(("--mode", args.mode))
+        completed = subprocess.run(command, cwd=project_root, env=child_env)
+        elapsed = time.monotonic() - started
+        if completed.returncode == 0:
+            published = project_root / "artifacts" / "models" / "published" / f"{model.key}{_extension_for(model.backend)}"
             print(f"OK  {model.key} in {elapsed:.0f}s -> {published}")
-            results.append((model.key, True, published))
-        except Exception as exc:  # noqa: BLE001 - keep training the rest of the batch
-            elapsed = time.monotonic() - started
-            print(f"FAIL {model.key} after {elapsed:.0f}s: {type(exc).__name__}: {exc}")
-            results.append((model.key, False, f"{type(exc).__name__}: {exc}"))
+            results.append((model.key, True, str(published)))
+        else:
+            detail = f"subprocess exited with status {completed.returncode}"
+            print(f"FAIL {model.key} after {elapsed:.0f}s: {detail}")
+            results.append((model.key, False, detail))
 
     print(f"\n{'=' * 70}\nSummary ({sum(ok for _, ok, _ in results)}/{len(results)} succeeded)\n{'=' * 70}")
     for key, ok, detail in results:
         print(f"{'OK  ' if ok else 'FAIL'} {key:26s} {detail}")
 
     return 0 if all(ok for _, ok, _ in results) else 1
+
+
+def _extension_for(backend: str) -> str:
+    if backend == "anomalib":
+        return ".ckpt"
+    if backend in {"ultralytics", "torchvision"}:
+        return ".pt"
+    return ".pth"
 
 
 if __name__ == "__main__":

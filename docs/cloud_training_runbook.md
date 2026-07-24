@@ -13,6 +13,10 @@ later step — see [README.md](../README.md) for that.
 - A cloud host with a CUDA GPU and this repository cloned onto it.
 - ZJU-Leaper (and, if you also want to train on the other two datasets,
   RAW_FABRID / MVTec AD) staged somewhere on the host's disk.
+- An Imagenette/ImageNet-style natural-image directory for EfficientAD's
+  regularization loss, plus VisA (or MVTec AD/LOCO) with pixel masks if you
+  want the MoECLIP training result. These are model-specific prerequisites,
+  not substitutes for the fabric benchmark datasets.
 
 ## 1. Pull the code
 
@@ -90,13 +94,21 @@ construction, checkpointing, publishing — works end to end:
 python tools/train_all_models.py --mode test
 ```
 
-Check the summary at the end; every one of the 14 models should say `OK`.
+Each model is launched in its own Python process, so CUDA memory is released
+before the next model begins. Check the summary at the end; only models whose
+external prerequisites have been staged should be expected to say `OK`.
 If one fails, re-run just that model after fixing the issue:
 
 ```bash
 python tools/train_all_models.py --only <model-key> --mode test
 # see every key: python tools/train_all_models.py --list-keys
 ```
+
+For the remaining model-specific setup, set an actual path in the
+EfficientAD config's `train.model_kwargs.imagenet_dir`, and stage VisA under
+`data/VisA` before running MoECLIP. Dinomaly requires every selected defect
+test image to expose an `anomaly_mask`; the preflight error prints the sample
+IDs that need correction.
 
 ## 6. Run the real training pass
 
@@ -131,11 +143,12 @@ only what failed.
 ls -la artifacts/models/published/
 ```
 
-Expect 14 files: `yolov8n.pt`, `yolov8s.pt`, `yolo11n.pt`,
+Expect 18 files: `yolov8n.pt`, `yolov8s.pt`, `yolo11n.pt`,
 `fasterrcnn_resnet50_fpn.pt`, `cascadercnn_resnet50_fpn.pt`,
 `detr_resnet50.pt`, `maskrcnn_resnet50_fpn.pt`, `unetplusplus_resnet34.pt`,
 `deeplabv3plus_resnet50.pt`, `PatchCore.ckpt`, `PaDiM.ckpt`, `RD4AD.ckpt`,
-`EfficientAD.ckpt`, `SuperSimpleNet.ckpt`.
+`EfficientAD.ckpt`, `SuperSimpleNet.ckpt`, `WinCLIP.ckpt`, `Dinomaly.pth`,
+`MoECLIP.pth`, `MambaAD.pth`.
 
 This is the stable location the frontend's `MODEL_CATALOG`
 (`web/single_image.py`) reads from — re-running training for any one

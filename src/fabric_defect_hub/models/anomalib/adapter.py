@@ -18,6 +18,7 @@ Requires the `anomalib` extra: `pip install -e ".[anomalib]"`.
 from __future__ import annotations
 
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -74,11 +75,13 @@ class AnomalibAdapter(ModelAdapter):
         `Engine`).
         """
 
-        from anomalib.data import Folder
-        from anomalib.engine import Engine
-
         model_kwargs = {**default_model_kwargs(self.name), **config.get("model_kwargs", {})}
         self._validate_model_kwargs(model_kwargs)
+        if self._is_zero_shot_winclip(model_kwargs):
+            return self._zero_shot_winclip_artifact(model_kwargs, config)
+
+        from anomalib.data import Folder
+        from anomalib.engine import Engine
 
         model = self._model_cls()(**model_kwargs)
         engine = Engine(**config.get("engine_kwargs", {}))
@@ -110,6 +113,30 @@ class AnomalibAdapter(ModelAdapter):
                 "model_class": self.resolved_class_name,
                 "model_kwargs": model_kwargs,
                 "trusted": True,
+            },
+        )
+
+    def _is_zero_shot_winclip(self, model_kwargs: dict[str, Any]) -> bool:
+        return self.resolved_class_name == "WinClip" and int(model_kwargs.get("k_shot", 0)) == 0
+
+    def _zero_shot_winclip_artifact(
+        self, model_kwargs: dict[str, Any], config: dict[str, Any]
+    ) -> Artifact:
+        """Persist a reconstructable handle for parameter-free WinCLIP."""
+
+        engine_kwargs = config.get("engine_kwargs", {})
+        root = Path(engine_kwargs.get("default_root_dir") or tempfile.mkdtemp(prefix="fdh_winclip_"))
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / "winclip_zero_shot.ckpt"
+        path.write_text("WinCLIP zero-shot artifact; rebuild from metadata.\n")
+        return Artifact(
+            path=str(path),
+            backend=self.backend,
+            metadata={
+                "model_class": self.resolved_class_name,
+                "model_kwargs": dict(model_kwargs),
+                "trusted": True,
+                "zero_shot": True,
             },
         )
 
@@ -298,7 +325,10 @@ class AnomalibAdapter(ModelAdapter):
             raise ValueError("Refusing to load an untrusted Anomalib checkpoint.")
         if self._model is None or self._loaded_path != artifact.path:
             model_cls = resolve_model_class(artifact.metadata.get("model_class", self.name))
-            self._model = _load_checkpoint(model_cls, artifact.path)
+            if artifact.metadata.get("zero_shot", False):
+                self._model = model_cls(**artifact.metadata["model_kwargs"])
+            else:
+                self._model = _load_checkpoint(model_cls, artifact.path)
             self._loaded_path = artifact.path
         return self._model
 

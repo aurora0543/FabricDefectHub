@@ -10,6 +10,7 @@ class`), so this stays in the default test suite. Mirrors
 
 import pytest
 
+from fabric_defect_hub.models.anomalib.adapter import AnomalibAdapter
 from fabric_defect_hub.models.anomalib.config import AnomalibConfig
 from fabric_defect_hub.models.anomalib.presets import (
     default_model_kwargs,
@@ -49,6 +50,12 @@ def test_winclip_defaults_to_zero_shot():
     kwargs = default_model_kwargs("WinCLIP")
     assert kwargs["k_shot"] == 0
     assert kwargs["class_name"] == "fabric"
+
+
+def test_winclip_zero_shot_skips_data_dependent_fit():
+    adapter = AnomalibAdapter(name="WinCLIP")
+    assert adapter._is_zero_shot_winclip({"k_shot": 0}) is True
+    assert adapter._is_zero_shot_winclip({"k_shot": 5}) is False
 
 
 def test_config_from_dict_layers_and_resolves():
