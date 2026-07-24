@@ -34,6 +34,12 @@ Only needed again later if `requirements-full.txt`/`pyproject.toml` change
 — it ends with an editable install of this project (`-e .`), which picks up
 code changes automatically without reinstalling.
 
+The full set includes the optional VLM package (`open-clip-torch`) required by
+WinCLIP and the vendored-model imports required by Dinomaly and MoECLIP. It
+does not remove model-specific runtime prerequisites: EfficientAD still needs
+an explicit natural-image `imagenet_dir`, and MambaAD may require a smaller
+batch/image size or an otherwise idle GPU when CUDA memory is exhausted.
+
 ## 3. Stage datasets under `data/` as symlinks
 
 `fdh train` resolves each dataset's root automatically from

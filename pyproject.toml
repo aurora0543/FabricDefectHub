@@ -22,17 +22,17 @@ fdh-ui = "fabric_defect_hub.web.app:launch"
 [project.optional-dependencies]
 ultralytics = ["ultralytics", "pillow", "pyyaml"]
 torchvision = ["torchvision", "torchmetrics", "pycocotools", "pillow", "pyyaml", "onnxscript"]
-anomalib = ["anomalib", "scikit-learn", "scikit-image"]
+anomalib = ["anomalib", "open-clip-torch", "scikit-learn", "scikit-image"]
 # Dinomaly (components/dinomaly, vendored -- not an anomalib model, see
 # components/README.md). torch/torchvision come from anomalib/dev extras.
-dinomaly = ["timm", "scipy", "scikit-learn", "tabulate"]
+dinomaly = ["timm", "scipy", "scikit-learn", "tabulate", "colorama"]
 # MoECLIP (components/moeclip, vendored -- CLIP + mixture-of-LoRA-experts).
 # kornia: the gaussian blur in its anomaly-map path; transformers: ACT2FN in
 # its MoE config; einops/ftfy/regex: its vendored OpenCLIP tokenizer/blocks;
 # ipdb: imported unconditionally at the top of two of its modules.
 moeclip = [
   "kornia", "transformers", "einops", "ftfy", "regex", "ipdb",
-  "opencv-python", "pandas", "scipy", "scikit-learn",
+  "opencv-python", "pandas", "packaging", "setuptools>=68,<81", "scipy", "scikit-learn",
 ]
 # MambaAD (models/mambaad/, clean-room reimplementation -- no
 # components/mambaad submodule, no mamba_ssm; see adapter.py's module

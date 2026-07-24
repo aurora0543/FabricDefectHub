@@ -43,6 +43,10 @@ git clone https://github.com/aurora0543/FabricDefectHub.git && cd FabricDefectHu
 pip install -r requirements.txt
 ```
 
+`requirements.txt` is intentionally the lean Gradio/inference deployment set.
+For local or cloud training with every backend, including WinCLIP, Dinomaly,
+and MoECLIP, install `pip install -r requirements-full.txt` instead.
+
 ### 2. Python SDK Usage (`import fabric_defect_hub as fdh`)
 ```python
 import fabric_defect_hub as fdh
