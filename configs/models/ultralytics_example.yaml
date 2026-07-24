@@ -17,8 +17,9 @@ model:
   variant: yolov8n        # yolov8n | yolov8s | yolo11n
   pretrained: true        # true = load COCO-pretrained weights for transfer learning; false = train from scratch
   offline: false           # true = forbid implicit downloads, error before training if weights are missing
-  # weights: null         # if set, fine-tune from this checkpoint (overrides pretrained)
   task: detect
+  recipe: yolov8_sd_attn   # 注入特化学术 Recipe: SD-Attn + DLW 动态损失平衡
+  loss_fn: AFDLoss         # 开启 Adaptive Focal-Dice Loss 解决微小瑕疵倾斜问题
 
 # ---- Data: converted at runtime via DatasetAdapter (no need to pre-stage a YOLO dataset on disk) ----
 data:

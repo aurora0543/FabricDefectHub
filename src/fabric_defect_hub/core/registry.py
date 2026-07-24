@@ -35,6 +35,7 @@ _DATASET_REGISTRY: dict[str, type] = {}
 _MODEL_REGISTRY: dict[str, type] = {}
 _EVALUATOR_REGISTRY: dict[str, type] = {}
 _PROFILER_REGISTRY: dict[str, type] = {}
+_RECIPE_REGISTRY: dict[str, Any] = {}
 
 
 def register_dataset(name: str) -> Callable[[type[T]], type[T]]:
@@ -73,6 +74,16 @@ def register_profiler(cls: type[T]) -> type[T]:
     return cls
 
 
+def register_recipe(recipe_id: str) -> Callable[[type[T]], type[T]]:
+    def decorator(cls: type[T]) -> type[T]:
+        if recipe_id in _RECIPE_REGISTRY:
+            raise ValueError(f"recipe '{recipe_id}' is already registered")
+        _RECIPE_REGISTRY[recipe_id] = cls
+        return cls
+
+    return decorator
+
+
 def get_dataset_cls(name: str) -> type:
     try:
         return _DATASET_REGISTRY[name]
@@ -105,6 +116,22 @@ def get_profiler_cls(engine: str) -> type:
         raise KeyError(f"unknown profiler engine '{engine}'. Known engines: {known}") from exc
 
 
+def get_recipe(recipe_id_or_model: str) -> Any:
+    # Check exact match first
+    if recipe_id_or_model in _RECIPE_REGISTRY:
+        recipe_item = _RECIPE_REGISTRY[recipe_id_or_model]
+        return recipe_item() if isinstance(recipe_item, type) else recipe_item
+
+    # Search for recipe matching target model
+    for recipe in _RECIPE_REGISTRY.values():
+        instance = recipe() if isinstance(recipe, type) else recipe
+        if hasattr(instance, "target_models") and any(recipe_id_or_model.startswith(m) for m in instance.target_models):
+            return instance
+
+    known = ", ".join(sorted(_RECIPE_REGISTRY)) or "<none registered>"
+    raise KeyError(f"No optimization recipe found for '{recipe_id_or_model}'. Known recipes: {known}")
+
+
 def list_datasets() -> list[str]:
     return sorted(_DATASET_REGISTRY)
 
@@ -121,6 +148,10 @@ def list_profilers() -> list[str]:
     return sorted(_PROFILER_REGISTRY)
 
 
+def list_recipes() -> list[str]:
+    return sorted(_RECIPE_REGISTRY)
+
+
 def clear_registries() -> None:
     """Clear registrations for isolated tests and interactive-session resets."""
 
@@ -128,3 +159,5 @@ def clear_registries() -> None:
     _MODEL_REGISTRY.clear()
     _EVALUATOR_REGISTRY.clear()
     _PROFILER_REGISTRY.clear()
+    _RECIPE_REGISTRY.clear()
+

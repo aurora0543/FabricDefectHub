@@ -54,6 +54,10 @@ class ModelSpec:
     """
 
     name: str = "PatchCore"
+    backend: str | None = None
+    recipe: str | None = None
+    loss_fn: str | None = None
+    task: str | None = None
 
     def validate(self) -> None:
         resolve_model_class_name(self.name)  # raises KeyError with a helpful list
@@ -82,6 +86,9 @@ class DataSpec:
     dataset_root: str | None = None
     train_selection: dict[str, Any] = field(default_factory=dict)
     test_selection: dict[str, Any] = field(default_factory=dict)
+    tiling: bool = False
+    tile_size: list[int] | tuple[int, int] = (256, 256)
+    overlap: float = 0.25
 
     def uses_adapter(self) -> bool:
         return self.dataset is not None
@@ -150,6 +157,8 @@ class PredictSpec:
     """
 
     output_dir: str | None = None
+    calibrate_bn: bool = False
+    tta_mode: str | None = None
 
 
 @dataclass

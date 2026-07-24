@@ -1,0 +1,34 @@
+# ============================================================================
+# Research-Grade Config: PatchCore Domain Memory Bank Adaptation (DMBA)
+# ============================================================================
+
+model:
+  name: PatchCore
+  backend: anomalib
+  task: anomaly
+  recipe: patchcore_dmba               # Academic Recipe: DMBA (Domain Memory Bank Adaptation)
+
+data:
+  dataset: raw-fabric
+  dataset_root: ${RAW_FABRIC_ROOT}
+  tiling: true                         # Enable 4K tiling for high-resolution RAW-Fabric images
+  tile_size: [256, 256]
+  overlap: 0.25
+  train_selection:
+    split: train
+    task: anomaly
+  test_selection:
+    split: test
+    task: anomaly
+
+train:
+  enabled: true
+  max_epochs: 1
+
+predict:
+  calibrate_bn: true                   # Feature background drift calibration
+
+checkpoint:
+  project: runs/fabric_defect_hub
+  name: patchcore_dmba
+  registry_dir: artifacts/models

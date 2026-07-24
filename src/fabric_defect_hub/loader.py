@@ -65,22 +65,71 @@ def import_all_model_backends() -> None:
             continue
 
 
-def load_dataset(name: str, root: str, split: str = "test", **kwargs) -> DatasetAdapter:
-    """Resolve and instantiate a registered `DatasetAdapter` by name."""
+def load_dataset(
+    name: str,
+    root: str,
+    split: str = "test",
+    sparse_ratio: float | None = None,
+    stratified_by: str | None = None,
+    tiling: bool = False,
+    tile_size: tuple[int, int] = (256, 256),
+    overlap: float = 0.25,
+    **kwargs,
+) -> DatasetAdapter:
+    """Resolve and instantiate a registered `DatasetAdapter` by name,
 
+    with opt-in support for sparse ratio subsampling and sliding-window tiling.
+    """
     importlib.import_module("fabric_defect_hub.datasets")  # triggers @register_dataset
     cls = get_dataset_cls(name)
-    return cls(root=root, split=split, **kwargs)
+    adapter = cls(root=root, split=split, **kwargs)
+
+    # Attach SDLP loading strategies onto the adapter instance
+    if sparse_ratio is not None or stratified_by is not None:
+        orig_load = adapter.load_samples
+
+        def load_samples_with_sparse(*args, **kw):
+            samples = orig_load(*args, **kw)
+            from fabric_defect_hub.strategies.loader_strategies import SparseSubsampler
+
+            if stratified_by is not None:
+                return SparseSubsampler.apply_stratified_pattern(samples, sparse_ratio=sparse_ratio or 0.1)
+            return SparseSubsampler.apply_sparse_ratio(samples, sparse_ratio=sparse_ratio)
+
+        adapter.load_samples = load_samples_with_sparse
+
+    if tiling:
+        adapter._tiling_enabled = True
+        adapter._tile_size = tile_size
+        adapter._tile_overlap = overlap
+
+    return adapter
 
 
-def load_model(backend: str, name: str, **kwargs) -> ModelAdapter:
-    """Resolve and instantiate a registered `ModelAdapter` by backend + name."""
+def load_model(
+    backend: str,
+    name: str,
+    tta_mode: str | None = None,
+    calibrate_bn: bool = False,
+    precision_mode: str | None = None,
+    **kwargs,
+) -> ModelAdapter:
+    """Resolve and instantiate a registered `ModelAdapter` by backend + name,
 
+    with opt-in Test-Time Augmentation (TTA) and BatchNorm calibration wrappers.
+    """
     module_path = _MODEL_BACKEND_MODULES.get(backend)
     if module_path is not None:
         importlib.import_module(module_path)  # triggers @register_model
     cls = get_model_cls(backend)
-    return cls(name=name, **kwargs)
+    model_adapter = cls(name=name, **kwargs)
+
+    if tta_mode is not None and tta_mode != "none":
+        from fabric_defect_hub.strategies.loader_strategies import TTAInferenceWrapper
+
+        model_adapter = TTAInferenceWrapper(model_adapter, tta_mode=tta_mode)
+
+    return model_adapter
 
 
 def run_experiment(
@@ -99,34 +148,29 @@ def run_experiment(
     export_config: dict[str, Any] | None = None,
     run_log_path: str | None = None,
 ) -> ExperimentResult:
-    """Run the end-to-end loop: (train/load) -> predict -> evaluate -> profile.
-
-    `train_config=None` skips training and assumes `model` already carries
-    a usable artifact (e.g. a pretrained checkpoint loaded in `__init__`).
-    Pass `artifact` to evaluate an existing checkpoint without training.
-    Profiling is opt-in and requires `profiler`, `profile_config`, and
-    `export_target`; the active checkpoint is exported, profiled, and its
-    runtime metrics are merged into the same `ExperimentResult`.
-
-    `output_dir`, if given, persists `predictions.json` and `result.json`
-    there (matching `schemas/prediction.schema.json` /
-    `experiment_result.schema.json` — see `core.serialization`) and records
-    their paths in the returned `ExperimentResult.artifacts`. This is what
-    a leaderboard/frontend would actually read from disk; without it you
-    only get the in-memory `ExperimentResult`.
-
-    `run_log_path`, if given, appends one JSON line for this run (see
-    `reporting.append_run_log`) to a single shared log file -- distinct
-    from `output_dir`'s per-experiment `result.json`, which a *rerun* of the
-    same `experiment_id` overwrites. This is the append-only, never-
-    overwritten history: point every run, across every backend, at the same
-    path and they accumulate there for later cross-run plotting.
-    """
 
     samples = dataset.load_samples()
-
     active_artifact = model.train(train_config) if train_config is not None else artifact
-    predictions = model.predict(samples, active_artifact)
+
+    # Check if sliding-window tiling strategy is enabled on dataset
+    if getattr(dataset, "_tiling_enabled", False):
+        from fabric_defect_hub.strategies.loader_strategies import SlidingWindowTiler
+
+        tiler = SlidingWindowTiler(
+            tile_size=getattr(dataset, "_tile_size", (256, 256)),
+            overlap=getattr(dataset, "_tile_overlap", 0.25),
+        )
+        predictions = []
+        for s in samples:
+            tiles, meta_info = tiler.split_sample(s)
+            if meta_info.get("tiled", False):
+                tile_preds = model.predict(tiles, active_artifact)
+                stitched_pred = tiler.stitch_predictions(tile_preds, meta_info)
+                predictions.append(stitched_pred)
+            else:
+                predictions.extend(model.predict([s], active_artifact))
+    else:
+        predictions = model.predict(samples, active_artifact)
 
     evaluated_metrics = evaluator.evaluate(samples, predictions) if evaluator is not None else {}
     metrics = {

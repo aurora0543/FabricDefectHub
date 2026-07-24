@@ -1,0 +1,59 @@
+# ============================================================================
+# Research-Grade Config: YOLOv8 Small-Defect Attention (SD-Attn) for Fabric Inspection
+# ============================================================================
+
+model:
+  variant: yolov8n
+  pretrained: true
+  task: detect
+  recipe: yolov8_sd_attn             # Academic Recipe: SD-Attn (Space-to-Depth Downsampling)
+  loss_fn: AFDLoss                    # Adaptive Focal-Dice Loss for micro-defects
+
+data:
+  dataset: zju-leaper
+  dataset_root: ${ZJU_LEAPER_ROOT}
+  class_names: ["defect"]
+  grid_freq: 16                       # TPA Textile Periodic Augmentation
+  phase_shift_prob: 0.4
+  tiling: false                        # Enable for 4K images: tiling: true
+  train_selection:
+    split: train
+    pattern: [pattern1, pattern2, pattern3, pattern4]
+    num_samples: 300
+    defect_ratio: 1.0
+    task: detection
+    seed: 0
+  val_selection:
+    split: test
+    pattern: [pattern1, pattern2, pattern3, pattern4]
+    num_samples: 100
+    defect_ratio: 1.0
+    task: detection
+    seed: 0
+
+train:
+  enabled: true
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  patience: 30
+  optimizer: auto
+  lr0: 0.01
+  cos_lr: true
+  single_cls: true
+
+val:
+  enabled: true
+  split: val
+  conf: 0.001
+  iou: 0.6
+
+predict:
+  conf: 0.25
+  iou: 0.7
+  tta_mode: flip_multiscale           # Test-Time Augmentation (TTA)
+
+checkpoint:
+  project: runs/fabric_defect_hub
+  name: yolov8n_sd_attn
+  registry_dir: artifacts/models

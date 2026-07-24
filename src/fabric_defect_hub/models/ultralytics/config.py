@@ -46,6 +46,8 @@ class ModelSpec:
         COCO-pretrained checkpoint (transfer learning). If False, start from
         the architecture spec with random init.
     task: Ultralytics task; 'detect' for this backend.
+    recipe: Optional name of the training recipe/strategy.
+    loss_fn: Optional name of the loss function.
     """
 
     variant: str = "yolov8n"
@@ -53,6 +55,8 @@ class ModelSpec:
     pretrained: bool = True
     offline: bool = False
     task: str = "detect"
+    recipe: str | None = None
+    loss_fn: str | None = None
 
     def initial_weights(self) -> str:
         """Resolve the file/name Ultralytics should be initialised from."""
@@ -95,6 +99,11 @@ class DataSpec:
     train_selection: dict[str, Any] = field(default_factory=dict)
     val_selection: dict[str, Any] = field(default_factory=dict)
     class_names: list[str] | None = None
+    grid_freq: int | None = None
+    phase_shift_prob: float | None = None
+    tiling: bool = False
+    tile_size: list[int] | tuple[int, int] = (256, 256)
+    overlap: float = 0.25
 
     def uses_adapter(self) -> bool:
         return self.dataset is not None
@@ -191,6 +200,8 @@ class PredictSpec:
     max_det: int = 300
     device: str | int | None = None
     augment: bool = False
+    tta_mode: str | None = None
+    calibrate_bn: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def as_overrides(self) -> dict[str, Any]:

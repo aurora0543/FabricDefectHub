@@ -147,6 +147,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset", help="registered dataset name (e.g. zju-leaper, raw-fabric, mvtec-ad) to draw samples from"
     )
     predict_parser.add_argument("--dataset-root", help="dataset root path; falls back to data/<Dataset> if omitted")
+    subparsers.add_parser(
+        "recipes",
+        help="list every paper-driven model optimization recipe (MORR Engine)",
+    )
+
+    export_latex_parser = subparsers.add_parser(
+        "export-latex",
+        help="export benchmark results to IEEE/CVPR paper-grade LaTeX table code",
+    )
+    export_latex_parser.add_argument("results_json", help="path to benchmark results JSON file")
+    export_latex_parser.add_argument("--output", help="optional output .tex file path")
+
     predict_parser.add_argument("--split", default="test", choices=("train", "test"), help="dataset split to draw from")
     predict_parser.add_argument("--num-samples", type=int, help="how many dataset samples to run inference on")
     predict_parser.add_argument("--pattern", help="ZJU-Leaper pattern/group filter")
@@ -169,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_benchmark(args.config)
         elif args.command == "list":
             payload = _run_list()
+        elif args.command == "recipes":
+            payload = _run_recipes()
+        elif args.command == "export-latex":
+            payload = _run_export_latex(args.results_json, args.output)
         elif args.command == "train":
             payload = _run_train(args)
         elif args.command == "predict":
@@ -177,8 +193,38 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_config(args.config, args.backend)
     except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as exc:
         raise SystemExit(f"fdh: {exc}") from exc
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if isinstance(payload, str):
+        print(payload)
+    else:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
+
+
+def _run_recipes() -> dict[str, Any]:
+    from fabric_defect_hub.core.registry import list_recipes, get_recipe
+    import fabric_defect_hub.recipes  # Ensure registration
+
+    summary = {}
+    for recipe_id in list_recipes():
+        recipe = get_recipe(recipe_id)
+        summary[recipe_id] = recipe.get_recipe_summary()
+    return summary
+
+
+def _run_export_latex(json_path: str, output_path: str | None = None) -> str:
+    from fabric_defect_hub.reporting.latex_generator import generate_latex_table
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    results_list = data if isinstance(data, list) else data.get("leaderboard", [])
+    latex_code = generate_latex_table(results_list)
+
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(latex_code)
+    return latex_code
+
 
 
 def _run_config(path: str, backend: str | None) -> Any:
