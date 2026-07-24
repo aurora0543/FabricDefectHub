@@ -173,7 +173,7 @@ class AnomalibAdapter(ModelAdapter):
             )
 
         import numpy as np
-        from anomalib.data import PredictDataset
+        from anomalib.data import ImageBatch, PredictDataset
         from anomalib.engine import Engine
         from lightning.pytorch import Trainer
         from torch.utils.data import DataLoader
@@ -203,7 +203,8 @@ class AnomalibAdapter(ModelAdapter):
                     enable_checkpointing=False,
                 )
                 batches = trainer.predict(
-                    model=model, dataloaders=DataLoader(dataset, batch_size=1)
+                    model=model,
+                    dataloaders=DataLoader(dataset, batch_size=1, collate_fn=ImageBatch.collate),
                 ) or []
             else:
                 batches = engine.predict(model=model, dataset=dataset) or []
