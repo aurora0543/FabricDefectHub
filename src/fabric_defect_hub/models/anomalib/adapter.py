@@ -175,6 +175,7 @@ class AnomalibAdapter(ModelAdapter):
         import numpy as np
         from anomalib.data import PredictDataset
         from anomalib.engine import Engine
+        from lightning.pytorch import Trainer
         from torch.utils.data import DataLoader
 
         model = self._load_artifact(artifact)
@@ -196,7 +197,12 @@ class AnomalibAdapter(ModelAdapter):
                 # Anomalib's Engine routes WinCLIP through validation, but
                 # WinCLIP intentionally has no val_dataloader. Supplying an
                 # explicit prediction loader keeps Lightning on predict_step.
-                batches = engine.trainer.predict(
+                trainer = Trainer(
+                    default_root_dir=str(engine_root),
+                    logger=False,
+                    enable_checkpointing=False,
+                )
+                batches = trainer.predict(
                     model=model, dataloaders=DataLoader(dataset, batch_size=1)
                 ) or []
             else:

@@ -40,7 +40,13 @@ def test_dinomaly_staging_normalizes_mask_suffix(tmp_path: Path):
     defect = _sample("defect", anomalous=True, mask_path=str(mask))
     defect.image_path = str(image)
 
-    with anomalib_folder_staging_dir([train], [defect], mask_suffix=".png") as layout:
+    with anomalib_folder_staging_dir(
+        [train], [defect], mask_suffix=".png", image_suffix=".png"
+    ) as layout:
         staged_mask = layout.root / "ground_truth" / "defect" / "defect.png"
+        staged_train = layout.root / "train" / "good" / "train.png"
+        staged_image = layout.root / "test" / "defect" / "defect.png"
         assert staged_mask.is_symlink()
+        assert staged_train.is_symlink()
+        assert staged_image.is_symlink()
         assert staged_mask.resolve() == mask
