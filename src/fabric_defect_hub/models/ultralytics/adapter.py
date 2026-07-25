@@ -89,6 +89,14 @@ class UltralyticsAdapter(ModelAdapter):
             self.load_weights(self._default_weights())
         return self._model
 
+    def raw_module(self):
+        """`self._model` is a `YOLO` wrapper, not a raw `torch.nn.Module` --
+        `.model` (nested) is the actual network `ModelAdapter.raw_module`'s
+        callers (e.g. FLOPs counting) need. See that base method's
+        docstring."""
+
+        return self._model.model if self._model is not None else None
+
     def _default_weights(self) -> str:
         """Resolve `self.name` to a loadable weights/arch reference."""
 

@@ -132,3 +132,21 @@ def test_validation_metric_normalisation_rejects_empty_results():
 
     with pytest.raises(RuntimeError, match="no recognized metrics"):
         UltralyticsAdapter._normalise_metrics(EmptyMetrics())
+
+
+def test_raw_module_returns_none_before_anything_is_loaded():
+    adapter = UltralyticsAdapter(name="yolov8n")
+    assert adapter.raw_module() is None
+
+
+def test_raw_module_unwraps_the_yolo_wrapper_to_the_torch_module():
+    class _FakeTorchModule:
+        pass
+
+    class _FakeYOLO:
+        model = _FakeTorchModule()
+
+    adapter = UltralyticsAdapter(name="yolov8n")
+    adapter._model = _FakeYOLO()
+    assert adapter.raw_module() is adapter._model.model
+    assert isinstance(adapter.raw_module(), _FakeTorchModule)

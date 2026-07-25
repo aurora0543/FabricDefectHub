@@ -70,6 +70,15 @@ class PredictRunResult:
     backend: str
     variant: str
     predictions: list[Prediction]
+    samples: list[Sample] = field(default_factory=list)
+
+
+@dataclass
+class EvaluateRunResult:
+    backend: str
+    variant: str
+    metrics: dict[str, float]
+    sample_count: int
 
 
 def _build_adapter(backend: str, variant: str):
@@ -205,4 +214,56 @@ def run_predict(
         predictions = adapter.predict(samples, artifact, output_dir=output_dir)
     else:
         predictions = adapter.predict(samples, artifact)
-    return PredictRunResult(backend=resolved_backend, variant=resolved_variant, predictions=predictions)
+    return PredictRunResult(backend=resolved_backend, variant=resolved_variant, predictions=predictions, samples=samples)
+
+
+def run_evaluate(
+    model: str | Path,
+    weights: str,
+    source: PredictInput,
+    backend: str | None = None,
+    variant: str | None = None,
+    config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR,
+    task: str | None = None,
+    enable_tiling: bool = False,
+    enable_tta: bool = False,
+    tile_size: int | None = None,
+    tile_overlap: float | None = None,
+) -> EvaluateRunResult:
+    """Score a trained checkpoint against `source`'s ground truth — the
+    CLI-scriptable equivalent of the web Benchmark tab's leaderboard, for
+    validating a model against any registered dataset (e.g. `tilda-400`,
+    `fabric-defects`) without a browser. Runs inference exactly like
+    `run_predict` (same tiling/TTA support, since it simply calls it), then
+    scores the result via the task-appropriate `Evaluator` (see
+    `evaluation.evaluator_for_task`).
+
+    `task`, if omitted, is taken from the resolved samples' own `.task`
+    (every `Sample` already carries the task it was built for) — pass it
+    explicitly only to force a different evaluator than the dataset's
+    default (e.g. scoring a segmentation-capable dataset's masks as
+    image-level anomaly detection instead).
+
+    `source` must resolve via `--dataset` (a `PredictInput.images` source
+    carries no ground truth to score against).
+    """
+
+    from fabric_defect_hub.evaluation import evaluator_for_task
+
+    if source.images and not source.dataset:
+        raise ValueError("evaluate requires --dataset (raw --image sources have no ground truth to score)")
+
+    run = run_predict(
+        model, weights=weights, source=source, backend=backend, variant=variant, config_dir=config_dir,
+        enable_tiling=enable_tiling, enable_tta=enable_tta, tile_size=tile_size, tile_overlap=tile_overlap,
+    )
+    if not run.samples:
+        raise ValueError("no samples resolved to run evaluation on")
+    resolved_task = task or run.samples[0].task
+    metrics = evaluator_for_task(resolved_task).evaluate(run.samples, run.predictions)
+    return EvaluateRunResult(
+        backend=run.backend,
+        variant=run.variant,
+        metrics={key: float(value) for key, value in metrics.items()},
+        sample_count=len(run.samples),
+    )

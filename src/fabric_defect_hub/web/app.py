@@ -403,6 +403,17 @@ def create_app():
                             bench_profiling = gr.Checkbox(
                                 value=False, label=tr(lang0, "benchmark_profiling_label")
                             )
+                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
+                            bench_resolution_sweep = gr.Checkbox(
+                                value=False, label=tr(lang0, "benchmark_resolution_sweep_label")
+                            )
+                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
+                            bench_cross_domain = gr.Dropdown(
+                                choices=[tr(lang0, "benchmark_cross_domain_none"), *DATASET_CATALOG],
+                                value=tr(lang0, "benchmark_cross_domain_none"),
+                                label=tr(lang0, "benchmark_cross_domain_label"),
+                            )
+                    with gr.Row():
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
                             bench_score_preset = gr.Dropdown(
                                 choices=score_preset_choices(lang0), value="balanced",
@@ -451,7 +462,8 @@ def create_app():
 
                     def bench_run_handler(
                         dataset_label, texture_label, shot_mode_value, model_labels,
-                        include_profiling, score_preset, custom_weight, lang,
+                        include_profiling, include_resolution_sweep, cross_domain_choice,
+                        score_preset, custom_weight, lang,
                     ):
                         """Stream the leaderboard, and re-derive the charts
                         (and their selectors' choices) on every model that
@@ -459,9 +471,15 @@ def create_app():
                         as results land, so the selectors can't be populated
                         up front."""
 
+                        cross_domain_label = (
+                            None if cross_domain_choice in (None, tr(lang, "benchmark_cross_domain_none"))
+                            else cross_domain_choice
+                        )
                         for columns, rows, status, scored in run_benchmark(
                             dataset_label, texture_label, shot_mode_value, model_labels, lang,
                             include_profiling=include_profiling,
+                            include_resolution_sweep=include_resolution_sweep,
+                            cross_domain_dataset_label=cross_domain_label,
                             score_preset=score_preset,
                             custom_technical_weight=custom_weight,
                         ):
@@ -506,7 +524,8 @@ def create_app():
                         bench_run_handler,
                         inputs=[
                             bench_dataset, bench_texture, bench_shot_mode, bench_models,
-                            bench_profiling, bench_score_preset, bench_custom_weight, lang_state,
+                            bench_profiling, bench_resolution_sweep, bench_cross_domain,
+                            bench_score_preset, bench_custom_weight, lang_state,
                         ],
                         outputs=[
                             bench_results, bench_status, bench_rows_state,

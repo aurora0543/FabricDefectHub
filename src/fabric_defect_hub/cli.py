@@ -199,6 +199,53 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         help="anomalib/dinomaly/moeclip/mambaad only: also persist each sample's pixel-level anomaly map (.npy) under this directory",
     )
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help=(
+            "score a trained artifact against a registered dataset's ground truth (e.g. tilda-400, "
+            "fabric-defects, mvtec-ad) — the CLI-scriptable equivalent of the web Benchmark tab, "
+            "for validating a model without a browser"
+        ),
+    )
+    evaluate_parser.add_argument(
+        "model",
+        help="a model config: a path, a filename stem under --config-dir, or a model keyword — resolved like 'fdh train MODEL'",
+    )
+    evaluate_parser.add_argument(
+        "--weights", required=True,
+        help="path to a trained/registered artifact to load, e.g. 'fdh train's registered_artifact.path output",
+    )
+    evaluate_parser.add_argument(
+        "--config-dir", default="configs/models",
+        help="directory searched when 'model' is a filename stem or keyword (default: configs/models)",
+    )
+    evaluate_parser.add_argument(
+        "--backend", choices=_model_backend_choices(),
+        help="override backend keyword detection (model.name -> anomalib, model.variant -> ultralytics/torchvision)",
+    )
+    evaluate_parser.add_argument(
+        "--variant",
+        help="override which model in the backend's family gets scored; must match what --weights was trained as",
+    )
+    evaluate_parser.add_argument(
+        "--dataset", required=True,
+        help="registered dataset name to draw ground-truth samples from (e.g. tilda-400, fabric-defects, zju-leaper)",
+    )
+    evaluate_parser.add_argument("--dataset-root", help="dataset root path; falls back to data/<Dataset> if omitted")
+    evaluate_parser.add_argument("--split", default="test", choices=("train", "test"), help="dataset split to draw from")
+    evaluate_parser.add_argument("--num-samples", type=int, help="how many dataset samples to evaluate on")
+    evaluate_parser.add_argument("--pattern", help="ZJU-Leaper pattern/group filter")
+    evaluate_parser.add_argument("--category", help="MVTec-AD category filter")
+    evaluate_parser.add_argument("--seed", type=int, default=0, help="subsampling RNG seed")
+    evaluate_parser.add_argument(
+        "--task", choices=("anomaly", "detection", "segmentation"),
+        help="force a specific evaluator instead of the dataset samples' own task",
+    )
+    evaluate_parser.add_argument("--enable-tiling", action="store_true", help="YOLO only: sliding-window prediction with global NMS")
+    evaluate_parser.add_argument("--enable-tta", action="store_true", help="YOLO only: enable native flip/multiscale TTA")
+    evaluate_parser.add_argument("--tile-size", type=int, help="YOLO only: square tile size when --enable-tiling is set")
+    evaluate_parser.add_argument("--tile-overlap", type=float, help="YOLO only: tile overlap in [0, 1)")
     return parser
 
 
@@ -219,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_train(args)
         elif args.command == "predict":
             payload = _run_predict(args)
+        elif args.command == "evaluate":
+            payload = _run_evaluate(args)
         else:
             payload = _run_config(args.config, args.backend)
     except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as exc:
@@ -466,6 +515,39 @@ def _run_predict(args: argparse.Namespace) -> Any:
         "variant": run.variant,
         "num_predictions": len(predictions),
         "predictions": predictions,
+    }
+
+
+def _run_evaluate(args: argparse.Namespace) -> Any:
+    from fabric_defect_hub.predict import PredictInput, run_evaluate
+
+    source = PredictInput(
+        dataset=args.dataset,
+        dataset_root=args.dataset_root,
+        split=args.split,
+        num_samples=args.num_samples,
+        pattern=args.pattern,
+        category=args.category,
+        seed=args.seed,
+    )
+    run = run_evaluate(
+        args.model,
+        weights=args.weights,
+        source=source,
+        backend=args.backend,
+        variant=args.variant,
+        config_dir=args.config_dir,
+        task=args.task,
+        enable_tiling=args.enable_tiling,
+        enable_tta=args.enable_tta,
+        tile_size=args.tile_size,
+        tile_overlap=args.tile_overlap,
+    )
+    return {
+        "backend": run.backend,
+        "variant": run.variant,
+        "sample_count": run.sample_count,
+        "metrics": run.metrics,
     }
 
 

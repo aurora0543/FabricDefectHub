@@ -75,6 +75,9 @@ onnx
 onnxruntime
 onnxconverter-common
 
+# -- profiling-flops extra: FLOPs counting for the LMEI edge index --
+thop
+
 # -- dev extra: test suite --
 pytest
 jsonschema

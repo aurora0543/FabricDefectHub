@@ -67,6 +67,10 @@ pro_score = fdh.compute_pro_score(gt_masks, pred_anomaly_maps)
 # Train a YOLO variant with the shared fabric configuration
 fdh train yolov8n
 
+# Score a trained checkpoint against a validation dataset (e.g. the smaller
+# TILDA-400 / Fabric Defects sets) without opening the web UI
+fdh evaluate patchcore_textile --weights artifacts/models/published/PatchCore.ckpt --dataset tilda-400
+
 # List all academic recipes
 fdh recipes
 

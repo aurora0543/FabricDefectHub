@@ -47,6 +47,9 @@ mambaad-cuda = ["mamba-ssm", "causal-conv1d"]
 # BackendProfiler runtimes (profiling/pytorch.py needs only torch itself,
 # already pulled in by any of the extras above).
 profiling-onnxruntime = ["onnxruntime", "psutil"]
+# FLOPs counting for the LMEI edge-deployment index (profiling/flops.py) --
+# a plain torch.nn.Module hook counter, no engine/hardware dependency.
+profiling-flops = ["thop"]
 profiling-power-nvidia = ["nvidia-ml-py"]
 # NVIDIA-only: requires a CUDA-capable GPU + matching CUDA toolkit, hence
 # split out from `profiling-onnxruntime`. Not installable/verifiable on

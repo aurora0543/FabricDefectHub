@@ -29,7 +29,27 @@ Two opt-in additions on top of the accuracy-only leaderboard above:
   default because it roughly doubles per-model time (export + N warmup/
   measured forward passes) — the UI's own warmup/measured-run counts are
   intentionally lower than the CLI default (`ProfileConfig`'s 10/100) to
-  stay responsive for an interactive click.
+  stay responsive for an interactive click. When it's on, `_flops_and_lmei`
+  also instruments the adapter's live model (`ModelAdapter.raw_module()` --
+  a frozen TorchScript export can't accept the hooks FLOPs counting needs)
+  for FLOPs (`profiling.flops.compute_model_flops`), parameter count, and
+  the combined LMEI edge-deployment score (`evaluation.lmei_profiler
+  .calculate_lmei`) — best-effort, so a missing `thop` install just
+  forfeits those three
+  columns rather than the whole row.
+- `include_resolution_sweep=True` exports once, then profiles that same
+  export at a handful of input resolutions (`RESOLUTION_SWEEP_SIZES`) to
+  fit a throughput-vs-resolution decay slope (`profiling.scaling
+  .throughput_resolution_slope`) — a cheaper add-on than re-running
+  `include_profiling` per resolution, since only the profiling forward
+  pass (not accuracy evaluation) varies by input size.
+- `cross_domain_dataset_label`, if given, evaluates the same loaded model
+  against a second ("target") dataset — no slicing, whole dataset — right
+  after its primary ("source") evaluation, and reports the accuracy drop
+  via `evaluation.cross_domain.cross_domain_degradation` on whichever
+  metric each task treats as primary (`_PRIMARY_ACCURACY_METRIC`). Rows
+  whose task the target dataset can't supply, or whose source accuracy is
+  zero, simply omit the degradation column rather than failing the row.
 - Every run always appends to `run_log_path` (default `runs/leaderboard_log.jsonl`)
   via `reporting.append_run_log`, so leaderboard runs triggered from the UI
   leave the same durable trace `fdh benchmark` runs already did — this is
@@ -49,6 +69,7 @@ from typing import Any, Iterator
 
 from fabric_defect_hub.core.registry import get_profiler_cls
 from fabric_defect_hub.core.types import ModelInfo, RuntimeInfo
+from fabric_defect_hub.evaluation.cross_domain import cross_domain_degradation
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 from fabric_defect_hub.inference.session import clear_accelerator_cache
 from fabric_defect_hub.loader import load_dataset, load_model, run_experiment
@@ -65,6 +86,17 @@ from fabric_defect_hub.web.single_image import (
 )
 
 DEFAULT_RUN_LOG_PATH = "runs/leaderboard_log.jsonl"
+
+# The metric each task's `Evaluator` treats as its headline accuracy number
+# (see `evaluation/{anomaly,detection,segmentation}.py`) -- what
+# `cross_domain_degradation` is computed over.
+_PRIMARY_ACCURACY_METRIC = {"anomaly": "image_auroc", "detection": "map", "segmentation": "miou"}
+
+# Input side lengths swept for `_resolution_sweep`. Kept short (4 points,
+# 2 warmup/5 measured runs each below) since this already runs on top of
+# whatever `include_profiling`'s own pass costs -- enough points for a
+# least-squares slope, not a dense curve.
+RESOLUTION_SWEEP_SIZES: tuple[int, ...] = (320, 480, 640, 800)
 
 
 def score_preset_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
@@ -104,15 +136,9 @@ def compatible_models(dataset_label: str) -> list[str]:
 
 
 def _evaluator_for_task(task: str):
-    from fabric_defect_hub.evaluation import AnomalyEvaluator, DetectionEvaluator, SegmentationEvaluator
+    from fabric_defect_hub.evaluation import evaluator_for_task
 
-    if task == "anomaly":
-        return AnomalyEvaluator()
-    if task == "detection":
-        return DetectionEvaluator()
-    if task == "segmentation":
-        return SegmentationEvaluator()
-    raise ValueError(f"no evaluator registered for task {task!r}")
+    return evaluator_for_task(task)
 
 
 def _detect_device() -> str:
@@ -128,6 +154,13 @@ def _detect_device() -> str:
     return "cpu"
 
 
+def _input_style_for(model_spec: dict[str, Any]) -> str:
+    return (
+        "list" if model_spec["backend"] == "torchvision" and model_spec["task"] in ("detection", "instance_segmentation")
+        else "batched"
+    )
+
+
 def _profile_setup(model_spec: dict[str, Any], device: str):
     """Build the (profiler, config, export_target) triple `run_experiment`
     needs to also measure FPS/latency/memory for this model, mirroring
@@ -137,15 +170,109 @@ def _profile_setup(model_spec: dict[str, Any], device: str):
     """
 
     profiler = get_profiler_cls("pytorch")()
-    input_style = (
-        "list" if model_spec["backend"] == "torchvision" and model_spec["task"] in ("detection", "instance_segmentation")
-        else "batched"
-    )
     config = ProfileConfig(
         device=device, engine="pytorch", precision="fp32", input_size=(640, 640),
-        input_style=input_style, warmup_runs=5, measured_runs=20,
+        input_style=_input_style_for(model_spec), warmup_runs=5, measured_runs=20,
     )
     return profiler, config, "torchscript"
+
+
+def _resolution_sweep(model: Any, artifact: Any, model_spec: dict[str, Any], device: str) -> dict[str, float]:
+    """Export once, profile that same export at `RESOLUTION_SWEEP_SIZES`,
+    and fit the throughput decay slope. See the module docstring's
+    `include_resolution_sweep` entry for why this doesn't just call
+    `run_experiment` once per resolution (that would redundantly re-run
+    accuracy evaluation too).
+    """
+
+    from fabric_defect_hub.profiling.scaling import throughput_resolution_slope
+
+    profiler = get_profiler_cls("pytorch")()
+    input_style = _input_style_for(model_spec)
+    exported = model.export(artifact, target="torchscript")
+    resolutions: list[float] = []
+    throughputs: list[float] = []
+    for size in RESOLUTION_SWEEP_SIZES:
+        config = ProfileConfig(
+            device=device, engine="pytorch", precision="fp32", input_size=(size, size),
+            input_style=input_style, warmup_runs=2, measured_runs=5,
+        )
+        metrics = profiler.profile(exported, config)
+        resolutions.append(float(size))
+        throughputs.append(float(metrics["fps"]))
+    slope = throughput_resolution_slope(resolutions, throughputs)
+    return {"resolution_slope_beta": slope["beta"], "resolution_slope_alpha": slope["alpha"]}
+
+
+def _flops_and_lmei(
+    model: Any, model_spec: dict[str, Any], device: str, fps: float | None, vram_mb: float | None,
+) -> dict[str, float]:
+    """FLOPs + parameter count from the adapter's live model (`ModelAdapter
+    .raw_module()`), then the LMEI edge-deployment trade-off score those
+    combine with `fps`/`vram_mb` into (see `evaluation.lmei_profiler
+    .calculate_lmei`). Deliberately *not* computed from the TorchScript
+    export `include_profiling` already produced: `thop`'s hook-based
+    counter needs to `register_buffer` bookkeeping tensors onto the model,
+    which a frozen `torch.jit.ScriptModule` refuses ("Can't add a new
+    parameter after ScriptModule construction") -- only the live,
+    pre-export module accepts that. Returns `{}` (no columns added) when
+    there's no raw module to instrument, or `fps`/`vram_mb` aren't
+    available -- `calculate_lmei` itself would just return 0.0 for a
+    missing input, which would misleadingly look like a real "worst
+    possible" score.
+    """
+
+    raw_module = model.raw_module() if hasattr(model, "raw_module") else None
+    if raw_module is None or not fps or not vram_mb:
+        return {}
+
+    from fabric_defect_hub.evaluation.lmei_profiler import calculate_lmei
+    from fabric_defect_hub.model_statistics import parameter_counts
+    from fabric_defect_hub.profiling.flops import compute_model_flops
+
+    flops_g = compute_model_flops(
+        raw_module, input_size=(640, 640), input_style=_input_style_for(model_spec), device=device,
+    )
+    params_m = parameter_counts(raw_module).get("parameter_count", 0) / 1e6
+    return {
+        "flops_g": round(flops_g, 4),
+        "params_m": round(params_m, 4),
+        "lmei": calculate_lmei(fps=fps, vram_mb=vram_mb, flops_g=flops_g, params_m=params_m),
+    }
+
+
+def _cross_domain_probe(
+    model: Any,
+    artifact: Any,
+    dataset_task: str,
+    target_label: str,
+    num_samples: int | None,
+    defect_ratio: float,
+) -> dict[str, float] | None:
+    """Evaluate the already-loaded `model` against a second ("target")
+    dataset -- the whole dataset, no texture/pattern slicing -- to measure
+    how far its accuracy falls outside its primary ("source") domain.
+    Returns `None` (letting the caller skip the degradation column) when
+    the target dataset can't supply this task, isn't staged on this
+    machine, or has no matching samples, so a mismatched pairing never
+    fails the row it's attached to.
+    """
+
+    target_spec = DATASET_CATALOG.get(target_label)
+    if target_spec is None or dataset_task not in target_spec["tasks"]:
+        return None
+    root = default_dataset_root(target_label)
+    if not root:
+        return None
+    dataset = load_dataset(
+        target_spec["name"], root=root, task=dataset_task, split="test",
+        use_defect=True, num_samples=num_samples, defect_ratio=defect_ratio,
+    )
+    samples = dataset.load_samples()
+    if not samples:
+        return None
+    predictions = model.predict(samples, artifact)
+    return _evaluator_for_task(dataset_task).evaluate(samples, predictions)
 
 
 def _release_model(model: Any) -> None:
@@ -171,6 +298,8 @@ def run_benchmark(
     model_labels: list[str],
     lang: str = DEFAULT_LANGUAGE,
     include_profiling: bool = False,
+    include_resolution_sweep: bool = False,
+    cross_domain_dataset_label: str | None = None,
     score_preset: str = "balanced",
     custom_technical_weight: float | None = None,
     run_log_path: str | None = DEFAULT_RUN_LOG_PATH,
@@ -186,12 +315,15 @@ def run_benchmark(
     `include_profiling` additionally runs a `PyTorchProfiler` pass per model
     (see `_profile_setup`) so overhead metrics (fps, latency_ms_*,
     peak_memory_mb, model_size_mb) land in the same row as the accuracy
-    metrics. `score_preset` (one of `scoring.SCORE_PRESETS`, or `"custom"`
-    with `custom_technical_weight` in [0, 1]) blends whatever technical/
-    overhead metrics are present into a `composite_score` column, recomputed
-    across all rows collected so far after every model. `run_log_path`, if
-    not `None`, appends every completed row to that shared JSONL log via
-    `reporting.append_run_log`.
+    metrics. `include_resolution_sweep` and `cross_domain_dataset_label` are
+    two further opt-ins — see the module docstring — that add
+    `resolution_slope_beta`/`resolution_slope_alpha` and
+    `cross_domain_delta_acc_pct` columns respectively. `score_preset` (one
+    of `scoring.SCORE_PRESETS`, or `"custom"` with `custom_technical_weight`
+    in [0, 1]) blends whatever technical/overhead metrics are present into a
+    `composite_score` column, recomputed across all rows collected so far
+    after every model. `run_log_path`, if not `None`, appends every
+    completed row to that shared JSONL log via `reporting.append_run_log`.
     """
 
     if not model_labels:
@@ -267,11 +399,42 @@ def run_benchmark(
             )
             if sample_count is None:
                 sample_count = len(dataset.load_samples())
-            rows.append({
+            row: dict[str, Any] = {
                 "model": model_label,
                 "runtime_s": round(time.perf_counter() - started, 1),
                 **result.metrics,
-            })
+            }
+            # Every opt-in addition below is best-effort: a failure in one
+            # (e.g. thop missing for FLOPs, a target dataset erroring mid-
+            # probe) only forfeits that addition's columns, never the base
+            # accuracy/profiling row already computed above.
+            if include_resolution_sweep:
+                try:
+                    row.update(_resolution_sweep(model, artifact_for_model(model_spec), model_spec, device))
+                except Exception as exc:
+                    errors.append(f"{model_label}: resolution sweep skipped ({type(exc).__name__}: {exc})")
+            if include_profiling:
+                try:
+                    row.update(_flops_and_lmei(
+                        model, model_spec, device, fps=row.get("fps"), vram_mb=row.get("peak_memory_mb"),
+                    ))
+                except Exception as exc:
+                    errors.append(f"{model_label}: FLOPs/LMEI skipped ({type(exc).__name__}: {exc})")
+            if cross_domain_dataset_label:
+                try:
+                    metric_key = _PRIMARY_ACCURACY_METRIC.get(dataset_task)
+                    acc_src = result.metrics.get(metric_key) if metric_key else None
+                    if acc_src is not None:
+                        target_metrics = _cross_domain_probe(
+                            model, artifact_for_model(model_spec), dataset_task,
+                            cross_domain_dataset_label, num_samples, defect_ratio,
+                        )
+                        acc_tgt = target_metrics.get(metric_key) if target_metrics else None
+                        if acc_tgt is not None and acc_src != 0:
+                            row["cross_domain_delta_acc_pct"] = cross_domain_degradation(acc_src, acc_tgt)
+                except Exception as exc:
+                    errors.append(f"{model_label}: cross-domain probe skipped ({type(exc).__name__}: {exc})")
+            rows.append(row)
         except Exception as exc:
             errors.append(f"{model_label}: {type(exc).__name__}: {exc}")
         finally:

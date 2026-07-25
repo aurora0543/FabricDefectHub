@@ -47,3 +47,19 @@ predict:
 ## 其他后端
 
 Torchvision、Anomalib、Dinomaly、MoECLIP 和 MambaAD 都使用各自 YAML 的 `model`、`train`、`val`、`predict` 段。不要把 YOLO 的 TTA、tile 或 mosaic 字段复制到这些模型；配置解析会拒绝未知字段，避免出现“写了但未生效”的实验记录。
+
+## 用较小数据集做验证
+
+`tilda-400`、`fabric-defects` 已注册（见 `core/dataset_capabilities.py`）、有默认路径（`data/TILDA_400`、`data/Fabric Defects Dataset`），也已经出现在 Web UI 的 Benchmark 页面数据集下拉框里——训练仍然用 ZJU-Leaper（或 `fabric-train` 联合数据集），这两个数据集专门用来在训练域之外验证已训练好的权重。
+
+除了 Web UI，命令行也能跑同样的验证，不需要开浏览器：
+
+```bash
+fdh evaluate patchcore_textile \
+  --weights artifacts/models/published/PatchCore.ckpt \
+  --dataset tilda-400
+```
+
+`fdh evaluate` 是 `fdh predict` 的姊妹命令：跑推理的方式完全一样（同样支持 `--enable-tiling`/`--enable-tta`），区别是它额外用数据集自带的真值标签算出指标（`evaluation.evaluator_for_task` 按任务选 `AnomalyEvaluator`/`DetectionEvaluator`/`SegmentationEvaluator`），而不是只输出预测结果。
+
+想量化"训练域 vs 验证域"退化了多少：Benchmark 页面的"跨域退化率目标数据集"下拉框选 `TILDA-400` 或 `Fabric Defects`，结果表会多出 `cross_domain_delta_acc_pct` 一列（`evaluation/cross_domain.py`），按每个任务的主指标（异常检测用 `image_auroc`、检测用 `map`、分割用 `miou`）算出百分比退化。
