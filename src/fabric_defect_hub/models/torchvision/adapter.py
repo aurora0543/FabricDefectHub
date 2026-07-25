@@ -242,7 +242,9 @@ class TorchvisionAdapter(ModelAdapter):
 
         resume_state = None
         if cfg.get("resume") and last_path.is_file():
-            resume_state = self._load_resume_checkpoint(last_path, device=device_str)
+            resume_state = self._load_resume_checkpoint(
+                last_path, device=device_str, trainable_backbone_layers=tbl, offline=offline,
+            )
         elif weights:
             self.load_weights(weights, device=device_str)
         elif pretrained:
@@ -388,11 +390,34 @@ class TorchvisionAdapter(ModelAdapter):
             checkpoint["best_map"] = best_map
         torch.save(checkpoint, path)
 
-    def _load_resume_checkpoint(self, path: Path, device: str | None = None) -> dict[str, Any]:
+    def _load_resume_checkpoint(
+        self,
+        path: Path,
+        device: str | None = None,
+        trainable_backbone_layers: int | None = None,
+        offline: bool = False,
+    ) -> dict[str, Any]:
         """Load a checkpoint written mid-training by `_save_checkpoint`
         (model + optimizer + scheduler + epoch + best_map) so `train()` can
         continue exactly where a previous run left off, instead of
         restarting fine-tuning from `weights`/`pretrained`/scratch.
+
+        Rebuilds with `backbone_weights=True` (unlike `load_weights`, which
+        correctly uses `backbone_weights=False` for plain inference-only
+        loading): torchvision's own `_validate_trainable_layers` forces
+        *every* backbone stage trainable whenever no pretrained/backbone
+        weights are requested, regardless of `trainable_backbone_layers`
+        (see `presets.build_model`'s "no effect without backbone weights"
+        warning). The original training run built its model via
+        `load_pretrained` (`backbone_weights=True`), so resuming with
+        `backbone_weights=False` silently produces a different (fully
+        unfrozen) set of trainable parameters -- a differently-shaped flat
+        optimizer parameter group that `optimizer.load_state_dict` then
+        rejects with "doesn't match the size of optimizer's group". The
+        immediately-following `load_state_dict(state_dict)` overwrites
+        every weight anyway, so the extra backbone download this costs
+        (typically a cache hit, since training already fetched it once)
+        only buys back the correct trainable-parameter structure.
 
         Sets `self._model`/`self._class_map`/`self.name` as a side effect
         (like `load_weights`); returns the resume state `engine.run_training`
@@ -412,7 +437,8 @@ class TorchvisionAdapter(ModelAdapter):
         self._class_map = class_map
         num_classes = len(class_map) + 1
         self._model = build_model(
-            variant, num_classes=num_classes, pretrained=False, backbone_weights=False,
+            variant, num_classes=num_classes, pretrained=False, backbone_weights=True,
+            trainable_backbone_layers=trainable_backbone_layers, offline=offline,
         ).to(self._device)
         self._model.load_state_dict(state_dict)
         self.name = variant
