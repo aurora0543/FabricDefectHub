@@ -23,12 +23,13 @@ data:
 
 train:
   enabled: true
-  max_epochs: 1
+  engine_kwargs:
+    max_epochs: 1                 # PatchCore is a memory bank: one pass, no backprop
 
 predict:
   calibrate_bn: true                   # Feature background drift calibration
 
 checkpoint:
-  project: runs/fabric_defect_hub
+  default_root_dir: results/patchcore_textile
   name: patchcore
   registry_dir: artifacts/models

@@ -84,7 +84,9 @@ data:
   test_dataset: raw-fabric      # zero-shot evaluation target: fabric the model has never seen
   # test_dataset_root: ${RAW_FABRIC_ROOT}
   train_selection:          # MoECLIP learns from labelled defects -- the opposite of the one-class backends
-    split: train
+    split: test             # VisA/MVTec-style benchmarks only put anomalies+masks in their "test" split;
+                             # "train" is normal-only by definition of the benchmark, so use_defect below
+                             # would otherwise silently select zero defective samples
     num_samples: 600
     use_defect: true        # key: the segmentation loss needs anomalous pixels to learn from
     defect_ratio: 0.5
@@ -102,7 +104,7 @@ data:
 train:
   enabled: true
   epochs: 20
-  batch_size: 2
+  batch_size: 4
   lr: 0.00005
   balance_loss_lambda: 0.01     # router load-balancing auxiliary loss weight
   etf_loss_lambda: 0.01         # simplex-ETF expert-diversity loss weight

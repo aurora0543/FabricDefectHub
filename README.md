@@ -64,8 +64,8 @@ pro_score = fdh.compute_pro_score(gt_masks, pred_anomaly_maps)
 
 ### 3. CLI Commands
 ```bash
-# Train using research-grade config
-fdh train configs/models/yolov8_textile.yaml
+# Train a YOLO variant with the shared fabric configuration
+fdh train yolov8n
 
 # List all academic recipes
 fdh recipes

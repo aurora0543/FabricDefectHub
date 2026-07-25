@@ -19,7 +19,6 @@ model:
   offline: false           # true = forbid implicit downloads, error before training if weights are missing
   task: detect
   recipe: yolov8   # 配置档案：YOLO 织物检测训练设置
-  loss_fn: AFDLoss         # 开启 Adaptive Focal-Dice Loss 解决微小瑕疵倾斜问题
 
 # ---- Data: converted at runtime via DatasetAdapter (no need to pre-stage a YOLO dataset on disk) ----
 data:
@@ -28,36 +27,45 @@ data:
   # see training.DEFAULT_DATASET_ROOTS) if ${ZJU_LEAPER_ROOT} is not set.
   dataset_root: ${ZJU_LEAPER_ROOT}
   class_names: ["defect"]
-  train_selection:        # constructor kwargs passed to ZJULeaperDataset
+  require_background: true  # fail fast if a future override accidentally removes normal fabric
+  train_selection:        # balanced normal + defect pool within the selected pattern subset
     split: train
-    pattern: [pattern1, pattern2, pattern3, pattern4]   # spread the low-shot budget across textures instead of only pattern1's plain white background
+    pattern: [pattern1, pattern2, pattern3, pattern4]   # keep the agreed fabric patterns; do not expand to every pattern
     num_samples: 300
-    defect_ratio: 1.0     # detection task: training set uses only defective images (with bboxes)
+    defect_ratio: 0.5
     task: detection
     seed: 0
   val_selection:
     split: test
     pattern: [pattern1, pattern2, pattern3, pattern4]
     num_samples: 100
-    defect_ratio: 1.0
+    defect_ratio: 0.5     # evaluate normal-background false positives as well as defect recall
     task: detection
     seed: 0
   # Alternative: point directly at an existing YOLO data.yaml (mutually exclusive with dataset)
   # data_yaml: /path/to/data.yaml
 
-# ---- Training hyperparameters (only the commonly-changed ones are listed; see presets.COMMON_FABRIC_TRAIN_DEFAULTS for the rest) ----
+# ---- Shared training strategy ----
 train:
   enabled: true
-  epochs: 100
-  imgsz: 640
-  batch: 16
   patience: 30
   optimizer: auto
-  lr0: 0.01
   cos_lr: true
   single_cls: true
   # device: 0             # "cpu" / 0 / "0,1"; omit to auto-select
   resume: false
+  augmentation:
+    hsv_h: 0.01
+    hsv_s: 0.4
+    hsv_v: 0.4
+    degrees: 10.0
+    translate: 0.1
+    scale: 0.3
+    flipud: 0.5
+    fliplr: 0.5
+    mosaic: 0.5
+    close_mosaic: 15
+    mixup: 0.0
   extra: {}               # any other ultralytics train() kwargs, passed through as-is
 
 # ---- Validation / metric extraction (native YOLO val) ----
@@ -73,6 +81,10 @@ predict:
   iou: 0.7
   max_det: 300
   augment: false
+  tta_mode: null
+  tiling: false
+  tile_size: [640, 640]
+  tile_overlap: 0.25
 
 # ---- Export (optional, after training; multiple formats) ----
 export:
@@ -87,6 +99,34 @@ export:
 # ---- Run directory / model registry ----
 checkpoint:
   project: runs/fabric_defect_hub
-  name: yolov8n_pattern1-4
   registry_dir: artifacts/models   # the trained best.pt is copied here as a stable file
   exist_ok: false
+
+# ---- Variant profiles ----
+# The selected model.variant chooses one block below. Values here override
+# the shared sections above; edit the target block instead of Python presets.
+variants:
+  yolov8n:
+    train:
+      epochs: 100
+      imgsz: 640
+      batch: 32
+      lr0: 0.01
+    checkpoint:
+      name: yolov8n_pattern1-4
+  yolov8s:
+    train:
+      epochs: 100
+      imgsz: 640
+      batch: 32
+      lr0: 0.01
+    checkpoint:
+      name: yolov8s_pattern1-4
+  yolo11n:
+    train:
+      epochs: 100
+      imgsz: 640
+      batch: 32
+      lr0: 0.01
+    checkpoint:
+      name: yolo11n_pattern1-4

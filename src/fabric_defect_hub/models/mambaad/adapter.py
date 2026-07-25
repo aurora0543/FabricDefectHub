@@ -76,6 +76,7 @@ import torch.nn.functional as F
 
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.types import Prediction, Sample
+from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.models.mambaad import presets
 from fabric_defect_hub.models.mambaad.data import ImageOnlyDataset
@@ -391,6 +392,7 @@ class MambaADAdapter(ModelAdapter):
                 "num_direction": arch["num_direction"],
                 "gaussian_sigma": presets.ANOMALY_MAP_GAUSSIAN_SIGMA,
                 "trusted": True,
+                **parameter_counts(model),
             },
         )
 

@@ -17,6 +17,12 @@ Usage:
     python tools/train_all_models.py --only yolov8n PatchCore
     python tools/train_all_models.py --dry-run         # print the plan, train nothing
     python tools/train_all_models.py --mode test       # 8-image smoke run of every model first
+    python tools/train_all_models.py --run-id zju-full --mode full
+    python tools/train_all_models.py --run-id zju-full --resume
+
+Every non-dry run creates `artifacts/training_runs/<run-id>/` with an
+atomically updated `state.json`, append-only `events.jsonl`, and one log per
+model under `logs/`. `--resume` skips models already marked successful.
 
 Before running on a fresh host, see the "cloud setup" section in this
 file's module docstring continuation below (or --help) for the network/
@@ -58,6 +64,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fabric_defect_hub.catalog import CANONICAL_MODELS
+from fabric_defect_hub.training_runs import BatchRunTracker, default_run_id
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
         help="shot mode override passed to every model (default: each config's own setting)",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the training plan without running anything")
+    parser.add_argument("--run-id", help="persistent run identifier (default: a UTC timestamp)")
+    parser.add_argument("--run-root", default="artifacts/training_runs", help="directory for run state and logs")
+    parser.add_argument("--resume", action="store_true", help="continue --run-id, skipping models already marked succeeded")
     args = parser.parse_args(argv)
 
     if args.list_keys:
@@ -93,13 +103,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
+    if args.resume and not args.run_id:
+        parser.error("--resume requires --run-id")
+
     project_root = Path(__file__).resolve().parents[1]
     child_env = os.environ.copy()
     source_root = str(project_root / "src")
     child_env["PYTHONPATH"] = source_root + os.pathsep + child_env.get("PYTHONPATH", "")
 
+    run_id = args.run_id or default_run_id()
+    tracker = BatchRunTracker(
+        project_root / args.run_root,
+        run_id,
+        [
+            {"key": model.key, "backend": model.backend, "variant": model.variant, "config": model.config}
+            for model in selected
+        ],
+        resume=args.resume,
+    )
+    print(f"Run state: {tracker.directory}")
+
     results: list[tuple[str, bool, str]] = []
     for model in selected:
+        if not tracker.should_run(model.key):
+            detail = "already succeeded in this run"
+            print(f"SKIP {model.key}: {detail}")
+            results.append((model.key, True, detail))
+            continue
         print(f"\n{'=' * 70}\n>>> {model.key} ({model.backend} / {model.variant})\n{'=' * 70}")
         started = time.monotonic()
         command = [
@@ -108,16 +138,29 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.mode:
             command.extend(("--mode", args.mode))
-        completed = subprocess.run(command, cwd=project_root, env=child_env)
+        if args.resume and model.backend == "torchvision":
+            command.extend(("--set", "train.resume=true"))
+        tracker.begin(model.key)
+        log_path = tracker.log_path(model.key)
+        try:
+            model_env = dict(child_env)
+            model_env["FDH_BATCH_RUN_ID"] = run_id
+            model_env["FDH_BATCH_MODEL_KEY"] = model.key
+            completed = _run_logged(command, cwd=project_root, env=model_env, log_path=log_path)
+        except KeyboardInterrupt:
+            tracker.interrupt(model.key)
+            raise
         elapsed = time.monotonic() - started
         if completed.returncode == 0:
             published = project_root / "artifacts" / "models" / "published" / f"{model.key}{_extension_for(model.backend)}"
             print(f"OK  {model.key} in {elapsed:.0f}s -> {published}")
             results.append((model.key, True, str(published)))
+            tracker.finish(model.key, succeeded=True, detail=str(published))
         else:
             detail = f"subprocess exited with status {completed.returncode}"
             print(f"FAIL {model.key} after {elapsed:.0f}s: {detail}")
             results.append((model.key, False, detail))
+            tracker.finish(model.key, succeeded=False, detail=detail)
 
     print(f"\n{'=' * 70}\nSummary ({sum(ok for _, ok, _ in results)}/{len(results)} succeeded)\n{'=' * 70}")
     for key, ok, detail in results:
@@ -132,6 +175,36 @@ def _extension_for(backend: str) -> str:
     if backend in {"ultralytics", "torchvision"}:
         return ".pt"
     return ".pth"
+
+
+def _run_logged(command: list[str], *, cwd: Path, env: dict[str, str], log_path: Path) -> subprocess.CompletedProcess[str]:
+    """Stream a child process to the terminal and its model-specific log."""
+
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"\n===== command: {' '.join(command)} =====\n")
+        log_file.flush()
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                print(line, end="")
+                log_file.write(line)
+                log_file.flush()
+            returncode = process.wait()
+        except KeyboardInterrupt:
+            process.terminate()
+            process.wait()
+            raise
+    return subprocess.CompletedProcess(command, returncode)
 
 
 if __name__ == "__main__":

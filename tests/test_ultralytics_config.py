@@ -8,7 +8,7 @@ training, so they stay in the default test suite.
 import pytest
 
 from fabric_defect_hub.models.ultralytics.adapter import UltralyticsAdapter
-from fabric_defect_hub.models.ultralytics.config import UltralyticsConfig
+from fabric_defect_hub.models.ultralytics.config import UltralyticsConfig, resolve_variant_profile
 from fabric_defect_hub.models.ultralytics.presets import (
     default_train_kwargs,
     list_supported_variants,
@@ -62,6 +62,43 @@ def test_config_from_dict_layers_and_resolves():
     assert resolved["name"] == "exp1"
 
 
+def test_config_typed_augmentation_and_inference_tiling_are_resolved():
+    cfg = UltralyticsConfig.from_dict(
+        {
+            "data": {"data_yaml": "data.yaml"},
+            "train": {"augmentation": {"mosaic": 0.2, "mixup": 0.0}},
+            "predict": {"tta_mode": "flip_multiscale", "tiling": True, "tile_size": [512, 512]},
+        }
+    )
+    assert cfg.resolved_train_kwargs()["mosaic"] == 0.2
+    assert cfg.predict.as_overrides()["tiling"] is True
+    assert cfg.predict.as_overrides()["tile_size"] == (512, 512)
+
+
+def test_variant_profile_overrides_shared_settings_without_mutating_base_config():
+    raw = {
+        "model": {"variant": "yolov8n"},
+        "data": {"data_yaml": "data.yaml"},
+        "train": {"batch": 32, "epochs": 100},
+        "variants": {
+            "yolov8n": {"train": {"batch": 24}, "checkpoint": {"name": "v8n"}},
+            "yolov8s": {"train": {"batch": 16}, "checkpoint": {"name": "v8s"}},
+        },
+    }
+    resolved = resolve_variant_profile(raw)
+    assert resolved["train"]["batch"] == 24
+    assert resolved["train"]["epochs"] == 100
+    assert resolved["checkpoint"]["name"] == "v8n"
+    assert raw["train"]["batch"] == 32
+
+
+def test_variant_profile_requires_a_matching_model_entry():
+    with pytest.raises(ValueError, match="no profile"):
+        resolve_variant_profile(
+            {"model": {"variant": "yolo11n"}, "variants": {"yolov8n": {}}}
+        )
+
+
 def test_config_rejects_unknown_and_conflicting_keys():
     with pytest.raises(ValueError):
         UltralyticsConfig.from_dict({"trian": {}})  # typo in top-level key
@@ -73,6 +110,12 @@ def test_config_rejects_unknown_and_conflicting_keys():
         )
     with pytest.raises(ValueError):
         UltralyticsConfig.from_dict({"data": {"dataset": "zju-leaper"}})  # missing dataset_root
+    with pytest.raises(ValueError):
+        UltralyticsConfig.from_dict(
+            {"data": {"data_yaml": "d"}, "model": {"loss_fn": "AFDLoss"}}
+        )
+    with pytest.raises(ValueError, match="tile_overlap"):
+        UltralyticsConfig.from_dict({"data": {"data_yaml": "d"}, "predict": {"tile_overlap": 1.0}})
 
 
 def test_scratch_init_uses_architecture_yaml():

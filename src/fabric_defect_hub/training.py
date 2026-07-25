@@ -5,12 +5,11 @@ point at a different dataset, and optionally override the shot mode
 then hand the fully-resolved config to that backend's own
 `run_from_config`.
 
-For ZJU-Leaper, "few" trains on the config's own declared pattern subset
-(patterns 1-4) and sample count; "medium" and "full" both widen that to
-every one of the benchmark's 19 patterns for real cross-texture
-generalization, differing only in how much of each pattern they take —
-"medium" caps it per pattern (see `MEDIUM_SHOT_TRAIN_PER_PATTERN` /
-`MEDIUM_SHOT_VAL_PER_PATTERN`), "full" takes every image.
+For ZJU-Leaper, the shot mode changes how many samples are selected, not
+which explicitly configured fabric patterns are selected: "few" keeps the
+config's count, "medium" applies a per-pattern cap, and "full" takes every
+image from that same pattern subset. A config without a pattern restriction
+continues to mean the full 19-pattern benchmark.
 
 This sits one layer above `models/{ultralytics,torchvision,anomalib}
 /pipeline.py`: those already execute a fully-declarative single-backend
@@ -43,12 +42,10 @@ ShotMode = Literal["full", "medium", "few", "test"]
 # meant to verify the pipeline wiring, not to produce a usable checkpoint.
 TEST_SHOT_NUM_SAMPLES = 8
 
-# "medium" shot: unlike "few" (patterns 1-4 only, config's own 300/100
-# counts), this covers every ZJU-Leaper pattern for real cross-texture
-# generalization, but caps the per-pattern count instead of taking each
-# pattern's full pool the way "full" does — 19 patterns x a few hundred
-# images each is already thousands of samples; every pattern's full pool
-# would be tens of thousands.
+# "medium" shot caps each selected ZJU-Leaper pattern rather than taking its
+# full pool. An unrestricted config still selects all 19 patterns; the textile
+# YOLO recipes intentionally pin patterns 1-4, so their medium budget is
+# 4 * these per-pattern limits.
 ZJU_LEAPER_PATTERN_COUNT = 19
 MEDIUM_SHOT_TRAIN_PER_PATTERN = 150
 MEDIUM_SHOT_VAL_PER_PATTERN = 50
@@ -56,6 +53,7 @@ MEDIUM_SHOT_VAL_PER_PATTERN = 50
 # Where `resolve_model_config` looks for configs when given a bare name
 # instead of a path (e.g. "ultralytics_example" or "yolov8n").
 DEFAULT_MODEL_CONFIG_DIR = Path("configs/models")
+DEFAULT_TRAINING_PROFILE = Path("configs/training_profile.yaml")
 
 # Every registered dataset is expected to be reachable through a symlink
 # under the project's own `data/` directory (e.g. `data/ZJU-Leaper ->
@@ -265,32 +263,52 @@ def find_model_configs(config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR) -> lis
 def resolve_model_config(model: str, config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR) -> Path:
     """Resolve a `train` CLI argument to a model-config YAML path.
 
+    See `resolve_model_config_and_variant` for the resolution rules; this
+    wrapper is kept for callers that only need the path.
+    """
+
+    return resolve_model_config_and_variant(model, config_dir=config_dir)[0]
+
+
+def resolve_model_config_and_variant(
+    model: str, config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR
+) -> tuple[Path, str | None]:
+    """Resolve a `train`/`predict` CLI argument to a config path plus the
+    variant/name it implies (or `None` when it doesn't imply one).
+
     `model` may be, in order of precedence:
     1. An existing file path (used as-is, anywhere on disk) — the original
        `fdh train configs/models/ultralytics_example.yaml` form still works.
+       Implies no variant.
     2. A filename stem under `config_dir` (e.g. "ultralytics_example",
        with or without the ".yaml" suffix) — `fdh train ultralytics_example`.
+       Implies no variant.
     3. A model keyword matched against every config under `config_dir`'s
-       `model.variant` / `model.name` field, case-insensitively — e.g.
-       `fdh train yolov8n` or `fdh train patchcore` finds whichever example
-       config declares that variant/name, so you don't need to know (or
-       type) the file it lives in.
+       declared `model.variant` / `model.name`, or (for configs using the
+       `variants.<name>` profile mechanism, see
+       `models.ultralytics.config.resolve_variant_profile`) a profile key —
+       case-insensitively, e.g. `fdh train yolov8n`, `fdh train yolov8s`, or
+       `fdh train patchcore` finds whichever example config declares that
+       variant/name, so you don't need to know (or type) the file it lives
+       in. Implies `variant=model` (the caller's explicit `--variant`, if
+       any, still wins) so the matched profile is actually the one trained,
+       not just the config's own top-level default.
     """
 
     direct = Path(model)
     if direct.is_file():
-        return direct
+        return direct, None
 
     directory = Path(config_dir)
     filename = model if model.endswith(".yaml") else f"{model}.yaml"
     by_filename = directory / filename
     if by_filename.is_file():
-        return by_filename
+        return by_filename, None
 
     needle = model.strip().lower()
     matches = [path for path in find_model_configs(directory) if needle in _config_keywords(path)]
     if len(matches) == 1:
-        return matches[0]
+        return matches[0], needle
     if len(matches) > 1:
         raise ValueError(
             f"'{model}' matches multiple configs under {directory}: "
@@ -306,7 +324,9 @@ def resolve_model_config(model: str, config_dir: str | Path = DEFAULT_MODEL_CONF
 
 def _config_keywords(path: Path) -> set[str]:
     """Case-insensitive keywords a config can be looked up by: its filename
-    stem, and its declared `model.variant`/`model.name`.
+    stem, its declared `model.variant`/`model.name`, and (for configs using
+    the `variants.<name>` profile mechanism, see
+    `models.ultralytics.config.resolve_variant_profile`) every profile key.
     """
 
     keywords = {path.stem.lower()}
@@ -320,6 +340,9 @@ def _config_keywords(path: Path) -> set[str]:
             value = model_section.get(key)
             if value:
                 keywords.add(str(value).strip().lower())
+    variants = raw.get("variants") if isinstance(raw, dict) else None
+    if isinstance(variants, dict):
+        keywords.update(str(key).strip().lower() for key in variants)
     return keywords
 
 
@@ -337,6 +360,26 @@ def load_raw_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"model config {path} must parse to a mapping")
     return _expand_environment_variables(raw)
+
+
+def load_training_profile(path: str | Path = DEFAULT_TRAINING_PROFILE) -> DatasetOverrides:
+    """Load the shared ZJU data-selection policy used unless CLI overrides it."""
+    import yaml
+
+    profile_path = Path(path)
+    if not profile_path.is_file():
+        raise FileNotFoundError(f"training profile not found: {profile_path}")
+    raw = yaml.safe_load(profile_path.read_text()) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"training profile {profile_path} must be a mapping")
+    return DatasetOverrides(
+        mode=raw.get("mode"), pattern=raw.get("pattern"), defect_ratio=raw.get("defect_ratio")
+    )
+
+
+def merge_dataset_overrides(base: DatasetOverrides, override: DatasetOverrides) -> DatasetOverrides:
+    """CLI values win over the global profile; omitted CLI values inherit it."""
+    return DatasetOverrides(**{field.name: getattr(override, field.name) if getattr(override, field.name) is not None else getattr(base, field.name) for field in fields(DatasetOverrides)})
 
 
 def apply_model_overrides(raw: dict[str, Any], backend: str, variant: str | None) -> dict[str, Any]:
@@ -578,8 +621,30 @@ def apply_raw_overrides(raw: dict[str, Any], overrides: dict[str, Any] | None) -
     return raw
 
 
+def _zju_selected_pattern_count(selection: dict[str, Any], overrides: DatasetOverrides) -> int:
+    """Return the number of ZJU patterns represented by a selection.
+
+    A missing/``None`` pattern is ZJU-Leaper's documented whole-benchmark
+    selector. Lists are the normal explicit multi-pattern form used by the
+    fabric recipes. A scalar selector denotes one pattern; group selectors
+    are intentionally treated as one configured selection because their
+    membership is dataset metadata rather than a stable CLI contract.
+    """
+
+    pattern = overrides.pattern if overrides.pattern is not None else selection.get("pattern")
+    if pattern is None or pattern == "total":
+        return ZJU_LEAPER_PATTERN_COUNT
+    if isinstance(pattern, (list, tuple)):
+        return max(1, len(pattern))
+    return 1
+
+
 def _resolve_num_samples(
-    overrides: DatasetOverrides, current: int | None, *, is_train_split: bool
+    overrides: DatasetOverrides,
+    current: int | None,
+    *,
+    is_train_split: bool,
+    selected_pattern_count: int = ZJU_LEAPER_PATTERN_COUNT,
 ) -> tuple[bool, int | None]:
     """Return (should_set, value) for one split's `num_samples`."""
 
@@ -593,7 +658,7 @@ def _resolve_num_samples(
         return True, None
     if overrides.mode == "medium":
         per_pattern = MEDIUM_SHOT_TRAIN_PER_PATTERN if is_train_split else MEDIUM_SHOT_VAL_PER_PATTERN
-        return True, per_pattern * ZJU_LEAPER_PATTERN_COUNT
+        return True, per_pattern * selected_pattern_count
     if overrides.mode == "few":
         return False, current  # leave the config's own few-shot count as-is
     return False, current
@@ -602,8 +667,16 @@ def _resolve_num_samples(
 def _apply_selection_overrides(
     selection: dict[str, Any], overrides: DatasetOverrides, *, is_train_split: bool, dataset: str
 ) -> None:
+    selected_pattern_count = (
+        _zju_selected_pattern_count(selection, overrides)
+        if dataset == "zju-leaper"
+        else ZJU_LEAPER_PATTERN_COUNT
+    )
     should_set, num_samples = _resolve_num_samples(
-        overrides, selection.get("num_samples"), is_train_split=is_train_split
+        overrides,
+        selection.get("num_samples"),
+        is_train_split=is_train_split,
+        selected_pattern_count=selected_pattern_count,
     )
     if should_set:
         selection["num_samples"] = num_samples
@@ -613,11 +686,14 @@ def _apply_selection_overrides(
         selection["defect_ratio"] = overrides.defect_ratio
     if overrides.pattern is not None:
         selection["pattern"] = overrides.pattern
-    elif dataset == "zju-leaper" and overrides.mode in ("full", "medium"):
-        # "few" leaves the config's own pattern subset (patterns 1-4) alone;
-        # "full"/"medium" both mean "generalize across the whole benchmark",
-        # so widen the pattern selection to all 19 unless the caller pinned
-        # one explicitly with --pattern.
+    elif (
+        dataset == "zju-leaper"
+        and overrides.mode in ("full", "medium")
+        and selection.get("pattern") is None
+    ):
+        # An unrestricted config retains the historic whole-benchmark
+        # behavior. Explicit recipe patterns (such as [pattern1, ..., pattern4])
+        # are never widened by a shot-mode choice.
         selection["pattern"] = None if overrides.mode == "full" else list(range(1, ZJU_LEAPER_PATTERN_COUNT + 1))
     if overrides.category is not None:
         selection["category"] = overrides.category
@@ -698,6 +774,7 @@ class TrainRunResult:
     backend: str
     result: Any  # UltralyticsRunResult | TorchvisionRunResult | AnomalibRunResult
     published_path: str | None = None  # set when (backend, variant) is one of catalog.CANONICAL_MODELS
+    weight_manifest_path: str | None = None
 
 
 def _enforce_trainable_dataset(raw: dict[str, Any], backend: str) -> None:
@@ -750,6 +827,7 @@ def run_train(
     variant: str | None = None,
     publish: bool = True,
     set_overrides: dict[str, Any] | None = None,
+    profile: str | Path | None = DEFAULT_TRAINING_PROFILE,
 ) -> TrainRunResult:
     """The unified training entry point.
 
@@ -784,7 +862,8 @@ def run_train(
        itself is unaffected either way, only `TrainRunResult.published_path`.
     """
 
-    model_config = resolve_model_config(str(model), config_dir=config_dir)
+    model_config, implied_variant = resolve_model_config_and_variant(str(model), config_dir=config_dir)
+    variant = variant if variant is not None else implied_variant
     raw = load_raw_config(model_config)
     resolved_backend = backend or infer_backend(raw)
     if resolved_backend not in _BACKEND_PIPELINE_MODULES:
@@ -793,8 +872,14 @@ def run_train(
         )
 
     raw = apply_model_overrides(raw, resolved_backend, variant)
+    if resolved_backend == "ultralytics":
+        from fabric_defect_hub.models.ultralytics.config import resolve_variant_profile
+
+        raw = resolve_variant_profile(raw)
 
     overrides = overrides or DatasetOverrides()
+    if profile is not None and raw.get("data", {}).get("dataset") == "zju-leaper":
+        overrides = merge_dataset_overrides(load_training_profile(profile), overrides)
     raw = apply_dataset_overrides(raw, resolved_backend, overrides)
     _enforce_trainable_dataset(raw, resolved_backend)
     raw = apply_default_dataset_root(raw)
@@ -820,7 +905,32 @@ def run_train(
             destination = publish_artifact(resolved_backend, resolved_variant, result.registered_artifact.path)
             published = str(destination) if destination is not None else None
 
-    return TrainRunResult(backend=resolved_backend, result=result, published_path=published)
+    manifest_path: str | None = None
+    if result.registered_artifact is not None:
+        from fabric_defect_hub.weight_registry import record_weight
+
+        model_key = _BACKEND_MODEL_KEY[resolved_backend]
+        manifest_path = str(
+            record_weight(
+                project_root=Path(__file__).resolve().parents[2],
+                backend=resolved_backend,
+                variant=raw.get("model", {}).get(model_key),
+                config_path=model_config,
+                resolved_config=raw,
+                registered_artifact=result.registered_artifact,
+                published_path=published,
+                metrics=result.metrics,
+                run_id=os.environ.get("FDH_BATCH_RUN_ID"),
+                model_key=os.environ.get("FDH_BATCH_MODEL_KEY"),
+            )
+        )
+
+    return TrainRunResult(
+        backend=resolved_backend,
+        result=result,
+        published_path=published,
+        weight_manifest_path=manifest_path,
+    )
 
 
 def _expand_environment_variables(value: Any) -> Any:

@@ -113,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
             "the recipe/profile defaults, and every other --* override"
         ),
     )
+    train_parser.add_argument("--enable-tiling", action="store_true", help="YOLO only: train on coordinate-aware image tiles")
+    train_parser.add_argument("--tile-size", type=int, help="YOLO only: square tile size when --enable-tiling is set")
+    train_parser.add_argument("--tile-overlap", type=float, help="YOLO only: tile overlap in [0, 1)")
+    train_parser.add_argument("--profile", default="configs/training_profile.yaml", help="shared ZJU training policy YAML")
+    train_parser.add_argument("--no-profile", action="store_true", help="ignore the shared training profile")
 
     predict_parser = subparsers.add_parser(
         "predict",
@@ -156,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset", help="registered dataset name (e.g. zju-leaper, raw-fabric, mvtec-ad) to draw samples from"
     )
     predict_parser.add_argument("--dataset-root", help="dataset root path; falls back to data/<Dataset> if omitted")
+    predict_parser.add_argument("--enable-tiling", action="store_true", help="YOLO only: sliding-window prediction with global NMS")
+    predict_parser.add_argument("--enable-tta", action="store_true", help="YOLO only: enable native flip/multiscale TTA")
+    predict_parser.add_argument("--tile-size", type=int, help="YOLO only: square tile size when --enable-tiling is set")
+    predict_parser.add_argument("--tile-overlap", type=float, help="YOLO only: tile overlap in [0, 1)")
     subparsers.add_parser(
         "recipes",
         help="list every model config profile",
@@ -394,6 +403,12 @@ def _run_train(args: argparse.Namespace) -> Any:
         seed=args.seed,
     )
     set_overrides = _parse_set_overrides(args.set_overrides)
+    if args.enable_tiling:
+        set_overrides["data.tiling"] = True
+    if args.tile_size is not None:
+        set_overrides["data.tile_size"] = [args.tile_size, args.tile_size]
+    if args.tile_overlap is not None:
+        set_overrides["data.overlap"] = args.tile_overlap
     run = run_train(
         args.model,
         backend=args.backend,
@@ -401,6 +416,7 @@ def _run_train(args: argparse.Namespace) -> Any:
         config_dir=args.config_dir,
         variant=args.variant,
         set_overrides=set_overrides,
+        profile=None if args.no_profile else args.profile,
     )
     result = run.result
     return {
@@ -409,6 +425,7 @@ def _run_train(args: argparse.Namespace) -> Any:
         "trained_artifact": _artifact_dict(result.trained_artifact),
         "registered_artifact": _artifact_dict(result.registered_artifact),
         "published_path": run.published_path,
+        "weight_manifest_path": run.weight_manifest_path,
         "exports": [asdict(artifact) for artifact in result.exports],
     }
 
@@ -434,6 +451,10 @@ def _run_predict(args: argparse.Namespace) -> Any:
         variant=args.variant,
         config_dir=args.config_dir,
         output_dir=args.output_dir,
+        enable_tiling=args.enable_tiling,
+        enable_tta=args.enable_tta,
+        tile_size=args.tile_size,
+        tile_overlap=args.tile_overlap,
     )
     predictions = [asdict(prediction) for prediction in run.predictions]
     if args.output:

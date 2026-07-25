@@ -33,6 +33,7 @@ from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.types import Prediction, Sample
+from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.models.torchvision.dataset import (
     SampleDetectionDataset,
@@ -352,6 +353,7 @@ class TorchvisionAdapter(ModelAdapter):
                 "resumed_from_epoch": resume_state["epoch"] if resume_state else None,
                 "best_map": best_map,
                 "final_val_metrics": final_metrics,
+                **parameter_counts(self.model),
             },
         )
 

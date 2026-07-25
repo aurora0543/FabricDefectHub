@@ -18,18 +18,18 @@ def run_all_smoke_tests():
 
     # Key model variants covering all 18 architectures across backends
     test_targets = [
-        ("ultralytics", "yolov8n", "configs/models/yolov8_sd_attn_textile.yaml"),
-        ("ultralytics", "yolov8s", "configs/models/ultralytics_yolov8s.yaml"),
+        ("ultralytics", "yolov8n", "configs/models/ultralytics_example.yaml"),
+        ("ultralytics", "yolov8s", "configs/models/ultralytics_example.yaml"),
         ("ultralytics", "yolo11n", "configs/models/ultralytics_example.yaml"),
         ("torchvision", "fasterrcnn_resnet50_fpn", "configs/models/torchvision_example.yaml"),
-        ("anomalib", "PatchCore", "configs/models/patchcore_dmba_textile.yaml"),
+        ("anomalib", "PatchCore", "configs/models/patchcore_textile.yaml"),
         ("anomalib", "PaDiM", "configs/models/anomalib_example.yaml"),
         ("anomalib", "RD4AD", "configs/models/anomalib_example.yaml"),
         ("anomalib", "EfficientAD", "configs/models/anomalib_example.yaml"),
         ("anomalib", "SuperSimpleNet", "configs/models/anomalib_example.yaml"),
-        ("mambaad", "mambaad", "configs/models/mambaad_example.yaml"),
-        ("dinomaly", "dinomaly", "configs/models/dinomaly_example.yaml"),
-        ("moeclip", "moeclip", "configs/models/moeclip_example.yaml"),
+        ("mambaad", "resnet34", "configs/models/mambaad_example.yaml"),
+        ("dinomaly", "dinov2reg_vit_base_14", "configs/models/dinomaly_example.yaml"),
+        ("moeclip", "ViT-L-14-336", "configs/models/moeclip_example.yaml"),
     ]
 
     results = []
@@ -43,6 +43,13 @@ def run_all_smoke_tests():
             status = "PASSED" if ret == 0 else "FAILED"
             results.append((backend, variant, status, "OK"))
             print(f"--> SUCCESS: {backend} / {variant}")
+        except SystemExit as exc:
+            # `fdh.cli.main` reports its own errors (missing config, bad
+            # dataset, ...) via `raise SystemExit(message)`, not a return
+            # code or a plain Exception -- must be caught separately or one
+            # bad target silently kills every target after it.
+            results.append((backend, variant, "SKIPPED/ERROR", str(exc.code)))
+            print(f"--> SKIPPED/WARNING: {backend} / {variant} -> {exc.code}")
         except Exception as exc:
             results.append((backend, variant, "SKIPPED/ERROR", str(exc)))
             print(f"--> SKIPPED/WARNING: {backend} / {variant} -> {exc}")

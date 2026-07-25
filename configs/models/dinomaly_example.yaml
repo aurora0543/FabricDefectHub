@@ -62,7 +62,7 @@ data:
 train:
   enabled: true
   total_iters: 5000
-  batch_size: 16
+  batch_size: 32
   image_size: 448
   crop_size: 392
   lr: 0.002

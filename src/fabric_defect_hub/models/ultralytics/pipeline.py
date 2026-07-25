@@ -56,9 +56,26 @@ def _build_data_kwargs(config: UltralyticsConfig) -> dict[str, Any]:
         val_samples = _load_split_samples(data, data.val_selection)
     else:
         val_samples = train_samples
+    train_background = sum(not sample.annotations.boxes for sample in train_samples)
+    if data.require_background and train_background == 0:
+        raise ValueError(
+            "YOLO detection training selected zero normal/background images. "
+            "Set train_selection.defect_ratio below 1.0 (the textile configs use 0.5), "
+            "or explicitly set data.require_background: false."
+        )
     return {
         "samples": {"train": train_samples, "val": val_samples},
         "class_names": data.class_names,
+        "sample_summary": {
+            "train_total": len(train_samples),
+            "train_background": train_background,
+            "train_defect": len(train_samples) - train_background,
+            "val_total": len(val_samples),
+            "val_background": sum(not sample.annotations.boxes for sample in val_samples),
+        },
+        "tiling": data.tiling,
+        "tile_size": tuple(data.tile_size),
+        "tile_overlap": data.overlap,
     }
 
 

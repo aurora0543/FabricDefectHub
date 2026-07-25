@@ -25,6 +25,7 @@ from typing import Any
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
+from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.anomalib.presets import (
     default_model_kwargs,
     resolve_model_class,
@@ -113,6 +114,7 @@ class AnomalibAdapter(ModelAdapter):
                 "model_class": self.resolved_class_name,
                 "model_kwargs": model_kwargs,
                 "trusted": True,
+                **parameter_counts(model),
             },
         )
 

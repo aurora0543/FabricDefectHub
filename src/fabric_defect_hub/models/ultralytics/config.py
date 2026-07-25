@@ -47,7 +47,6 @@ class ModelSpec:
         the architecture spec with random init.
     task: Ultralytics task; 'detect' for this backend.
     recipe: Optional name of the training recipe/strategy.
-    loss_fn: Optional name of the loss function.
     """
 
     variant: str = "yolov8n"
@@ -56,7 +55,6 @@ class ModelSpec:
     offline: bool = False
     task: str = "detect"
     recipe: str | None = None
-    loss_fn: str | None = None
 
     def initial_weights(self) -> str:
         """Resolve the file/name Ultralytics should be initialised from."""
@@ -99,11 +97,10 @@ class DataSpec:
     train_selection: dict[str, Any] = field(default_factory=dict)
     val_selection: dict[str, Any] = field(default_factory=dict)
     class_names: list[str] | None = None
-    grid_freq: int | None = None
-    phase_shift_prob: float | None = None
     tiling: bool = False
     tile_size: list[int] | tuple[int, int] = (256, 256)
     overlap: float = 0.25
+    require_background: bool = True
 
     def uses_adapter(self) -> bool:
         return self.dataset is not None
@@ -149,10 +146,11 @@ class TrainSpec:
     workers: int | None = None
     seed: int | None = None
     resume: bool = False
+    augmentation: "AugmentationSpec" = field(default_factory=lambda: AugmentationSpec())
     extra: dict[str, Any] = field(default_factory=dict)
 
     # Fields that are pipeline-control, not Ultralytics train() kwargs.
-    _NON_ULTRALYTICS = {"enabled", "resume", "extra"}
+    _NON_ULTRALYTICS = {"enabled", "resume", "augmentation", "extra"}
 
     def as_overrides(self) -> dict[str, Any]:
         """Explicitly-set named fields (non-None) as Ultralytics kwargs."""
@@ -164,7 +162,65 @@ class TrainSpec:
             value = getattr(self, f.name)
             if value is not None:
                 out[f.name] = value
+        out.update(self.augmentation.as_overrides())
+        self.augmentation.validate()
+        duplicated = set(self.augmentation.as_overrides()) & set(self.extra)
+        if duplicated:
+            raise ValueError(
+                "train.extra duplicates typed train.augmentation keys: "
+                f"{sorted(duplicated)}. Set each augmentation only once."
+            )
+        out.update(self.extra)
         return out
+
+
+@dataclass
+class AugmentationSpec:
+    """Typed Ultralytics image augmentations for fabric detection training."""
+
+    hsv_h: float | None = None
+    hsv_s: float | None = None
+    hsv_v: float | None = None
+    degrees: float | None = None
+    translate: float | None = None
+    scale: float | None = None
+    shear: float | None = None
+    perspective: float | None = None
+    flipud: float | None = None
+    fliplr: float | None = None
+    mosaic: float | None = None
+    close_mosaic: int | None = None
+    mixup: float | None = None
+    cutmix: float | None = None
+    erasing: float | None = None
+
+    def as_overrides(self) -> dict[str, Any]:
+        return {
+            field.name: getattr(self, field.name)
+            for field in fields(self)
+            if getattr(self, field.name) is not None
+        }
+
+    def validate(self) -> None:
+        probabilities = {
+            "hsv_h": self.hsv_h,
+            "hsv_s": self.hsv_s,
+            "hsv_v": self.hsv_v,
+            "translate": self.translate,
+            "scale": self.scale,
+            "perspective": self.perspective,
+            "flipud": self.flipud,
+            "fliplr": self.fliplr,
+            "mosaic": self.mosaic,
+            "mixup": self.mixup,
+            "cutmix": self.cutmix,
+            "erasing": self.erasing,
+        }
+        invalid = {name: value for name, value in probabilities.items() if value is not None and not 0 <= value <= 1}
+        if invalid:
+            raise ValueError(f"train.augmentation values must be in [0, 1]: {invalid}")
+        if self.close_mosaic is not None and self.close_mosaic < 0:
+            raise ValueError("train.augmentation.close_mosaic must be non-negative")
 
 
 @dataclass
@@ -201,6 +257,9 @@ class PredictSpec:
     device: str | int | None = None
     augment: bool = False
     tta_mode: str | None = None
+    tiling: bool = False
+    tile_size: list[int] | tuple[int, int] = (640, 640)
+    tile_overlap: float = 0.25
     calibrate_bn: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -210,6 +269,9 @@ class PredictSpec:
             "iou": self.iou,
             "max_det": self.max_det,
             "augment": self.augment,
+            "tiling": self.tiling,
+            "tile_size": tuple(self.tile_size),
+            "tile_overlap": self.tile_overlap,
         }
         for name in ("imgsz", "device"):
             value = getattr(self, name)
@@ -295,6 +357,7 @@ class UltralyticsConfig:
         silently ignored.
         """
 
+        data = resolve_variant_profile(data)
         section_types = {
             "model": ModelSpec,
             "data": DataSpec,
@@ -332,6 +395,11 @@ class UltralyticsConfig:
     def validate(self) -> None:
         self.model.validate()
         self.data.validate()
+        self.train.augmentation.validate()
+        if len(self.predict.tile_size) != 2 or any(size <= 0 for size in self.predict.tile_size):
+            raise ValueError("predict.tile_size must contain two positive integers")
+        if not 0 <= self.predict.tile_overlap < 1:
+            raise ValueError("predict.tile_overlap must be in [0, 1)")
 
     def resolved_train_kwargs(self) -> dict[str, Any]:
         """The full, explicit Ultralytics `train()` kwargs after layering
@@ -360,7 +428,61 @@ def _build_section(spec_cls, raw: dict[str, Any], section: str):
             f"UltralyticsConfig section '{section}': unknown keys {sorted(unknown)}; "
             f"valid keys are {sorted(valid)}."
         )
+    if spec_cls is TrainSpec and isinstance(raw.get("augmentation"), dict):
+        raw = dict(raw)
+        raw["augmentation"] = _build_section(AugmentationSpec, raw["augmentation"], "train.augmentation")
     return spec_cls(**raw)
+
+
+def resolve_variant_profile(data: dict[str, Any]) -> dict[str, Any]:
+    """Apply the selected YAML ``variants.<model.variant>`` profile.
+
+    The base YAML holds shared fabric strategy. A selected profile may
+    override any normal config section, and wins over the base before CLI
+    overrides are applied. This keeps per-variant resource and optimization
+    settings editable in one file without duplicating a complete recipe.
+    """
+
+    if not isinstance(data, dict):
+        raise ValueError("UltralyticsConfig must be a mapping")
+    profiles = data.get("variants")
+    if profiles is None:
+        return data
+    if not isinstance(profiles, dict):
+        raise ValueError("UltralyticsConfig 'variants' must be a mapping")
+
+    base = {key: value for key, value in data.items() if key != "variants"}
+    model = base.get("model")
+    if not isinstance(model, dict) or not model.get("variant"):
+        raise ValueError("UltralyticsConfig with 'variants' requires model.variant")
+    variant = resolve_variant(str(model["variant"]))
+    profile = profiles.get(variant)
+    if not isinstance(profile, dict):
+        available = ", ".join(sorted(str(key) for key in profiles)) or "<none>"
+        raise ValueError(
+            f"UltralyticsConfig has no profile for model.variant={variant!r}; "
+            f"available profiles: {available}"
+        )
+    profile_model = profile.get("model")
+    if isinstance(profile_model, dict) and "variant" in profile_model:
+        raise ValueError("variants.<name>.model.variant is not allowed; the profile key selects the variant")
+
+    resolved = _deep_merge(base, profile)
+    resolved_model = dict(resolved.get("model") or {})
+    resolved_model["variant"] = variant
+    resolved["model"] = resolved_model
+    return resolved
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = _deep_merge(current, value)
+        else:
+            result[key] = value
+    return result
 
 
 def supported_variants() -> list[str]:

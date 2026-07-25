@@ -28,7 +28,7 @@ from fabric_defect_hub.training import (
     apply_model_overrides,
     infer_backend,
     load_raw_config,
-    resolve_model_config,
+    resolve_model_config_and_variant,
 )
 
 # Per backend: (module, class name) of its `ModelAdapter` — kept separate
@@ -137,6 +137,10 @@ def run_predict(
     variant: str | None = None,
     config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR,
     output_dir: str | None = None,
+    enable_tiling: bool = False,
+    enable_tta: bool = False,
+    tile_size: int | None = None,
+    tile_overlap: float | None = None,
 ) -> PredictRunResult:
     """The unified inference entry point, mirroring `training.run_train`.
 
@@ -156,13 +160,28 @@ def run_predict(
     each sample's pixel-level anomaly map (see `AnomalibAdapter.predict`).
     """
 
-    model_config = resolve_model_config(str(model), config_dir=config_dir)
+    model_config, implied_variant = resolve_model_config_and_variant(str(model), config_dir=config_dir)
+    variant = variant if variant is not None else implied_variant
     raw = load_raw_config(model_config)
     resolved_backend = backend or infer_backend(raw)
     if resolved_backend not in _ADAPTER_MODULES:
         raise ValueError(f"unknown backend '{resolved_backend}'; expected one of {sorted(_ADAPTER_MODULES)}")
 
     raw = apply_model_overrides(raw, resolved_backend, variant)
+    if resolved_backend == "ultralytics":
+        from fabric_defect_hub.models.ultralytics.config import resolve_variant_profile
+
+        raw = resolve_variant_profile(raw)
+        predict = dict(raw.get("predict") or {})
+        if enable_tiling:
+            predict["tiling"] = True
+        if tile_size is not None:
+            predict["tile_size"] = [tile_size, tile_size]
+        if tile_overlap is not None:
+            predict["tile_overlap"] = tile_overlap
+        if enable_tta:
+            predict["tta_mode"] = "flip_multiscale"
+        raw["predict"] = predict
     model_key = "name" if resolved_backend in _ANOMALY_MAP_BACKENDS else "variant"
     resolved_variant = raw.get("model", {}).get(model_key)
     if not resolved_variant:
@@ -175,7 +194,14 @@ def run_predict(
     if not samples:
         raise ValueError("no samples resolved to run inference on")
 
-    if resolved_backend in _ANOMALY_MAP_BACKENDS:
+    if resolved_backend == "ultralytics":
+        from fabric_defect_hub.models.ultralytics.config import UltralyticsConfig
+
+        config = UltralyticsConfig.from_dict(raw)
+        predictions = adapter.predict(samples, artifact, config=config.predict.as_overrides() | {
+            "tta_mode": config.predict.tta_mode,
+        })
+    elif resolved_backend in _ANOMALY_MAP_BACKENDS:
         predictions = adapter.predict(samples, artifact, output_dir=output_dir)
     else:
         predictions = adapter.predict(samples, artifact)

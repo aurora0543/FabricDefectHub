@@ -28,12 +28,14 @@ Requires the `ultralytics` extra: `pip install -e ".[ultralytics]"`.
 from __future__ import annotations
 
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.yolo_bbox import yolo_staging_dir
+from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.models.ultralytics.presets import resolve_variant, variant_weights
 
@@ -151,6 +153,10 @@ class UltralyticsAdapter(ModelAdapter):
         cfg = dict(config)
         samples = cfg.pop("samples", None)
         class_names = cfg.pop("class_names", None)
+        sample_summary = cfg.pop("sample_summary", None)
+        tiling = cfg.pop("tiling", False)
+        tile_size = cfg.pop("tile_size", (256, 256))
+        tile_overlap = cfg.pop("tile_overlap", 0.25)
         data_yaml = cfg.pop("data", None)
         weights = cfg.pop("weights", None)
         pretrained = cfg.pop("pretrained", True)
@@ -181,7 +187,7 @@ class UltralyticsAdapter(ModelAdapter):
             self.load_scratch()
 
         if samples is not None:
-            with yolo_staging_dir(samples, class_names=class_names) as staged_yaml:
+            with yolo_staging_dir(samples, class_names=class_names, tiling=tiling, tile_size=tuple(tile_size), overlap=tile_overlap) as staged_yaml:
                 results = self.model.train(data=str(staged_yaml), **cfg)
         else:
             results = self.model.train(data=data_yaml, **cfg)
@@ -204,6 +210,8 @@ class UltralyticsAdapter(ModelAdapter):
                 "last_weights": str(last) if last.exists() else None,
                 "train_kwargs": cfg,
                 "results_csv": str(save_dir / "results.csv"),
+                "sample_summary": sample_summary,
+                **parameter_counts(self.model.model),
             },
         )
 
@@ -247,6 +255,10 @@ class UltralyticsAdapter(ModelAdapter):
         cfg = dict(config or {})
         samples = cfg.pop("samples", None)
         class_names = cfg.pop("class_names", None)
+        cfg.pop("sample_summary", None)
+        cfg.pop("tiling", None)
+        cfg.pop("tile_size", None)
+        cfg.pop("tile_overlap", None)
 
         if samples is not None:
             with yolo_staging_dir(samples, class_names=class_names) as staged_yaml:
@@ -301,7 +313,14 @@ class UltralyticsAdapter(ModelAdapter):
             self.load_weights(artifact.path)
 
         cfg = dict(config or {})
+        if cfg.pop("tta_mode", None) == "flip_multiscale":
+            cfg["augment"] = True
+        tiling = cfg.pop("tiling", False)
+        tile_size = tuple(cfg.pop("tile_size", (256, 256)))
+        tile_overlap = float(cfg.pop("tile_overlap", 0.25))
         cfg.setdefault("verbose", False)
+        if tiling:
+            return self._predict_tiled(samples, cfg, tile_size=tile_size, overlap=tile_overlap)
         image_paths = [s.image_path for s in samples]
         results = self.model.predict(source=image_paths, **cfg)
 
@@ -309,6 +328,44 @@ class UltralyticsAdapter(ModelAdapter):
         for sample, result in zip(samples, results):
             predictions.append(self._result_to_prediction(sample, result))
         return predictions
+
+    def _predict_tiled(self, samples: list[Sample], cfg: dict[str, Any], *, tile_size: tuple[int, int], overlap: float) -> list[Prediction]:
+        """Predict overlapping tiles, restore their coordinates, then globally NMS."""
+        from PIL import Image
+        from fabric_defect_hub.datasets.yolo_bbox import _tile_starts
+
+        tile_w, tile_h = tile_size
+        if tile_w <= 0 or tile_h <= 0 or not 0 <= overlap < 1:
+            raise ValueError("tile_size must be positive and tile_overlap must be in [0, 1)")
+        step_x, step_y = max(1, round(tile_w * (1 - overlap))), max(1, round(tile_h * (1 - overlap)))
+        grouped: dict[str, list[tuple[list[float], str, float]]] = {sample.id: [] for sample in samples}
+        with tempfile.TemporaryDirectory(prefix="fdh_yolo_predict_tiles_") as directory:
+            tile_paths, origins = [], []
+            for sample in samples:
+                with Image.open(sample.image_path) as image:
+                    for top in _tile_starts(image.height, tile_h, step_y):
+                        for left in _tile_starts(image.width, tile_w, step_x):
+                            path = Path(directory) / f"{sample.id}_{left}_{top}.jpg"
+                            image.crop((left, top, min(left + tile_w, image.width), min(top + tile_h, image.height))).save(path)
+                            tile_paths.append(str(path))
+                            origins.append((sample.id, left, top))
+            results = self.model.predict(source=tile_paths, **cfg)
+            for result, (sample_id, left, top) in zip(results, origins):
+                boxes_obj = result.boxes
+                if boxes_obj is None:
+                    continue
+                for box, score, class_id in zip(boxes_obj.xyxy.tolist(), boxes_obj.conf.tolist(), boxes_obj.cls.tolist()):
+                    grouped[sample_id].append(([box[0] + left, box[1] + top, box[2] + left, box[3] + top], result.names[int(class_id)], score))
+        threshold = float(cfg.get("iou", 0.7))
+        return [self._merged_tile_prediction(sample, grouped[sample.id], threshold) for sample in samples]
+
+    @staticmethod
+    def _merged_tile_prediction(sample: Sample, candidates: list[tuple[list[float], str, float]], iou_threshold: float) -> Prediction:
+        kept = []
+        for candidate in sorted(candidates, key=lambda item: item[2], reverse=True):
+            if all(candidate[1] != prior[1] or _box_iou(candidate[0], prior[0]) < iou_threshold for prior in kept):
+                kept.append(candidate)
+        return Prediction(sample_id=sample.id, boxes=[item[0] for item in kept], labels=[item[1] for item in kept], scores=[item[2] for item in kept])
 
     @staticmethod
     def _result_to_prediction(sample: Sample, result) -> Prediction:
@@ -400,3 +457,13 @@ class UltralyticsAdapter(ModelAdapter):
             return resolve_variant(self.name)
         except KeyError:
             return str(self.name)
+
+
+def _box_iou(first: list[float], second: list[float]) -> float:
+    left, top = max(first[0], second[0]), max(first[1], second[1])
+    right, bottom = min(first[2], second[2]), min(first[3], second[3])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
+    second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
+    union = first_area + second_area - intersection
+    return intersection / union if union else 0.0

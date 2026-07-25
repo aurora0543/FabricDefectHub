@@ -33,12 +33,14 @@ Two things differ from Dinomaly's adapter, both forced by what MoECLIP is:
 
 from __future__ import annotations
 
+import csv
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.types import Prediction, Sample
+from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 from fabric_defect_hub.models.moeclip import presets
 from fabric_defect_hub.models.moeclip.data import SampleDataset
@@ -329,37 +331,45 @@ class MoECLIPAdapter(ModelAdapter):
 
         class_names = sorted({self.class_name_for(sample) for sample in samples})
         epochs = int(kwargs["epochs"])
-        for _epoch in range(epochs):
-            for batch in loader:
-                image = batch["image"].to(device)
-                mask = batch["mask"].to(device)
-                label = batch["label"].to(device)
-                batch_classes = batch["class_name"]
-
-                # Rebuilt every step on purpose: the text adapter is being
-                # trained, so its embeddings change between steps and the
-                # loss has to backprop through them (upstream does the same).
-                embeddings = self._text_embeddings(model, sorted(set(batch_classes)), device)
-                text_feature = torch.stack([embeddings[name] for name in batch_classes], dim=0)
-
-                patch_features, det_feature, aux_loss, special_loss = model(image)
-
-                cls_preds = torch.matmul(det_feature.unsqueeze(1), text_feature)[:, 0]
-                loss = F.cross_entropy(cls_preds, label)
-                for feature in patch_features:
-                    loss = loss + calculate_seg_loss(
-                        calculate_similarity_map(feature, text_feature, img_size), mask
-                    )
-                loss = loss + aux_loss * float(kwargs["balance_loss_lambda"])
-                loss = loss + special_loss * float(kwargs["etf_loss_lambda"])
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                scheduler.step()
-
         work_dir = Path(config.get("work_dir") or tempfile.mkdtemp(prefix="fdh_moeclip_"))
         work_dir.mkdir(parents=True, exist_ok=True)
+        history_path = work_dir / "history.csv"
+        step = 0
+        with history_path.open("w", newline="") as history_file:
+            writer = csv.writer(history_file)
+            writer.writerow(["epoch", "iteration", "train_loss", "lr"])
+            for epoch in range(epochs):
+                for batch in loader:
+                    image = batch["image"].to(device)
+                    mask = batch["mask"].to(device)
+                    label = batch["label"].to(device)
+                    batch_classes = batch["class_name"]
+
+                    # Rebuilt every step on purpose: the text adapter is being
+                    # trained, so its embeddings change between steps and the
+                    # loss has to backprop through them (upstream does the same).
+                    embeddings = self._text_embeddings(model, sorted(set(batch_classes)), device)
+                    text_feature = torch.stack([embeddings[name] for name in batch_classes], dim=0)
+
+                    patch_features, det_feature, aux_loss, special_loss = model(image)
+
+                    cls_preds = torch.matmul(det_feature.unsqueeze(1), text_feature)[:, 0]
+                    loss = F.cross_entropy(cls_preds, label)
+                    for feature in patch_features:
+                        loss = loss + calculate_seg_loss(
+                            calculate_similarity_map(feature, text_feature, img_size), mask
+                        )
+                    loss = loss + aux_loss * float(kwargs["balance_loss_lambda"])
+                    loss = loss + special_loss * float(kwargs["etf_loss_lambda"])
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    scheduler.step()
+                    step += 1
+                    writer.writerow([epoch + 1, step, f"{loss.detach().item():.8f}", f"{optimizer.param_groups[0]['lr']:.10f}"])
+                    history_file.flush()
+
         ckpt_path = work_dir / f"moeclip_{self.model_name}.pth"
         # Same payload upstream's `save_checkpoint` writes (minus the
         # optimizer state, which only exists there to resume a run):
@@ -383,9 +393,11 @@ class MoECLIPAdapter(ModelAdapter):
                 # a checkpoint is traceable to the corpus it saw, not to
                 # configure inference (see the class docstring).
                 "class_names": class_names,
+                "history_csv": str(history_path),
                 "trusted": True,
                 **arch,
                 **stats,
+                **parameter_counts(model),
             },
         )
 
@@ -513,6 +525,11 @@ class MoECLIPAdapter(ModelAdapter):
         shutil.copy2(src, dst)
 
         metadata = dict(artifact.metadata)
+        history = Path(metadata["history_csv"]) if metadata.get("history_csv") else None
+        if history is not None and history.is_file():
+            history_dst = registry / f"{dst.stem}.history.csv"
+            shutil.copy2(history, history_dst)
+            metadata["history_csv"] = str(history_dst)
         metadata["registered_from"] = str(src)
         return Artifact(path=str(dst), backend=self.backend, metadata=metadata)
 

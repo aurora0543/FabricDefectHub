@@ -84,13 +84,16 @@ def _sample_to_label_text(sample: Sample, class_map: dict[str, int]) -> str:
     return "\n".join(lines)
 
 
-def _stage_split(root: Path, split: str, samples: list[Sample], class_map: dict[str, int]) -> None:
+def _stage_split(root: Path, split: str, samples: list[Sample], class_map: dict[str, int], *, tiling: bool, tile_size: tuple[int, int], overlap: float) -> None:
     images_dir = root / "images" / split
     labels_dir = root / "labels" / split
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
 
     for sample in samples:
+        if tiling:
+            _stage_tiled_sample(images_dir, labels_dir, sample, class_map, tile_size, overlap)
+            continue
         src = Path(sample.image_path).resolve()
         dst = images_dir / f"{sample.id}{src.suffix}"
         if not dst.exists():
@@ -100,12 +103,50 @@ def _stage_split(root: Path, split: str, samples: list[Sample], class_map: dict[
         (labels_dir / f"{sample.id}.txt").write_text(label_text)
 
 
+def _stage_tiled_sample(images_dir: Path, labels_dir: Path, sample: Sample, class_map: dict[str, int], tile_size: tuple[int, int], overlap: float) -> None:
+    """Write overlapping image tiles and clip YOLO labels into each tile."""
+    from PIL import Image
+
+    tile_w, tile_h = tile_size
+    if tile_w <= 0 or tile_h <= 0 or not 0 <= overlap < 1:
+        raise ValueError("tile_size must be positive and overlap must be in [0, 1)")
+    with Image.open(sample.image_path) as image:
+        width, height = image.size
+        step_x, step_y = max(1, round(tile_w * (1 - overlap))), max(1, round(tile_h * (1 - overlap)))
+        x_starts = _tile_starts(width, tile_w, step_x)
+        y_starts = _tile_starts(height, tile_h, step_y)
+        for row, top in enumerate(y_starts):
+            for col, left in enumerate(x_starts):
+                right, bottom = min(left + tile_w, width), min(top + tile_h, height)
+                tile_id = f"{sample.id}_r{row}_c{col}"
+                image.crop((left, top, right, bottom)).save(images_dir / f"{tile_id}.jpg")
+                lines = []
+                for box, label in zip(sample.annotations.boxes, sample.annotations.labels or []):
+                    xmin, ymin, xmax, ymax = box
+                    clipped = [max(xmin, left) - left, max(ymin, top) - top, min(xmax, right) - left, min(ymax, bottom) - top]
+                    if clipped[2] > clipped[0] and clipped[3] > clipped[1] and label in class_map:
+                        lines.append(xyxy_to_yolo_line(clipped, class_map[label], right - left, bottom - top))
+                (labels_dir / f"{tile_id}.txt").write_text("\n".join(lines))
+
+
+def _tile_starts(length: int, tile_length: int, step: int) -> list[int]:
+    if length <= tile_length:
+        return [0]
+    starts = list(range(0, length - tile_length + 1, step))
+    if starts[-1] != length - tile_length:
+        starts.append(length - tile_length)
+    return starts
+
+
 @contextmanager
 def yolo_staging_dir(
     splits: list[Sample] | dict[str, list[Sample]],
     class_map: dict[str, int] | None = None,
     class_names: list[str] | None = None,
     tmp_root: str | None = None,
+    tiling: bool = False,
+    tile_size: tuple[int, int] = (256, 256),
+    overlap: float = 0.25,
 ) -> Iterator[Path]:
     """Stage `splits` as a Darknet/YOLO dataset and yield the `data.yaml` path.
 
@@ -127,7 +168,7 @@ def yolo_staging_dir(
     root = Path(tempfile.mkdtemp(prefix="fdh_yolo_", dir=tmp_root))
     try:
         for split_name, samples in splits.items():
-            _stage_split(root, split_name, samples, resolved_class_map)
+            _stage_split(root, split_name, samples, resolved_class_map, tiling=tiling, tile_size=tile_size, overlap=overlap)
 
         data_yaml = root / "data.yaml"
         names_by_id = {idx: name for name, idx in resolved_class_map.items()}

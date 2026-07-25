@@ -117,18 +117,21 @@ python tools/train_all_models.py
 ```
 
 No `--mode` flag: each model trains with its own config's declared setting
-("few" — 300/100 train/val images, drawn evenly from ZJU-Leaper patterns
-1-4 only). Two other shot modes are available, both widening that to every
-one of the benchmark's 19 patterns:
+("few" — 300/100 train/val images, drawn evenly from its configured
+ZJU-Leaper pattern subset; the YOLO textile recipes use patterns 1-4).
+The mode changes only the sample budget — it does not overwrite an explicit
+`pattern:` list in the config:
 
 ```bash
-python tools/train_all_models.py --mode medium   # every pattern, capped at 150/50 images each (2850/950 total)
-python tools/train_all_models.py --mode full     # every pattern, every image (tens of thousands — slow)
+python tools/train_all_models.py --mode medium   # 150/50 images per configured pattern (600/200 for patterns 1-4)
+python tools/train_all_models.py --mode full     # every image in the configured pattern subset
 ```
 
-"medium" is the practical choice for real cross-texture generalization
-without "full"'s runtime; "full" is there for a from-scratch or final
-run where training time isn't the constraint.
+"medium" is the practical choice for the four-pattern fabric recipes; it
+keeps their intended production-transfer scope while giving each selected
+texture 150/50 train/validation images. "full" is there for a final run when
+training time is not the constraint. Configs that omit `pattern:` retain the
+whole 19-pattern ZJU-Leaper selection (2,850/950 images in medium mode).
 
 This can be significantly slower, especially for Anomalib's PatchCore
 (coreset selection scales with total image count, not just epochs).
@@ -137,7 +140,60 @@ The script continues past a failing model instead of aborting the whole
 batch, and prints a final `OK`/`FAIL` summary — safe to re-run to retry
 only what failed.
 
-## 7. Confirm weights landed in the fixed location
+## 7. Interrupt-safe runs and curves
+
+Give a long run an explicit ID. The runner writes one log per model and
+atomically updates its state after a model starts or ends, so a shutdown does
+not erase the completed-model record:
+
+```bash
+python tools/train_all_models.py --run-id zju-full --mode full
+```
+
+After a restart, continue the same queue. Models already marked successful in
+`artifacts/training_runs/zju-full/state.json` are skipped; an interrupted
+Torchvision model also receives `train.resume=true` and continues from its
+last completed epoch checkpoint when available:
+
+```bash
+python tools/train_all_models.py --run-id zju-full --resume --mode full
+```
+
+Read an individual model's live/previous output at
+`artifacts/training_runs/zju-full/logs/<model-key>.log`. Dinomaly and
+MoECLIP also preserve a per-iteration `history.csv` alongside their stable
+registered artifact. They do not yet preserve optimizer state mid-run, so an
+interrupted Dinomaly/MoECLIP/MambaAD attempt restarts that one model while
+the queue still skips every completed model.
+
+YOLO writes `results.csv` and Torchvision writes `history.csv` at each
+completed epoch. Render all discovered curves as SVG without a separate
+plotting dependency:
+
+```bash
+python tools/plot_training_curves.py runs artifacts/models artifacts/training_runs/zju-full \
+  --output-dir artifacts/training_curves/zju-full
+```
+
+## 8. Weight provenance manifest
+
+Every successful `fdh train` run appends one immutable JSON record to
+`artifacts/models/weight_manifest.jsonl`. The record distinguishes the
+run-specific registered artifact (`artifacts/models/...`) from the optional
+frontend-facing published copy (`artifacts/models/published/...`), and stores
+the resolved config snapshot, source config path, parameter count, metrics,
+file size, model/backend/variant, and batch run ID. The adjacent
+`artifacts/models/records/*.config.json` files are the exact resolved
+configuration snapshots; do not delete them while retaining their manifest
+records.
+
+For example, inspect the most recently appended record:
+
+```bash
+tail -n 1 artifacts/models/weight_manifest.jsonl | python -m json.tool
+```
+
+## 9. Confirm weights landed in the fixed location
 
 ```bash
 ls -la artifacts/models/published/
