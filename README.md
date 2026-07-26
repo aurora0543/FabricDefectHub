@@ -88,10 +88,12 @@ fdh-ui
 Detailed technical specifications and user guides are organized under `docs/`:
 
 - 📐 **[SDK & In-House NN Engine Guide](docs/SDK_AND_NN.md)**: Modular SDK usage and autonomous `fdh.nn` (Feature Hooks, Necks, Heads).
-- 🔬 **[Config Profiles & Loss Guide](docs/RECIPES_AND_LOSSES.md)**: per-model config profiles, AFDLoss, textile augmenter, and hyperparameters.
+- ⚙️ **[Model Configuration](docs/MODEL_CONFIGURATION.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, the loss/augmentation modules one profile wires in, and validating on a held-out dataset.
 - 🚀 **[SDLP Loading & Testing Strategies](docs/SDLP_STRATEGIES.md)**: Sparse ratio sampling (`sparse_ratio`), 4K Sliding-Window Tiling, TTA, and BN Calibration.
 - 📊 **[Benchmark Protocols & LaTeX Generator](docs/BENCHMARK_AND_LATEX.md)**: PRO-Score, LMEI Edge Index calculation, and automated LaTeX table rendering.
 - 🌳 **[Extending FabricDefectHub](docs/EXTENDING.md)**: the dataset/backend availability decision tree (`fdh doctor`), the `--set` tuning window, and how to add a new dataset, backend, or config profile.
+- 🔁 **[Reproduction Card: PatchCore on MVTec-AD](docs/REPRODUCTION_PATCHCORE.md)**: the paper-anchored numbers each `patchcore` run is checked against.
+- ☁️ **[Cloud Training Runbook](docs/cloud_training_runbook.md)**: end-to-end steps for a fresh cloud box — env setup, dataset staging, smoke test, real training, weight provenance.
 
 ---
 

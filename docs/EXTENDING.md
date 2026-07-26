@@ -74,8 +74,9 @@ run and reading a traceback.
 A config profile is a named, paper-anchored bundle of run settings for one
 method — hyperparameters in the *backend's real vocabulary*, plus optional
 loss/augmentation/architecture hooks — fed into a run via
-`load_model(..., recipe="patchcore")`. See `docs/RECIPES_AND_LOSSES.md` for
-the current six profiles and `core/base_recipe.py` for the contract.
+`load_model(..., recipe="patchcore")`. See `docs/MODEL_CONFIGURATION.md` for
+the current six profiles (and the loss/augmentation modules one of them
+wires in) and `core/base_recipe.py` for the contract.
 
 **A profile is not a novel contribution and carries no invented acronym.**
 If you make a genuine, measured architectural change (not just a settings
