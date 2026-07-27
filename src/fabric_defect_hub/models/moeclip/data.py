@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
+from fabric_defect_hub.core.data_adapter import BatchSpec, DataAdapter, Normalization
 from fabric_defect_hub.core.types import Sample
 
 # CLIP's image statistics, as upstream hardcodes them.
@@ -66,7 +67,7 @@ def build_transforms(img_size: int, train: bool):
     return image_transform, mask_transform, joint
 
 
-class SampleDataset:
+class SampleDataset(DataAdapter):
     """A map-style dataset over `Sample`s, yielding the exact dict
     upstream's training/eval loops consume: `image`, `mask`, `label`,
     `file_name`, `class_name`.
@@ -90,15 +91,22 @@ class SampleDataset:
     ):
         import torch
 
+        super().__init__(samples)
         self._torch = torch
-        self.samples = samples
         self.img_size = img_size
         self.class_name_fn = class_name_fn
         self.train = train
         self.transform_x, self.transform_mask, self.joint = build_transforms(img_size, train)
 
-    def __len__(self) -> int:
-        return len(self.samples)
+    def batch_spec(self) -> BatchSpec:
+        return BatchSpec(
+            item_kind="mapping",
+            # CLIP's own image statistics, not ImageNet's -- the distinction
+            # this declaration exists to make explicit.
+            normalization=Normalization(mean=CLIP_MEAN, std=CLIP_STD),
+            mask_semantics="binary_float_1hw",
+            image_size=(self.img_size, self.img_size),
+        )
 
     def __getitem__(self, index: int):
         from PIL import Image

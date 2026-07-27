@@ -1,34 +1,23 @@
-"""Config-driven end-to-end runner for the MambaAD backend. Mirrors
-`models/dinomaly/pipeline.py`'s shape: give it a `MambaADConfig`
-(typically `MambaADConfig.from_yaml("configs/models/mambaad_example.yaml")`)
-and it executes the whole declared lifecycle -- resolve data, train,
-register the trained checkpoint, evaluate -- driven entirely by the
-config file. Export is skipped with a clear error if enabled (see
-`MambaADAdapter.export`).
+"""Config-driven end-to-end runner for the MambaAD backend.
+
+The lifecycle lives in `core.pipeline.BasePipeline`; this file is only what is
+specific to MambaAD. Export raises a clear error if enabled (see
+`MambaADAdapter.export`, and its empty `capabilities().export_targets`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
+from fabric_defect_hub.core.pipeline import AnomalyPipeline, RunResult
 from fabric_defect_hub.core.types import Sample
-from fabric_defect_hub.evaluation.anomaly import AnomalyEvaluator
 from fabric_defect_hub.loader import load_dataset
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact
+from fabric_defect_hub.models.base import Artifact
 from fabric_defect_hub.models.mambaad.adapter import MambaADAdapter
 from fabric_defect_hub.models.mambaad.config import MambaADConfig
 
-
-@dataclass
-class MambaADRunResult:
-    """Everything a config-driven run produced."""
-
-    config: MambaADConfig
-    trained_artifact: Artifact | None = None
-    registered_artifact: Artifact | None = None
-    metrics: dict[str, float] = field(default_factory=dict)
-    exports: list[ExportedArtifact] = field(default_factory=list)
+# The unified result type, under this backend's historical name.
+MambaADRunResult = RunResult
 
 
 def _load_split_samples(config: MambaADConfig, selection: dict[str, Any]) -> list[Sample]:
@@ -36,46 +25,35 @@ def _load_split_samples(config: MambaADConfig, selection: dict[str, Any]) -> lis
     return dataset.load_samples()
 
 
-def run_from_config(config: MambaADConfig) -> MambaADRunResult:
-    """Execute the lifecycle declared in `config`."""
+class MambaADPipeline(AnomalyPipeline):
+    """`MambaADConfig` -> a full train / evaluate run."""
 
-    config.validate()
-    adapter = MambaADAdapter(name=config.model.name)
-    result = MambaADRunResult(config=config)
+    def build_adapter(self) -> MambaADAdapter:
+        return MambaADAdapter(name=self.config.model.name)
 
-    test_samples = _load_split_samples(config, config.data.test_selection)
+    def prepare(self) -> None:
+        self.test_samples = _load_split_samples(self.config, self.config.data.test_selection)
 
-    # --- Training -------------------------------------------------------
-    if config.train.enabled:
+    def load_existing_artifact(self, adapter: MambaADAdapter) -> Artifact | None:
+        # No training: load the configured checkpoint so validation can run.
+        if self.config.model.weights:
+            return adapter.load_trained_model(self.config.model.weights)
+        return None
+
+    def build_train_config(self) -> dict[str, Any]:
+        config = self.config
         train_config: dict[str, Any] = config.resolved_train_kwargs()
         train_config["train_samples"] = _load_split_samples(config, config.data.train_selection)
-
-        result.trained_artifact = adapter.train(train_config)
-        result.registered_artifact = adapter.register_trained_model(
-            result.trained_artifact, registry_dir=config.checkpoint.registry_dir
-        )
-
-    active_artifact = result.registered_artifact or result.trained_artifact
-
-    # --- Validation (predict + AnomalyEvaluator) -------------------------
-    if config.val.enabled and active_artifact is not None and test_samples:
-        predictions = adapter.predict(test_samples, active_artifact, output_dir=config.val.output_dir)
-        evaluator = AnomalyEvaluator(
-            max_pixels=config.val.max_pixels,
-            max_aupro_images=config.val.max_aupro_images,
-            seed=config.val.seed,
-        )
-        result.metrics = evaluator.evaluate(test_samples, predictions)
-
-    # --- Export -----------------------------------------------------------
-    if config.export.enabled and config.export.formats and active_artifact is not None:
-        for fmt in config.export.formats:
-            result.exports.append(adapter.export(active_artifact, fmt))
-
-    return result
+        return train_config
 
 
-def run_from_yaml(path: str) -> MambaADRunResult:
+def run_from_config(config: MambaADConfig) -> RunResult:
+    """Execute the lifecycle declared in `config`."""
+
+    return MambaADPipeline(config).run()
+
+
+def run_from_yaml(path: str) -> RunResult:
     """Convenience wrapper: load a YAML config and run it."""
 
     return run_from_config(MambaADConfig.from_yaml(path))

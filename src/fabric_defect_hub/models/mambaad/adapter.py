@@ -75,9 +75,10 @@ from typing import Any
 import torch.nn.functional as F
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.model_statistics import parameter_counts
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.models.mambaad import presets
 from fabric_defect_hub.models.mambaad.data import ImageOnlyDataset
 
@@ -272,7 +273,30 @@ class MambaADAdapter(ModelAdapter):
     # ------------------------------------------------------------------ #
     # Train
     # ------------------------------------------------------------------ #
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> this backend's real key (upstream's
+    # schedule is iteration-based, so `max_iters` maps to `total_iters`).
+    TRAIN_CONFIG_KEYS = {
+        "max_iters": "total_iters",
+        "lr": "lr",
+        "batch_size": "batch_size",
+        "image_size": "image_size",
+        "device": "device",
+        "num_workers": "num_workers",
+        "work_dir": "work_dir",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            tasks=("anomaly",),
+            prediction_fields=("anomaly_score", "anomaly_map"),
+            required_annotations=(),
+            # See `export()`: the multi-directional selective scan has not been
+            # verified to trace.
+            export_targets=(),
+            supports_amp=False,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """One-class training loop: minimize `_reconstruction_loss`
         (upstream's MSE-based `L2Loss`) between the frozen teacher's
         features and the trainable fusion+decoder's reconstruction of
@@ -301,6 +325,11 @@ class MambaADAdapter(ModelAdapter):
         ZJU-Leaper's full 19 patterns is using it as intended, not a
         shortcut -- see `presets.DEFAULT_TRAIN_KWARGS`' comment.
         """
+
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         import torch
         from torch.utils.data import DataLoader
@@ -400,7 +429,11 @@ class MambaADAdapter(ModelAdapter):
     # Predict
     # ------------------------------------------------------------------ #
     def predict(
-        self, samples: list[Sample], artifact: Artifact, output_dir: str | None = None
+        self,
+        samples: list[Sample],
+        artifact: Artifact | None = None,
+        output_dir: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Loads the checkpoint and scores each sample with the same
         per-level cosine-distance map training minimizes -- higher
@@ -452,7 +485,9 @@ class MambaADAdapter(ModelAdapter):
                 )
         return predictions
 
-    def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
+    def export(
+        self, artifact: Artifact, target: str, config: dict[str, Any] | None = None
+    ) -> ExportedArtifact:
         raise NotImplementedError(
             "MambaAD export is not implemented: the multi-directional selective scan "
             "(SS2D.forward_core) loops over scan directions and uses index-tensor "

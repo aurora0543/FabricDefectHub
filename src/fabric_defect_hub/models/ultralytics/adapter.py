@@ -33,10 +33,11 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.yolo_bbox import yolo_staging_dir
 from fabric_defect_hub.model_statistics import parameter_counts
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.models.ultralytics.presets import resolve_variant, variant_weights
 
 # Ultralytics DetMetrics.results_dict keys (ultralytics 8.4.x), normalised to
@@ -138,7 +139,32 @@ class UltralyticsAdapter(ModelAdapter):
     # ------------------------------------------------------------------ #
     # Training
     # ------------------------------------------------------------------ #
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> Ultralytics' real `YOLO.train` argument
+    # name. Ultralytics has no separate iteration budget, so `max_iters` has no
+    # entry and is dropped rather than mistranslated.
+    TRAIN_CONFIG_KEYS = {
+        "epochs": "epochs",
+        "lr": "lr0",
+        "batch_size": "batch",
+        "image_size": "imgsz",
+        "device": "device",
+        "seed": "seed",
+        "num_workers": "workers",
+        "work_dir": "project",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            tasks=("detection",),
+            prediction_fields=("boxes", "labels", "scores"),
+            required_annotations=("boxes", "labels"),
+            # `YOLO.export(format=...)` values verified against ultralytics 8.4.x.
+            export_targets=("onnx", "engine", "torchscript", "openvino", "coreml", "tflite", "paddle", "ncnn"),
+            # Ultralytics' trainer takes a real `amp` argument (default True).
+            supports_amp=True,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """Run a full training job and return an `Artifact` pointing at the
         resulting `best.pt`.
 
@@ -157,6 +183,11 @@ class UltralyticsAdapter(ModelAdapter):
         (e.g. epochs, imgsz, batch, lr0, project, name, resume). On success
         the trained model is left loaded in this adapter.
         """
+
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         cfg = dict(config)
         samples = cfg.pop("samples", None)
@@ -306,13 +337,16 @@ class UltralyticsAdapter(ModelAdapter):
         self,
         samples: list[Sample],
         artifact: Artifact | None = None,
+        output_dir: str | None = None,
         config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Run inference over `samples`, returning one unified `Prediction`
         each (`boxes` as pixel xyxy, `labels`, `scores`).
 
-        `config` overrides inference defaults (conf, iou, imgsz, max_det,
-        device, augment, ...). If `artifact` is given its weights are loaded
+        `output_dir` is part of the uniform `ModelAdapter.predict` signature
+        and unused here: a detector's output is boxes, not per-sample image
+        files. `config` overrides inference defaults (conf, iou, imgsz,
+        max_det, device, augment, ...). If `artifact` is given its weights are loaded
         first; otherwise whatever is currently loaded (or the variant's
         pretrained checkpoint) is used.
         """

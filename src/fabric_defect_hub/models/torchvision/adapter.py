@@ -32,9 +32,10 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.model_statistics import parameter_counts
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.models.torchvision.dataset import (
     SampleDetectionDataset,
     SampleSegmentationDataset,
@@ -47,6 +48,7 @@ from fabric_defect_hub.models.torchvision.presets import (
     build_transforms,
     resolve_variant,
     uses_masks,
+    variant_task,
 )
 
 
@@ -194,7 +196,57 @@ class TorchvisionAdapter(ModelAdapter):
     # ------------------------------------------------------------------ #
     # Training
     # ------------------------------------------------------------------ #
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> this backend's real key. No
+    # `image_size` entry: torchvision detection resizes internally via
+    # `min_size`/`max_size`, which is not one number (pass them through
+    # `backend_specific`).
+    TRAIN_CONFIG_KEYS = {
+        "epochs": "epochs",
+        "lr": "lr",
+        "batch_size": "batch_size",
+        "device": "device",
+        "seed": "seed",
+        "num_workers": "num_workers",
+        "work_dir": "run_dir",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        """Variant-dependent: the same adapter is a detector as
+        `fasterrcnn_resnet50_fpn`, an instance segmenter as
+        `maskrcnn_resnet50_fpn`, and a semantic segmenter as
+        `unetplusplus_resnet34`.
+        """
+
+        task = variant_task(self.name)
+        if task == "detect":
+            return ModelCapabilities(
+                tasks=("detection",),
+                prediction_fields=("boxes", "labels", "scores"),
+                required_annotations=("boxes", "labels"),
+                export_targets=("exported_program", "torchscript", "onnx"),
+                # `engine.run_training` wraps the forward in `torch.autocast`
+                # with a `GradScaler`; resolved to False off CUDA.
+                supports_amp=True,
+            )
+        if task == "instance_segmentation":
+            return ModelCapabilities(
+                tasks=("instance_segmentation",),
+                prediction_fields=("boxes", "labels", "scores", "masks"),
+                required_annotations=("masks", "labels"),
+                export_targets=("exported_program", "torchscript", "onnx"),
+                # `engine.run_training` wraps the forward in `torch.autocast`
+                # with a `GradScaler`; resolved to False off CUDA.
+                supports_amp=True,
+            )
+        return ModelCapabilities(
+            tasks=("segmentation",),
+            prediction_fields=("masks", "labels", "scores"),
+            required_annotations=("masks",),
+            export_targets=("exported_program", "torchscript", "onnx"),
+            supports_amp=True,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """Run a full fine-tuning job and return an `Artifact` pointing at
         the best (by validation mAP) checkpoint.
 
@@ -210,6 +262,11 @@ class TorchvisionAdapter(ModelAdapter):
             `warmup_epochs`, `grad_clip_norm`, `patience`, `num_workers`,
             `device`, `seed`, `amp`, `resume`, `run_dir`, `save_every_epoch`.
         """
+
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         from torch.utils.data import DataLoader
 
@@ -499,9 +556,12 @@ class TorchvisionAdapter(ModelAdapter):
         self,
         samples: list[Sample],
         artifact: Artifact | None = None,
+        output_dir: str | None = None,
         config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
-        """Run inference over `samples`. `config` overrides `score_threshold`
+        """Run inference over `samples`. `output_dir` is part of the uniform
+        `ModelAdapter.predict` signature and unused here: box/mask output goes
+        into the returned `Prediction`s, not to disk. `config` overrides `score_threshold`
         (default 0.5), `max_detections` (default 100), `nms_iou_threshold`
         (None = rely solely on the model's own built-in per-class NMS at its
         default IoU; a value applies one more class-aware NMS pass on top,

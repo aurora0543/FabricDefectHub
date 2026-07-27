@@ -72,6 +72,13 @@ class ModelSpec:
     # rebuild-the-model metadata. See `MoECLIPAdapter`'s class docstring.
     prompt_class: str | None = None
     prompts: dict[str, str] = field(default_factory=dict)
+    # Path to a checkpoint produced by a previous run
+    # (`register_trained_model`'s output). Only consulted when
+    # `train.enabled` is false — it is what makes "evaluate an existing
+    # checkpoint" a runnable config rather than a run that silently does
+    # nothing. The architecture knobs above must match the ones the
+    # checkpoint was trained with, or `load_state_dict` fails the shape check.
+    weights: str | None = None
 
     def validate(self) -> None:
         resolve_model_name(self.name)  # raises KeyError with a helpful list

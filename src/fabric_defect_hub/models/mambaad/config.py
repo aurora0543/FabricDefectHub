@@ -24,9 +24,16 @@ class ModelSpec:
 
     name: an encoder preset key, 'resnet34' (default, upstream's flagship
         recipe) or 'wide_resnet50_2'. See `presets.ENCODER_PRESETS`.
+    weights: path to a checkpoint produced by a previous run
+        (`register_trained_model`'s output). Only consulted when
+        `train.enabled` is false — it is what makes "evaluate an existing
+        checkpoint" a runnable config rather than a run that silently does
+        nothing. The checkpoint must have been trained with this `name`'s
+        encoder; a mismatch fails the `load_state_dict` shape check.
     """
 
     name: str = "resnet34"
+    weights: str | None = None
 
     def validate(self) -> None:
         resolve_encoder_name(self.name)  # raises KeyError with a helpful list

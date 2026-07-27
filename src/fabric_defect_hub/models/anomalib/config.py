@@ -51,6 +51,16 @@ class ModelSpec:
         'SuperSimpleNet', 'PaDiM' — case-insensitive) or the literal
         anomalib class name ('Patchcore', 'ReverseDistillation', ...). See
         `presets.list_supported_models()` for the full set.
+    weights: path to a checkpoint produced by a previous run
+        (`register_trained_model`'s output). Only consulted when
+        `train.enabled` is false — it is what makes "evaluate an existing
+        checkpoint" a runnable config rather than a run that silently does
+        nothing.
+    allow_unsafe_checkpoint: required alongside `weights`. A Lightning
+        checkpoint is a pickle and can deserialize arbitrary Python objects,
+        so `AnomalibAdapter.load_trained_model` refuses a bare path without
+        an explicit opt-in. Keeping that opt-in visible in the config is the
+        point — do not set it for a checkpoint you did not produce.
     """
 
     name: str = "PatchCore"
@@ -58,9 +68,18 @@ class ModelSpec:
     recipe: str | None = None
     loss_fn: str | None = None
     task: str | None = None
+    weights: str | None = None
+    allow_unsafe_checkpoint: bool = False
 
     def validate(self) -> None:
         resolve_model_class_name(self.name)  # raises KeyError with a helpful list
+        if self.weights and not self.allow_unsafe_checkpoint:
+            raise ValueError(
+                "ModelSpec: loading model.weights requires "
+                "model.allow_unsafe_checkpoint: true — an anomalib checkpoint is a "
+                "Lightning pickle and can execute arbitrary code on load. Set it only "
+                "for a checkpoint you produced yourself."
+            )
 
 
 @dataclass

@@ -13,7 +13,7 @@ from fabric_defect_hub.loader import (
     load_model,
     run_experiment,
 )
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.profiling.base import BackendProfiler, ProfileConfig
 from fabric_defect_hub.profiling.power import PowerCapability, PowerReport
 from fabric_defect_hub.core.types import Prediction
@@ -39,13 +39,20 @@ class FakeModel(ModelAdapter):
     name = "fake-model"
     backend = "fake-backend"
 
+    def capabilities(self):
+        return ModelCapabilities(
+            tasks=("detection",),
+            prediction_fields=("boxes", "labels", "scores"),
+            export_targets=("onnx",),
+        )
+
     def train(self, config):
         return Artifact(path="fake.pt", backend=self.backend)
 
-    def predict(self, samples, artifact):
+    def predict(self, samples, artifact=None, output_dir=None, config=None):
         return [Prediction(sample_id=s.id, boxes=[[121, 66, 236, 178]], labels=["broken_end"], scores=[0.9]) for s in samples]
 
-    def export(self, artifact, target):
+    def export(self, artifact, target, config=None):
         return ExportedArtifact(path=f"fake.{target}", target=target)
 
 

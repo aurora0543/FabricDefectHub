@@ -22,7 +22,7 @@ import torch.nn as nn
 from fabric_defect_hub.core.registry import register_dataset, register_model
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
 from fabric_defect_hub.datasets.base import DatasetAdapter
-from fabric_defect_hub.models.base import ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.web import benchmark as web_benchmark
 
 MODEL_LABEL = "Fake Model"
@@ -52,10 +52,17 @@ class _FakeWebBenchModel(ModelAdapter):
     name = "fake-backend-webbench-model"
     backend = "fake-backend-webbench"
 
+    def capabilities(self):
+        return ModelCapabilities(
+            tasks=("anomaly",),
+            prediction_fields=("anomaly_score",),
+            export_targets=("torchscript",),
+        )
+
     def train(self, config):
         return None
 
-    def predict(self, samples, artifact):
+    def predict(self, samples, artifact=None, output_dir=None, config=None):
         return [Prediction(sample_id=s.id, anomaly_score=0.9) for s in samples]
 
     def raw_module(self):
@@ -65,7 +72,7 @@ class _FakeWebBenchModel(ModelAdapter):
         # _adds_flops_and_lmei.
         return nn.Conv2d(3, 4, 3, bias=False)
 
-    def export(self, artifact, target):
+    def export(self, artifact, target, config=None):
         assert target == "torchscript"
         fd, path = tempfile.mkstemp(suffix=f".{target}")
         os.close(fd)

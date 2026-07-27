@@ -1,42 +1,29 @@
-"""Config-driven end-to-end runner for the Anomalib backend. Mirrors
-`models/ultralytics/pipeline.py`/`models/torchvision/pipeline.py`'s overall
-shape: give it an `AnomalibConfig` (typically `AnomalibConfig.from_yaml(
-"configs/models/anomalib_*.yaml")`) and it executes the whole declared
-lifecycle — resolve data, train, register the trained model, evaluate,
-export — driven entirely by the config file.
+"""Config-driven end-to-end runner for the Anomalib backend.
 
-One real divergence from the other two pipelines (see `config.py`'s module
-docstring for the other): there is no backend-native `.validate()` here.
-`AnomalibAdapter` only trains and predicts; scoring is `evaluation.anomaly
-.AnomalyEvaluator`'s job, same as it would be for any other caller of
-`predict()`. So this pipeline's "validation" step is
-`adapter.predict(...)` followed by `AnomalyEvaluator(...).evaluate(...)` —
-wiring together two things that, for Ultralytics/torchvision, the backend
-itself already does in one native call.
+The lifecycle itself lives in `core.pipeline.BasePipeline`; this file is only
+what is specific to anomalib: how the adapter is built, how a train config is
+assembled from `AnomalibConfig`, and which data mode yields `Sample` objects.
+
+One real divergence from the Ultralytics/torchvision pipelines (see
+`config.py`'s module docstring for the other): there is no backend-native
+`.validate()` here. `AnomalibAdapter` only trains and predicts; scoring is
+`evaluation.anomaly.AnomalyEvaluator`'s job, same as it would be for any other
+caller of `predict()` — which is exactly what `AnomalyPipeline` provides.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
+from fabric_defect_hub.core.pipeline import AnomalyPipeline, RunResult
 from fabric_defect_hub.core.types import Sample
-from fabric_defect_hub.evaluation.anomaly import AnomalyEvaluator
 from fabric_defect_hub.loader import load_dataset
+from fabric_defect_hub.models.base import Artifact
 from fabric_defect_hub.models.anomalib.adapter import AnomalibAdapter
 from fabric_defect_hub.models.anomalib.config import AnomalibConfig
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact
 
-
-@dataclass
-class AnomalibRunResult:
-    """Everything a config-driven run produced."""
-
-    config: AnomalibConfig
-    trained_artifact: Artifact | None = None
-    registered_artifact: Artifact | None = None
-    metrics: dict[str, float] = field(default_factory=dict)
-    exports: list[ExportedArtifact] = field(default_factory=list)
+# The unified result type, under this backend's historical name.
+AnomalibRunResult = RunResult
 
 
 def _load_split_samples(config: AnomalibConfig, selection: dict[str, Any]) -> list[Sample]:
@@ -44,19 +31,35 @@ def _load_split_samples(config: AnomalibConfig, selection: dict[str, Any]) -> li
     return dataset.load_samples()
 
 
-def run_from_config(config: AnomalibConfig) -> AnomalibRunResult:
-    """Execute the lifecycle declared in `config`."""
+class AnomalibPipeline(AnomalyPipeline):
+    """`AnomalibConfig` -> a full train / evaluate / export run."""
 
-    config.validate()
-    adapter = AnomalibAdapter(name=config.model.name)
-    result = AnomalibRunResult(config=config)
+    def build_adapter(self) -> AnomalibAdapter:
+        return AnomalibAdapter(name=self.config.model.name)
 
-    test_samples: list[Sample] | None = None
-    if config.data.uses_adapter():
-        test_samples = _load_split_samples(config, config.data.test_selection)
+    def prepare(self) -> None:
+        # Only `data.dataset` mode produces `Sample` objects. In
+        # `data.datamodule_kwargs` mode anomalib's `Folder` is pointed at an
+        # existing on-disk dataset, and `AnomalyEvaluator` — which is
+        # `Sample`/`Prediction`-only, not `Folder`-aware — has nothing to
+        # score against, so validation yields no metrics rather than a guess.
+        if self.config.data.uses_adapter():
+            self.test_samples = _load_split_samples(self.config, self.config.data.test_selection)
 
-    # --- Training -------------------------------------------------------
-    if config.train.enabled:
+    def load_existing_artifact(self, adapter: AnomalibAdapter) -> Artifact | None:
+        # No training: load the configured checkpoint so validation can run.
+        # `allow_unsafe_checkpoint` is required by the config (see
+        # `ModelSpec.validate`) and forwarded explicitly rather than defaulted,
+        # so the opt-in stays visible at the call site too.
+        model = self.config.model
+        if model.weights:
+            return adapter.load_trained_model(
+                model.weights, allow_unsafe_checkpoint=model.allow_unsafe_checkpoint
+            )
+        return None
+
+    def build_train_config(self) -> dict[str, Any]:
+        config = self.config
         train_config: dict[str, Any] = {
             "model_kwargs": config.resolved_model_kwargs(),
             "engine_kwargs": config.resolved_engine_kwargs(),
@@ -64,42 +67,19 @@ def run_from_config(config: AnomalibConfig) -> AnomalibRunResult:
         }
         if config.data.uses_adapter():
             train_config["train_samples"] = _load_split_samples(config, config.data.train_selection)
-            train_config["test_samples"] = test_samples
+            train_config["test_samples"] = self.test_samples
         else:
             train_config["datamodule_kwargs"] = config.data.datamodule_kwargs
-
-        result.trained_artifact = adapter.train(train_config)
-        result.registered_artifact = adapter.register_trained_model(
-            result.trained_artifact, registry_dir=config.checkpoint.registry_dir
-        )
-
-    active_artifact = result.registered_artifact or result.trained_artifact
-
-    # --- Validation (predict + AnomalyEvaluator; see module docstring) --
-    # Only runs when `data.dataset` was used (i.e. we have a `Sample` list
-    # to evaluate against). `data.datamodule_kwargs` mode points anomalib's
-    # `Folder` at an existing on-disk dataset with no corresponding `Sample`
-    # objects, so `AnomalyEvaluator` — which is `Sample`/`Prediction`-only,
-    # not `Folder`-aware — has nothing to score against; validation is
-    # silently skipped rather than guessed at in that mode.
-    if config.val.enabled and active_artifact is not None and test_samples is not None:
-        predictions = adapter.predict(test_samples, active_artifact, output_dir=config.val.output_dir)
-        evaluator = AnomalyEvaluator(
-            max_pixels=config.val.max_pixels,
-            max_aupro_images=config.val.max_aupro_images,
-            seed=config.val.seed,
-        )
-        result.metrics = evaluator.evaluate(test_samples, predictions)
-
-    # --- Export -----------------------------------------------------------
-    if config.export.enabled and config.export.formats and active_artifact is not None:
-        for fmt in config.export.formats:
-            result.exports.append(adapter.export(active_artifact, fmt))
-
-    return result
+        return train_config
 
 
-def run_from_yaml(path: str) -> AnomalibRunResult:
+def run_from_config(config: AnomalibConfig) -> RunResult:
+    """Execute the lifecycle declared in `config`."""
+
+    return AnomalibPipeline(config).run()
+
+
+def run_from_yaml(path: str) -> RunResult:
     """Convenience wrapper: load a YAML config and run it."""
 
     return run_from_config(AnomalibConfig.from_yaml(path))

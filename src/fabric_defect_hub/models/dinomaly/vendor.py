@@ -1,30 +1,56 @@
-"""Bootstraps imports from the vendored `components/dinomaly` checkout.
+"""The vendored `components/dinomaly` checkout, imported in isolation.
 
 Dinomaly ships as flat top-level modules (`models.uad`, `dinov1`, `dinov2`,
 `beit`, `optimizers`, `utils`, `dataset`) meant to be run from its own repo
-root, not as an installable package -- there is no `pip install dinomaly`.
-Rather than editing its source to add a package prefix, we add
-`components/dinomaly` to `sys.path` and import it by its native module
-names. See `components/README.md` for the general vendoring convention and
-the resulting name-collision caveat (`utils`, `dataset`, `models` are
-generic names that occupy `sys.modules` once imported).
+root; there is no `pip install dinomaly`. This module used to just append the
+checkout to `sys.path` permanently and let the adapter `from utils import ...`
+— which left `utils`, `dataset` and `models` occupied process-wide by
+Dinomaly's versions. MoECLIP vendors modules under the same generic names, and
+the Benchmark tab runs both in one process, so whichever loaded first won.
+
+`core.vendor.VendoredRepo` now imports the checkout inside a window and takes
+its modules back out of `sys.modules` afterwards. See that module for the
+mechanism and its one assumption. This file is the only place in the project
+allowed to name Dinomaly's upstream modules.
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+from types import ModuleType
 
-_VENDOR_ROOT = Path(__file__).resolve().parents[4] / "components" / "dinomaly"
+from fabric_defect_hub.core.vendor import VendoredRepo
+
+_REPO = VendoredRepo(
+    name="Dinomaly",
+    directory="dinomaly",
+    # Every top-level name the checkout occupies, including ones pulled in
+    # transitively (`models.vit_encoder` imports `dinov2`/`beit`).
+    owned_roots=("utils", "dataset", "models", "optimizers", "dinov1", "dinov2", "beit"),
+    entry_modules=(
+        "utils",
+        "dataset",
+        "optimizers",
+        "dinov1.utils",
+        "models",
+        "models.vit_encoder",
+        "models.uad",
+        "models.vision_transformer",
+    ),
+    missing_hint=(
+        "Expected the unmodified upstream repo under components/dinomaly "
+        "(see components/README.md)."
+    ),
+)
 
 
-def ensure_on_path() -> None:
-    if not _VENDOR_ROOT.is_dir():
-        raise FileNotFoundError(
-            f"Dinomaly vendor checkout not found at {_VENDOR_ROOT}. "
-            "Expected the unmodified upstream repo under components/dinomaly "
-            "(see components/README.md)."
-        )
-    path_str = str(_VENDOR_ROOT)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
+def vendor_root() -> Path:
+    return _REPO.root
+
+
+def import_vendor() -> dict[str, ModuleType]:
+    """Import (once) and return Dinomaly's vendored modules by name, e.g.
+    `import_vendor()["models.uad"].ViTill`.
+    """
+
+    return _REPO.modules()

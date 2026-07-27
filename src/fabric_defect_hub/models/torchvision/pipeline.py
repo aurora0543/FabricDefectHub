@@ -1,31 +1,27 @@
 """Config-driven end-to-end runner for the torchvision detection backend.
-Mirrors `models/ultralytics/pipeline.py`: give it a `TorchvisionConfig`
-(typically `TorchvisionConfig.from_yaml("configs/models/torchvision_*.yaml")`)
-and it executes the whole declared lifecycle — resolve data via the
-configured `DatasetAdapter`, train, validate, register the trained model,
-export — driven entirely by the config file, no command-line flags.
+
+Give it a `TorchvisionConfig` (typically
+`TorchvisionConfig.from_yaml("configs/models/torchvision_*.yaml")`) and it
+executes the whole declared lifecycle — resolve data via the configured
+`DatasetAdapter`, train, validate, register the trained model, export — driven
+entirely by the config file, no command-line flags.
+
+The lifecycle order lives in `core.pipeline.BasePipeline`; this file is only
+what is specific to torchvision.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
+from fabric_defect_hub.core.pipeline import BasePipeline, RunResult
 from fabric_defect_hub.core.types import Sample
 from fabric_defect_hub.loader import load_dataset
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact
+from fabric_defect_hub.models.base import Artifact
 from fabric_defect_hub.models.torchvision.config import TorchvisionConfig
 
-
-@dataclass
-class TorchvisionRunResult:
-    """Everything a config-driven run produced."""
-
-    config: TorchvisionConfig
-    trained_artifact: Artifact | None = None
-    registered_artifact: Artifact | None = None
-    metrics: dict[str, float] = field(default_factory=dict)
-    exports: list[ExportedArtifact] = field(default_factory=list)
+# The unified result type, under this backend's historical name.
+TorchvisionRunResult = RunResult
 
 
 def _load_split_samples(config: TorchvisionConfig, selection: dict[str, Any]) -> list[Sample]:
@@ -33,29 +29,39 @@ def _load_split_samples(config: TorchvisionConfig, selection: dict[str, Any]) ->
     return dataset.load_samples()
 
 
-def run_from_config(config: TorchvisionConfig, adapter_factory=None) -> TorchvisionRunResult:
-    """Execute the lifecycle declared in `config`."""
+class TorchvisionPipeline(BasePipeline):
+    """`TorchvisionConfig` -> a full train / validate / export run.
 
-    config.validate()
-    if adapter_factory is None:
-        from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
+    `adapter_factory` exists so tests can drive the whole lifecycle against a
+    stand-in adapter without importing torchvision.
+    """
 
-        adapter_factory = TorchvisionAdapter
-    adapter = adapter_factory(name=config.model.variant)
-    result = TorchvisionRunResult(config=config)
+    def __init__(self, config: TorchvisionConfig, adapter_factory=None):
+        super().__init__(config)
+        self.adapter_factory = adapter_factory
 
-    train_samples = _load_split_samples(config, config.data.train_selection)
-    val_samples = (
-        _load_split_samples(config, config.data.val_selection)
-        if config.data.val_selection
-        else train_samples
-    )
+    def build_adapter(self):
+        factory = self.adapter_factory
+        if factory is None:
+            from fabric_defect_hub.models.torchvision.adapter import TorchvisionAdapter
 
-    # --- Training -------------------------------------------------------
-    if config.train.enabled:
+            factory = TorchvisionAdapter
+        return factory(name=self.config.model.variant)
+
+    def prepare(self) -> None:
+        config = self.config
+        self.train_samples = _load_split_samples(config, config.data.train_selection)
+        self.val_samples = (
+            _load_split_samples(config, config.data.val_selection)
+            if config.data.val_selection
+            else self.train_samples
+        )
+
+    def build_train_config(self) -> dict[str, Any]:
+        config = self.config
         train_config: dict[str, Any] = dict(config.resolved_train_kwargs())
-        train_config["train_samples"] = train_samples
-        train_config["val_samples"] = val_samples
+        train_config["train_samples"] = self.train_samples
+        train_config["val_samples"] = self.val_samples
         train_config["class_names"] = config.data.class_names
         train_config["pretrained"] = config.model.pretrained
         train_config["offline"] = config.model.offline
@@ -75,33 +81,32 @@ def run_from_config(config: TorchvisionConfig, adapter_factory=None) -> Torchvis
             train_config["resume"] = True
         if config.model.weights:
             train_config["weights"] = config.model.weights
+        return train_config
 
-        result.trained_artifact = adapter.train(train_config)
-        result.registered_artifact = adapter.register_trained_model(
-            result.trained_artifact, registry_dir=config.checkpoint.registry_dir
-        )
-    elif config.model.weights:
-        result.trained_artifact = adapter.load_trained_model(config.model.weights)
+    def load_existing_artifact(self, adapter) -> Artifact | None:
+        if self.config.model.weights:
+            return adapter.load_trained_model(self.config.model.weights)
+        return None
 
-    active_artifact = result.registered_artifact or result.trained_artifact
-
-    # --- Validation -------------------------------------------------------
-    if config.val.enabled and active_artifact is not None:
-        val_kwargs = {"batch_size": config.val.batch_size, "num_workers": config.val.num_workers}
+    def evaluate(self, adapter, artifact: Artifact) -> dict[str, float]:
+        val_kwargs = {
+            "batch_size": self.config.val.batch_size,
+            "num_workers": self.config.val.num_workers,
+        }
         val_kwargs = {k: v for k, v in val_kwargs.items() if v is not None}
-        result.metrics = adapter.validate(val_samples, active_artifact, val_kwargs)
+        return adapter.validate(self.val_samples, artifact, val_kwargs)
 
-    # --- Export -------------------------------------------------------
-    if config.export.enabled and config.export.formats and active_artifact is not None:
-        for fmt in config.export.formats:
-            result.exports.append(
-                adapter.export(active_artifact, fmt, config={"opset": config.export.opset})
-            )
-
-    return result
+    def export_config(self, fmt: str) -> dict[str, Any]:
+        return {"opset": self.config.export.opset}
 
 
-def run_from_yaml(path: str) -> TorchvisionRunResult:
+def run_from_config(config: TorchvisionConfig, adapter_factory=None) -> RunResult:
+    """Execute the lifecycle declared in `config`."""
+
+    return TorchvisionPipeline(config, adapter_factory=adapter_factory).run()
+
+
+def run_from_yaml(path: str) -> RunResult:
     """Convenience wrapper: load a YAML config and run it."""
 
     return run_from_config(TorchvisionConfig.from_yaml(path))

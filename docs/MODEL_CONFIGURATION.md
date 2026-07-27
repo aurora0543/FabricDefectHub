@@ -78,6 +78,26 @@ Profile **只能提供设置**，不能改 loss、不能改结构、不能改增
 
 每个后端只会吸收 profile 里"训练器安全"的那部分参数（`recipes.recipe_trainer_overrides(...)`）：`lr0`/`momentum` 这类真实训练器参数会传进去，而模型构造参数（如 `backbone`）和命名不同的 loss 权重（`box_loss_weight`，Ultralytics 里叫 `box`）不会泄漏进 `train(**kwargs)`。调用方显式传的值总是优先于 profile。六个 profile 目前都已核对为各自后端的真实参数名（`tests/test_recipe_reconciliation.py` 会钉死每个 profile 对应后端的已验证默认值，防止再退化回发明出来的参数）；尚未做完的是真正跑一遍论文数据集复现、填上结果表（见 `docs/REPRODUCTION_PATCHCORE.md`）——设置是对的，GPU 跑分还没跑完。
 
+## 只验证、不训练（`model.weights`）
+
+六个后端的 `model` 段现在都有 `weights` 字段。配合 `train.enabled: false`，一份配置就能表达"拿昨天训好的 checkpoint 再跑一遍验证/导出"：
+
+```yaml
+model:
+  name: dinov2reg_vit_base_14
+  weights: artifacts/models/published/Dinomaly.pt
+train:
+  enabled: false
+val:
+  enabled: true
+```
+
+anomalib 多一个必填的显式开关 `model.allow_unsafe_checkpoint: true`——它的 checkpoint 是 Lightning pickle，加载会执行任意 Python 代码，所以适配器一直要求显式确认，配置只是把这个确认摆到明面上。只对自己产出的 checkpoint 打开它。
+
+checkpoint 必须与 `model` 段其余字段匹配（Dinomaly/MambaAD 的 encoder、MoECLIP 的架构参数），否则 `load_state_dict` 会因形状不符而失败。
+
+**`train.enabled: false` 又没给 `weights`，但开了 `val`/`export` 的配置会直接报错**（`core/pipeline.py`）。这个组合以前是静默返回空结果——四个异常检测后端此前甚至连 `weights` 字段都没有，也就是说这类配置在任何写法下都跑不出东西，而且不报错。
+
 ## 用较小数据集做验证
 
 `tilda-400`、`fabric-defects` 已注册（见 `core/dataset_capabilities.py`）、有默认路径（`data/TILDA_400`、`data/Fabric Defects Dataset`），也已经出现在 Web UI 的 Benchmark 页面数据集下拉框里——训练仍然用 ZJU-Leaper（或 `fabric-train` 联合数据集），这两个数据集专门用来在训练域之外验证已训练好的权重。

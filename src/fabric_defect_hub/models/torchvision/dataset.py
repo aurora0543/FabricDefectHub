@@ -29,6 +29,7 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from fabric_defect_hub.core.data_adapter import BatchSpec, DataAdapter
 from fabric_defect_hub.core.types import Sample
 
 
@@ -48,7 +49,7 @@ def build_class_map(samples: list[Sample], class_names: list[str] | None = None)
     return {name: idx + 1 for idx, name in enumerate(sorted(labels))} or {"defect": 1}
 
 
-class SampleDetectionDataset(Dataset):
+class SampleDetectionDataset(DataAdapter, Dataset):
     """`Sample` list -> (image_tensor, target_dict) for torchvision detection models.
 
     `with_masks=True` also populates `target["masks"]` from
@@ -70,13 +71,24 @@ class SampleDetectionDataset(Dataset):
         with_masks: bool = False,
         transforms=None,
     ):
-        self.samples = samples
+        super().__init__(samples)
         self.class_map = class_map or build_class_map(samples)
         self.with_masks = with_masks
         self.transforms = transforms
 
-    def __len__(self) -> int:
-        return len(self.samples)
+    def batch_spec(self) -> BatchSpec:
+        return BatchSpec(
+            item_kind="image_target",
+            # torchvision detection models take unnormalized [0, 1] images and
+            # do their own normalization inside `GeneralizedRCNNTransform`.
+            normalization=None,
+            mask_semantics="binary_uint8_nhw" if self.with_masks else None,
+            image_size=None,  # native resolution; the model resizes internally
+        )
+
+    @property
+    def collate_fn(self):
+        return detection_collate_fn
 
     def __getitem__(self, index: int) -> tuple[Any, dict[str, Any]]:
         from PIL import Image
@@ -166,7 +178,7 @@ def detection_collate_fn(batch: list[tuple[Any, dict[str, Any]]]):
     return tuple(zip(*batch))
 
 
-class SampleSegmentationDataset(Dataset):
+class SampleSegmentationDataset(DataAdapter, Dataset):
     """`Sample` list -> (image_tensor, mask_tensor) for semantic segmentation.
     Returns:
         image: FloatTensor[3, H, W] normalized to [0, 1]
@@ -174,11 +186,20 @@ class SampleSegmentationDataset(Dataset):
     """
 
     def __init__(self, samples: list[Sample], transforms=None):
-        self.samples = samples
+        super().__init__(samples)
         self.transforms = transforms
 
-    def __len__(self) -> int:
-        return len(self.samples)
+    def batch_spec(self) -> BatchSpec:
+        return BatchSpec(
+            item_kind="image_mask",
+            normalization=None,
+            mask_semantics="binary_float_1hw",
+            image_size=None,
+        )
+
+    @property
+    def collate_fn(self):
+        return segmentation_collate_fn
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         from PIL import Image

@@ -29,6 +29,11 @@ model:
   name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet | WinCLIP (case-insensitive)
   # WinCLIP is zero-shot by default (needs no training images); pass
   # train.model_kwargs: {k_shot: 5} to use few-shot normal references instead.
+  # weights: artifacts/models/published/PatchCore.ckpt
+  # allow_unsafe_checkpoint: true
+  #   Evaluate an existing checkpoint instead of training: set both and
+  #   train.enabled: false. The opt-in is required because an anomalib
+  #   checkpoint is a Lightning pickle -- only set it for one you produced.
 
 # ---- Data: read from ZJULeaperDataset at runtime and staged into a temporary MVTec-style directory ----
 # dataset_root is left unset on purpose: `fdh train` falls back to this

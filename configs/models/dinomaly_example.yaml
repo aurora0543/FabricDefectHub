@@ -29,6 +29,9 @@
 # ---- Model: pick an encoder size ----
 model:
   name: dinov2reg_vit_base_14   # dinov2reg_vit_small_14 | dinov2reg_vit_base_14 | dinov2reg_vit_large_14
+  # weights: artifacts/models/published/Dinomaly.pt
+  #   Evaluate an existing checkpoint instead of training: set this and
+  #   train.enabled: false. Must have been trained with the same `name`.
 
 # ---- Data: read from ZJULeaperDataset at runtime and staged into a temporary MVTec-style directory ----
 # dataset_root is left unset on purpose: `fdh train` falls back to this
