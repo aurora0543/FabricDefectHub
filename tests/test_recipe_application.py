@@ -18,7 +18,7 @@ from fabric_defect_hub.core.types import Annotations, ModelInfo, Prediction, Run
 from fabric_defect_hub.datasets.base import DatasetAdapter
 from fabric_defect_hub.evaluation.base import Evaluator
 from fabric_defect_hub.loader import load_model, run_experiment
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.recipes.apply import (
     apply_recipe_to_training,
     attach_recipe,
@@ -49,15 +49,22 @@ class _RecipeFakeModel(ModelAdapter):
         super().__init__(name=name, **kwargs)
         self.seen_hparams_at_train = "<unset>"
 
+    def capabilities(self):
+        return ModelCapabilities(
+            tasks=("detection",),
+            prediction_fields=("boxes", "labels", "scores"),
+            export_targets=("onnx",),
+        )
+
     def train(self, config):
         # Capture what the recipe attached, as a real backend would read it.
         self.seen_hparams_at_train = getattr(self, "_recipe_hparams", None)
         return Artifact(path="fake.pt", backend=self.backend)
 
-    def predict(self, samples, artifact):
+    def predict(self, samples, artifact=None, output_dir=None, config=None):
         return [Prediction(sample_id=s.id, boxes=[[1, 2, 3, 4]], labels=["d"], scores=[0.9]) for s in samples]
 
-    def export(self, artifact, target):
+    def export(self, artifact, target, config=None):
         return ExportedArtifact(path=f"fake.{target}", target=target)
 
 

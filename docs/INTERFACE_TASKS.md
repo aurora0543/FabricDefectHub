@@ -23,51 +23,61 @@
 
 ---
 
-## Track A — 冻结 IO 契约（P0，约 3 天）
+## Track A — 冻结 IO 契约（P0）
 
-- [ ] **A1 统一 `train` / `predict` / `export` 签名**
-  现状：`predict` 已分裂成两族——anomaly 族 `(samples, artifact, output_dir=None)`，detection 族 `(samples, artifact=None, config=None)`；`export` 有的多一个 `config`。
-  验收：删掉 `loader.py:211` 的 `inspect.signature(model.export)` 运行时嗅探，6 个 adapter 签名与基类完全一致。
+- [x] **A1 统一 `train` / `predict` / `export` 签名**
+  基类声明完整签名，6 个 adapter 全部对齐（anomaly 族补 `config`，detection 族补 `output_dir`）。
+  `loader.py` 的 `inspect.signature(model.export)` 运行时嗅探已删除，`import inspect` 一并移除。
 
-- [ ] **A2 `TrainConfig` 取代 `dict[str, Any]`**
-  公共字段固定（`epochs / lr / batch_size / img_size / device / seed / precision / work_dir`）+ `backend_specific: dict` 兜底 + 构造期校验（未知键报错而不是静默忽略）。
-  验收：6 个 backend 的 `config.py` 里公共超参只有一套名字。
+- [x] **A2 `TrainConfig` 取代 `dict[str, Any]`**
+  `core/train_config.py`：公共字段固定 + `backend_specific` 兜底 + 构造期校验（未知精度、`epochs`/`max_iters` 同时设置、非正值、`backend_specific` 影子键全部报错）。
+  翻译表 `TRAIN_CONFIG_KEYS` 声明在各 adapter 上（`lr` → Ultralytics 的 `lr0`、Dinomaly 的 `lr`），`core` 不认识任何具体框架。
+  `train()` 同时接受 `TrainConfig` 与原有 dict，旧调用方零改动。
 
-- [ ] **A3 `ModelAdapter.capabilities()`**
-  返回：支持的 task、需要的标注级别、支持的 export target、是否支持 AMP/混合精度。
-  验收：evaluator 依据 capability 决定算不算 pixel-AUROC；周报"退化率指标不适用"的判断由代码给出，不再靠人记。与 `core/dataset_capabilities.py` 形成对称。
+- [x] **A3 `ModelAdapter.capabilities()`**
+  `ModelCapabilities`：tasks / prediction_fields / required_annotations / export_targets / supports_amp，词表校验（拼错即报错）。
+  6 个 backend 全部声明。过程中发现并纠正一处：torchvision 实际支持 AMP（`engine.run_training` 用了 `torch.autocast` + `GradScaler`），先前按"未验证"记为 False 是错的。
 
-- [ ] **A4 统一 pipeline 层**
-  现状：5 份平行的 `run_from_config` / `run_from_yaml` + 各自的 `XxxRunResult` dataclass，无共同基类。
-  验收：一个 `BasePipeline` + 一个 `RunResult`，各 backend 只写差异部分。
+- [x] **A4 统一 pipeline 层**
+  `core/pipeline.py`：`BasePipeline`（run 顺序写一次：validate → build_adapter → prepare → train+register → evaluate → export）+ 单一 `RunResult` + `AnomalyPipeline`（predict + `AnomalyEvaluator`，四个异常检测后端此前各抄一遍）。
+  六个后端只保留差异钩子（`build_adapter` / `build_train_config` / `evaluate` / 可选 `prepare`、`load_existing_artifact`、`export_config`）。
+  `run_from_config` / `run_from_yaml` / `XxxRunResult` 三个公共名字全部保留，调用方零改动。
+  净减少 128 行；`tests/test_pipeline_contract.py` 钉死 run 顺序、分支条件，以及"没有后端可以自己重写 `run()`"。
 
-- [ ] **A5 契约一致性测试 `tests/test_adapter_contract.py`**
-  参数化跑遍所有已注册 backend：签名、capabilities、`Prediction` 字段填充是否与声明一致。
-  验收：新加一个 backend 但没实现完接口 → 测试直接红。**这是整套接口能不能守住的关键。**
+- [x] **A5 契约一致性测试**
+  `tests/test_adapter_contract.py`（签名、capabilities、export 诚实性、TrainConfig 翻译）
+  \+ `tests/test_data_adapter_contract.py`（DataAdapter 契约）
+  \+ `tests/test_train_config.py`（校验与翻译本身）。
+  参数化覆盖全部 6 个已注册 backend。
 
 ## Track B — 数据侧接口（P0）
 
 > B1 / B2 / B5 / B6（组件注册表、装配层 `ComposedModel`、用装配层落地模型）已移出本阶段：
 > 那些是"造模型"的能力，不属于基准平台。相关代码已按上一节删除。
 
-- [ ] **B3 `DataAdapter` 接口（`Sample` → backend batch）**
-  周报第 4 条"各模型独立实现 DataLoader"的**决定是对的，不要回退**；要做的是把"转换"本身变成接口：统一签名、张量布局、归一化元信息、mask 语义、collate 契约，各模型实现各自的类，由 registry 解析。
-  现状散落于 `models/moeclip/data.py`、`models/mambaad/data.py`、`models/torchvision/dataset.py`。
-  对导师的说法：**"实现是独立的，接口是统一的"**。
+- [x] **B3 `DataAdapter` 接口（`Sample` → backend batch）**
+  `core/data_adapter.py`：统一构造签名、`__len__`/`__getitem__`、`batch_spec()`（item 形态 / 张量布局 / 归一化统计 / mask 语义 / 图像尺寸，全部词表校验）、`collate_fn`、`build_dataloader()`。
+  `models/mambaad/data.py`、`models/moeclip/data.py`、`models/torchvision/dataset.py` 四个转换类全部实现它，**转换实现保持各自独立**。
+  副产物：MambaAD 用 ImageNet 统计、MoECLIP 用 CLIP 统计，这个区别以前只存在于源码里，现在是可查询、可写进 run log 的声明。
 
 - [ ] **B4 训练设施可控可记录**（P1）
   现状 Dinomaly 直接用上游 `StableAdamW` + `WarmCosineScheduler`。基准平台不需要自研优化器，只需要**每次跑用了什么 optimizer/scheduler/精度被完整记录进 run log**，否则结果不可复现。
 
-## Track C — vendor 边界纪律（P1，约 1 天）
+## Track C — vendor 边界纪律
 
-- [ ] **C1 消除 `sys.path` 污染**
-  `models/dinomaly/vendor.py` 把上游的 `utils` / `dataset` / `models` 这些通用名塞进全局 `sys.modules`，再多接两个仓库必然撞名。改为 importlib 独立命名空间加载。
+- [x] **C1 消除 `sys.path` 污染**
+  `core/vendor.py::VendoredRepo`：把 MoECLIP 已验证的隔离导入机制提取出来，两个 checkout 共用。
+  导入在一个窗口内完成（checkout 置于 `sys.path[0]`、同名模块临时移出 `sys.modules`），结束后把自己的模块取回私有缓存、还原原状、移除 `sys.path` 条目。
+  Dinomaly 原来那个永久 `sys.path` bootstrap 已删除——它此前只是"碰巧先加载"才没出事。
+  新增一个 vendored 仓库现在是三行声明（`owned_roots` / `entry_modules` / 缺失提示）。
 
-- [ ] **C2 上游模块名只允许出现在 `vendor.py`**
-  adapter 里不得直接 `from dataset import MVTecDataset`（现状 `dinomaly/adapter.py:151` 就是这样）。
-  验收：一条 grep 规则进 CI。
+- [x] **C2 上游模块名只允许出现在 `vendor.py`**
+  `dinomaly/adapter.py` 三处 `from dataset import ...` / `from models.uad import ...` 全部改为 `import_vendor()[...]`。
+  `tests/test_vendor_boundary.py` 用 `ast` 解析 `src/` 下每个文件（不是 grep：字符串里的同名词不会误报，函数体内的延迟导入不会漏报），并附行为断言——导入后端后 `sys.modules` 不留痕、checkout 不留在 `sys.path`，以及两个仓库的 `utils` 确实是两个不同对象。
 
-- [ ] **C3 `components/` 记录上游 commit hash + 是否被修改**（复现性，审稿人会问）
+- [x] **C3 `components/` 记录上游 commit hash + 是否被修改**
+  已经由 git submodule 机制提供：`git submodule status` 同时给出 pinned commit 和 `+`（脏/偏离）标记。无需额外工作。
+  真正缺的是把这个 hash 写进 run log / 结果表，归入 B4。
 
 - [ ] **C4 clean-room 实现要有对照验证**
   MambaAD 是自己重写的（`models/mambaad/adapter.py:2`），需要一个与论文/上游数值对齐的验证记录，否则重写反而是风险点。
@@ -75,17 +85,32 @@
 ## Track D — 交付物（P1）
 
 - [ ] **D1 一页 interface spec**（给导师：五个抽象 + 数据契约 + "新增模型只需实现 3 个方法"）
-- [ ] **D2 更新 `docs/EXTENDING.md` 为"新增模型三步走"**
+- [x] **D2 更新 `docs/EXTENDING.md` 为"新增模型三步走"**
 - [ ] **D3 接口冻结打 tag**，之后改接口需要走一次评审
 
 ---
 
-## 建议排期
+## 剩余工作
 
-| 周 | 内容 |
-|---|---|
-| 第 1 周 | A1–A5 + C1–C2 → **接口冻结** |
-| 第 2 周 | B1–B4 |
-| 第 3 周 | B5–B6，并用新接口补 DRAEM / FabricMamba，验证"填表不改框架" |
+| 优先级 | 项 | 说明 |
+|---|---|---|
+| P1 | B4 | 训练设施 + vendored commit hash 写进 run log（optimizer / scheduler / 精度 / `BatchSpec` / submodule hash） |
+| P1 | C4 | MambaAD clean-room 数值对照 |
+| P1 | D1 / D3 | 一页 interface spec；接口冻结打 tag |
 
 华纺数据集接入走 `DatasetAdapter`，不受本清单影响，可并行推进。
+
+## 已冻结的契约（改动需评审）
+
+| 契约 | 位置 | 由谁守住 |
+|---|---|---|
+| `Sample` / `Prediction` / `ExperimentResult` | `core/types.py` | `schemas/*.schema.json` |
+| `ModelAdapter`（capabilities / train / predict / export） | `models/base.py` | `tests/test_adapter_contract.py` |
+| `ModelCapabilities` | `models/base.py` | 同上（含词表校验） |
+| `TrainConfig` + `TRAIN_CONFIG_KEYS` | `core/train_config.py` + 各 adapter | `tests/test_train_config.py` |
+| `DataAdapter` / `BatchSpec` | `core/data_adapter.py` | `tests/test_data_adapter_contract.py` |
+| `BasePipeline` / `RunResult` | `core/pipeline.py` | `tests/test_pipeline_contract.py` |
+| vendor 边界（上游模块名只在 `vendor.py`） | `core/vendor.py` | `tests/test_vendor_boundary.py` |
+| `DatasetAdapter` | `datasets/base.py` | — |
+| `Evaluator` | `evaluation/base.py` | — |
+| 配置档案只提供设置 | `core/base_recipe.py` | `tests/test_recipe_application.py` |

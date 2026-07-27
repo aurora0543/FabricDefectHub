@@ -42,6 +42,9 @@
 # ---- Model: pick the frozen teacher backbone ----
 model:
   name: resnet34   # resnet34 (upstream's flagship MVTec-AD recipe, 98.6 mAUROC) | wide_resnet50_2
+  # weights: artifacts/models/published/MambaAD.pt
+  #   Evaluate an existing checkpoint instead of training: set this and
+  #   train.enabled: false. Must have been trained with the same `name`.
 
 # ---- Data: read from ZJULeaperDataset at runtime ----
 # dataset_root is left unset on purpose: `fdh train` falls back to this

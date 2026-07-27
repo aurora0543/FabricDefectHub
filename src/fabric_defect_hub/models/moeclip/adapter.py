@@ -39,9 +39,10 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.model_statistics import parameter_counts
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.models.moeclip import presets
 from fabric_defect_hub.models.moeclip.data import SampleDataset
 from fabric_defect_hub.models.moeclip.vendor import cuda_free_module_init, import_vendor, vendor_root
@@ -248,7 +249,31 @@ class MoECLIPAdapter(ModelAdapter):
             )
         return kept, stats
 
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> this backend's real key.
+    TRAIN_CONFIG_KEYS = {
+        "epochs": "epochs",
+        "lr": "lr",
+        "batch_size": "batch_size",
+        "device": "device",
+        "seed": "seed",
+        "num_workers": "num_workers",
+        "work_dir": "work_dir",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            tasks=("anomaly",),
+            prediction_fields=("anomaly_score", "anomaly_map"),
+            # Unlike the one-class backends, MoECLIP trains on *labelled*
+            # defects with pixel masks (see `_select_train_samples`).
+            required_annotations=("anomaly_mask", "is_anomalous"),
+            # See `export()`: the MoE router's data-dependent dispatch does not
+            # trace to a static graph.
+            export_targets=(),
+            supports_amp=False,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """Re-implements `train.py::train_adapter` against this project's
         data. Data comes in as `config['train_samples']` — a `Sample` list
         that must contain defective samples *with* `annotations.anomaly_mask`
@@ -264,6 +289,11 @@ class MoECLIPAdapter(ModelAdapter):
         or call `register_trained_model()` afterwards, to keep the
         checkpoint past process exit), plus any architecture knob.
         """
+
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         import torch
         import torch.nn.functional as F
@@ -405,7 +435,11 @@ class MoECLIPAdapter(ModelAdapter):
     # Predict
     # ------------------------------------------------------------------ #
     def predict(
-        self, samples: list[Sample], artifact: Artifact, output_dir: str | None = None
+        self,
+        samples: list[Sample],
+        artifact: Artifact | None = None,
+        output_dir: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Loads the adapter checkpoint and scores each sample with
         upstream's own test-time path (`test.py::get_predictions`).
@@ -497,7 +531,9 @@ class MoECLIPAdapter(ModelAdapter):
                 )
         return predictions
 
-    def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
+    def export(
+        self, artifact: Artifact, target: str, config: dict[str, Any] | None = None
+    ) -> ExportedArtifact:
         raise NotImplementedError(
             "MoECLIP export is not implemented: the mixture-of-experts router "
             "dispatches patches to experts with data-dependent control flow "

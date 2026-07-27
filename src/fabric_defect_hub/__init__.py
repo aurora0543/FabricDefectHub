@@ -15,10 +15,13 @@ Quick Usage:
 
 from fabric_defect_hub import recipes
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
+from fabric_defect_hub.core.data_adapter import BatchSpec, DataAdapter, Normalization
 from fabric_defect_hub.core.registry import get_recipe, list_recipes
+from fabric_defect_hub.core.train_config import TrainConfig
 from fabric_defect_hub.evaluation.lmei_profiler import calculate_lmei
 from fabric_defect_hub.evaluation.pro_calculator import compute_pro_score
 from fabric_defect_hub.loader import load_dataset, load_model, run_experiment
+from fabric_defect_hub.models.base import ModelAdapter, ModelCapabilities
 from fabric_defect_hub.reporting.latex_generator import generate_latex_table
 from fabric_defect_hub.strategies.loader_strategies import (
     BatchNormCalibrator,
@@ -37,6 +40,13 @@ __all__ = [
     "BaseModelRecipe",
     "get_recipe",
     "list_recipes",
+    # The model/data contracts (see docs/EXTENDING.md)
+    "ModelAdapter",
+    "ModelCapabilities",
+    "TrainConfig",
+    "DataAdapter",
+    "BatchSpec",
+    "Normalization",
     "compute_pro_score",
     "calculate_lmei",
     "generate_latex_table",

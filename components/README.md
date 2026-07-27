@@ -53,9 +53,14 @@ Rules for anything placed here:
   git fetch && git checkout <ref>`, then commit the resulting
   `components/<name>` pointer change in the parent repo.
 - **One subdirectory per repo**, named after the repo (`components/dinomaly/`).
+- **Upstream module names may appear only in the backend's `vendor.py`.**
+  Declare the checkout as a `core.vendor.VendoredRepo` there; everywhere
+  else, go through `import_vendor()["models.uad"].ViTill`. A bare
+  `from utils import ...` in an adapter resolves to whichever vendored repo
+  loaded first. `tests/test_vendor_boundary.py` parses every source file
+  with `ast` and fails on a violation.
 - The corresponding adapter under `src/fabric_defect_hub/models/<name>/`
-  is responsible for adding `components/<name>` to `sys.path` before
-  importing anything from it, and for translating between this project's
+  is responsible for translating between this project's
   `Sample`/`Prediction`/`Artifact` types and whatever the vendored code
   natively uses.
 
@@ -83,12 +88,23 @@ hypothetical: `components/dinomaly` and `components/moeclip` both ship a
 top-level `utils` and `dataset`, and the Benchmark tab runs every model
 back to back in one process.
 
-The resolution lives on the *later* adapter, not in the vendored source:
-`models/moeclip/vendor.py::import_vendor()` imports MoECLIP's modules with
-the colliding names temporarily evicted from `sys.modules`, then takes its
-own modules back out again and restores what was there before, keeping
-them in a private cache. Dinomaly's plain `sys.path` bootstrap keeps
-working untouched. Anything added here after MoECLIP should follow the
-same pattern rather than the plain one — and note it relies on the
-vendored code not importing those names lazily from inside a function
-body (verified against the pinned commits).
+The resolution is `core/vendor.py::VendoredRepo`, used by *every* vendored
+checkout — not just the later one. It imports a repo's modules inside a
+window where the checkout is `sys.path[0]` and any colliding name is
+temporarily evicted from `sys.modules`, then takes its own modules back
+out, restores what was there before, removes its `sys.path` entry, and
+keeps the imported modules in a private cache. Afterwards the two repos'
+`utils` modules are two distinct objects and neither occupies the shared
+name.
+
+Dinomaly originally used a plain permanent `sys.path` bootstrap, which
+worked only because it happened to load first. That was the last real
+hazard before the interface freeze, and it is gone: both checkouts now go
+through `VendoredRepo`, and a new one is three declarative lines
+(`owned_roots`, `entry_modules`, a not-found hint).
+
+The mechanism relies on the vendored code not importing its own top-level
+names lazily from inside a function body — by then the name is out of
+`sys.modules`. Verified against both pinned commits (Dinomaly's only such
+imports are in `dinov2/run/*`, DINOv2's SLURM job launchers, which nothing
+here touches). Check this when bumping a pinned commit.

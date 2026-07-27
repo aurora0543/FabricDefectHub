@@ -25,12 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
 from fabric_defect_hub.model_statistics import parameter_counts
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 from fabric_defect_hub.models.dinomaly import presets
-from fabric_defect_hub.models.dinomaly.vendor import ensure_on_path
+from fabric_defect_hub.models.dinomaly.vendor import import_vendor
 
 
 @register_model("dinomaly")
@@ -70,14 +71,17 @@ class DinomalyAdapter(ModelAdapter):
         linear-attention decoder.
         """
 
-        ensure_on_path()
         import torch.nn as nn
         from functools import partial
 
-        from dinov1.utils import trunc_normal_
-        from models import vit_encoder
-        from models.uad import ViTill
-        from models.vision_transformer import Block as VitBlock, LinearAttention2, bMlp
+        vendored = import_vendor()
+        trunc_normal_ = vendored["dinov1.utils"].trunc_normal_
+        vit_encoder = vendored["models.vit_encoder"]
+        ViTill = vendored["models.uad"].ViTill
+        vision_transformer = vendored["models.vision_transformer"]
+        VitBlock = vision_transformer.Block
+        LinearAttention2 = vision_transformer.LinearAttention2
+        bMlp = vision_transformer.bMlp
 
         preset = presets.encoder_preset(encoder_name)
         embed_dim, num_heads = preset["embed_dim"], preset["num_heads"]
@@ -121,7 +125,31 @@ class DinomalyAdapter(ModelAdapter):
     # ------------------------------------------------------------------ #
     # Train
     # ------------------------------------------------------------------ #
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> this backend's real key (upstream's
+    # schedule is iteration-based, so `max_iters` maps to `total_iters` and
+    # `epochs` has no entry).
+    TRAIN_CONFIG_KEYS = {
+        "max_iters": "total_iters",
+        "lr": "lr",
+        "batch_size": "batch_size",
+        "image_size": "image_size",
+        "device": "device",
+        "num_workers": "num_workers",
+        "work_dir": "work_dir",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            tasks=("anomaly",),
+            prediction_fields=("anomaly_score", "anomaly_map"),
+            required_annotations=(),
+            # See `export()`: ViTill's forward has data-dependent control flow
+            # that has not been verified to trace.
+            export_targets=(),
+            supports_amp=False,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """Re-implements `dinomaly_mvtec_sep.py::train()`'s loop against this
         project's data. Two ways to point this at data, same as the
         anomalib adapter:
@@ -145,15 +173,22 @@ class DinomalyAdapter(ModelAdapter):
         past process exit).
         """
 
-        ensure_on_path()
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
+
         import torch
         import torch.nn as nn
         from torch.utils.data import DataLoader
         from torchvision.datasets import ImageFolder
 
-        from dataset import MVTecDataset, get_data_transforms
-        from optimizers import StableAdamW
-        from utils import WarmCosineScheduler, global_cosine_hm_percent
+        vendored = import_vendor()
+        MVTecDataset = vendored["dataset"].MVTecDataset
+        get_data_transforms = vendored["dataset"].get_data_transforms
+        StableAdamW = vendored["optimizers"].StableAdamW
+        WarmCosineScheduler = vendored["utils"].WarmCosineScheduler
+        global_cosine_hm_percent = vendored["utils"].global_cosine_hm_percent
 
         kwargs = {**presets.default_train_kwargs(), **{k: v for k, v in config.items() if k in presets.DEFAULT_TRAIN_KWARGS}}
         device = self._resolve_device(config.get("device"))
@@ -281,7 +316,11 @@ class DinomalyAdapter(ModelAdapter):
     # Predict
     # ------------------------------------------------------------------ #
     def predict(
-        self, samples: list[Sample], artifact: Artifact, output_dir: str | None = None
+        self,
+        samples: list[Sample],
+        artifact: Artifact | None = None,
+        output_dir: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Loads the checkpoint, runs upstream's forward pass, and scores it
         with upstream's own `cal_anomaly_maps` -- the same math
@@ -292,13 +331,14 @@ class DinomalyAdapter(ModelAdapter):
         `evaluation.anomaly.AnomalyEvaluator`'s pixel-level metrics).
         """
 
-        ensure_on_path()
         import numpy as np
         import torch
         from PIL import Image
 
-        from dataset import get_data_transforms
-        from utils import cal_anomaly_maps, get_gaussian_kernel
+        vendored = import_vendor()
+        get_data_transforms = vendored["dataset"].get_data_transforms
+        cal_anomaly_maps = vendored["utils"].cal_anomaly_maps
+        get_gaussian_kernel = vendored["utils"].get_gaussian_kernel
 
         device = self._resolve_device(None)
         model = self._load_artifact(artifact, device)
@@ -342,7 +382,9 @@ class DinomalyAdapter(ModelAdapter):
                 )
         return predictions
 
-    def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
+    def export(
+        self, artifact: Artifact, target: str, config: dict[str, Any] | None = None
+    ) -> ExportedArtifact:
         raise NotImplementedError(
             "Dinomaly export is not implemented: ViTill's forward pass has "
             "data-dependent Python control flow (per-layer no_grad toggling, "

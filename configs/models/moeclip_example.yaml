@@ -46,6 +46,10 @@ model:
   moe_lora_alpha: 16
   moe_num_experts: 4
   moe_top_k: 2              # experts each patch is routed to
+  # weights: artifacts/models/published/MoECLIP.pt
+  #   Evaluate an existing checkpoint instead of training: set this and
+  #   train.enabled: false. The architecture knobs above must match the
+  #   ones the checkpoint was trained with.
   moe_layers: [5, 11, 17, 23]   # 0-indexed transformer blocks the MoE is injected at
   use_fofs: true            # Frozen Orthogonal Feature Separation (freezes each expert's LoRA A)
   use_paa: true             # Patch Average Aggregation (multi-scale 1/3/5 neighbourhoods)

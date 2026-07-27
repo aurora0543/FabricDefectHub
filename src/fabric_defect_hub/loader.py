@@ -12,7 +12,6 @@ this module only knows the registry, never a specific framework.
 from __future__ import annotations
 
 import importlib
-import inspect
 import math
 from pathlib import Path
 from typing import Any
@@ -207,10 +206,11 @@ def run_experiment(
             raise ValueError("profiling requires a trained or explicitly supplied model artifact")
         if profile_config is None or export_target is None:
             raise ValueError("profiling requires both profile_config and export_target")
-        export_kwargs: dict[str, Any] = {"target": export_target}
-        if "config" in inspect.signature(model.export).parameters:
-            export_kwargs["config"] = export_config or {}
-        exported = model.export(active_artifact, **export_kwargs)
+        # Every backend's `export` takes the same three arguments (see
+        # `ModelAdapter.export`), so this is a plain call — it used to have to
+        # `inspect.signature` the adapter first to find out whether it would
+        # accept `config`.
+        exported = model.export(active_artifact, target=export_target, config=export_config or {})
         export_path = Path(exported.path)
         if not export_path.is_file():
             raise FileNotFoundError(f"exported model does not exist: {export_path}")

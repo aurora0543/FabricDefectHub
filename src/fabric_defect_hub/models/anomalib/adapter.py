@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.registry import register_model
+from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
 from fabric_defect_hub.model_statistics import parameter_counts
@@ -31,7 +32,7 @@ from fabric_defect_hub.models.anomalib.presets import (
     resolve_model_class,
     resolve_model_class_name,
 )
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 
 
 @register_model("anomalib")
@@ -56,7 +57,27 @@ class AnomalibAdapter(ModelAdapter):
     def _model_cls(self):
         return resolve_model_class(self.name)
 
-    def train(self, config: dict[str, Any]) -> Artifact:
+    # Canonical `TrainConfig` field -> this backend's real key. Anomalib's
+    # run length and device live inside Lightning's `engine_kwargs`, not as
+    # flat keys, so only what is genuinely flat here is mapped.
+    TRAIN_CONFIG_KEYS = {
+        "num_workers": "num_workers",
+    }
+
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            tasks=("anomaly",),
+            prediction_fields=("anomaly_score", "anomaly_map", "labels"),
+            # One-class training needs normal images only; no labels required.
+            required_annotations=(),
+            export_targets=("onnx", "openvino", "torch"),
+            # Lightning's `precision` is configurable via `trainer` kwargs, but
+            # this project has not verified a mixed-precision run, so it is not
+            # advertised. Verify before flipping this.
+            supports_amp=False,
+        )
+
+    def train(self, config: dict[str, Any] | TrainConfig) -> Artifact:
         """Two ways to point this at data:
 
         - `config['datamodule_kwargs']`: passed straight through to
@@ -75,6 +96,11 @@ class AnomalibAdapter(ModelAdapter):
         for this model — caller keys win), `engine_kwargs` (passed to
         `Engine`).
         """
+
+        # A `TrainConfig` is translated into this backend's own argument
+        # names here; a plain dict passes straight through (see
+        # `core.train_config`).
+        config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         model_kwargs = {**default_model_kwargs(self.name), **config.get("model_kwargs", {})}
         self._validate_model_kwargs(model_kwargs)
@@ -158,7 +184,11 @@ class AnomalibAdapter(ModelAdapter):
                 )
 
     def predict(
-        self, samples: list[Sample], artifact: Artifact, output_dir: str | None = None
+        self,
+        samples: list[Sample],
+        artifact: Artifact | None = None,
+        output_dir: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> list[Prediction]:
         """Always fills `anomaly_score`. Pass `output_dir` to also persist
         each sample's pixel-level `anomaly_map` as a `.npy` file there and
@@ -253,7 +283,9 @@ class AnomalibAdapter(ModelAdapter):
             )
         return predictions
 
-    def export(self, artifact: Artifact, target: str) -> ExportedArtifact:
+    def export(
+        self, artifact: Artifact, target: str, config: dict[str, Any] | None = None
+    ) -> ExportedArtifact:
         """`target` is an `anomalib.deploy.ExportType` value, e.g. 'onnx', 'openvino'."""
 
         if not artifact.metadata.get("trusted", False):

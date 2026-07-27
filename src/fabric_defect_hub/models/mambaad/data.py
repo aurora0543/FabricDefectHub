@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from fabric_defect_hub.core.data_adapter import BatchSpec, DataAdapter, Normalization
 from fabric_defect_hub.core.types import Sample
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -30,19 +31,25 @@ def build_transform(image_size: int) -> Callable:
     )
 
 
-class ImageOnlyDataset:
+class ImageOnlyDataset(DataAdapter):
     """Map-style dataset over `Sample`s, yielding just the transformed
     image tensor -- one-class training needs nothing else. Not a
     `torch.utils.data.Dataset` subclass so this module stays importable
-    without torch (same reasoning as `models/moeclip/data.py::SampleDataset`).
+    without torch (same reasoning as `models/moeclip/data.py::SampleDataset`);
+    `DataAdapter` is torch-free for that reason too.
     """
 
     def __init__(self, samples: list[Sample], image_size: int):
-        self.samples = samples
+        super().__init__(samples)
+        self.image_size = image_size
         self.transform = build_transform(image_size)
 
-    def __len__(self) -> int:
-        return len(self.samples)
+    def batch_spec(self) -> BatchSpec:
+        return BatchSpec(
+            item_kind="image",
+            normalization=Normalization(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            image_size=(self.image_size, self.image_size),
+        )
 
     def __getitem__(self, index: int):
         from PIL import Image

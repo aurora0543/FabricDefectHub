@@ -14,7 +14,7 @@ from fabric_defect_hub.core.types import Annotations, ModelInfo, Prediction, Run
 from fabric_defect_hub.datasets.base import DatasetAdapter
 from fabric_defect_hub.evaluation.base import Evaluator
 from fabric_defect_hub.loader import load_dataset
-from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
+from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter, ModelCapabilities
 
 
 @register_dataset("fake-fabric-bench")
@@ -36,16 +36,23 @@ def _make_fake_model_cls(backend_name: str, score: float):
         name = f"{backend_name}-model"
         backend = backend_name
 
+        def capabilities(self):
+            return ModelCapabilities(
+                tasks=("detection",),
+                prediction_fields=("boxes", "labels", "scores"),
+                export_targets=("onnx",),
+            )
+
         def train(self, config):
             return Artifact(path=f"{backend_name}.pt", backend=self.backend)
 
-        def predict(self, samples, artifact):
+        def predict(self, samples, artifact=None, output_dir=None, config=None):
             return [
                 Prediction(sample_id=s.id, boxes=[[10, 10, 50, 50]], labels=["defect"], scores=[score])
                 for s in samples
             ]
 
-        def export(self, artifact, target):
+        def export(self, artifact, target, config=None):
             return ExportedArtifact(path=f"{backend_name}.{target}", target=target)
 
     return _FakeBenchModel

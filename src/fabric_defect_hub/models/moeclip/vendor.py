@@ -1,111 +1,62 @@
-"""Bootstraps imports from the vendored `components/moeclip` checkout.
+"""The vendored `components/moeclip` checkout, imported in isolation.
 
-Like Dinomaly (see `models/dinomaly/vendor.py`), MoECLIP ships as flat
-top-level modules meant to be run from its own repo root -- `utils`,
-`dataset`, `model`, `forward_utils` -- with no package prefix and no pip
-release. Unlike Dinomaly, we cannot simply leave those names in
-`sys.modules`: MoECLIP and Dinomaly *both* define a top-level `utils` and
-`dataset`, and the Benchmark tab runs every canonical model back to back
-in one process (see `web/benchmark.py`). Whichever backend imported first
-would win, and the second would silently get the other repo's modules.
+MoECLIP ships as flat top-level modules meant to be run from its own repo root
+-- `utils`, `dataset`, `model`, `forward_utils` -- with no package prefix and
+no pip release. Those names collide with Dinomaly's (`utils`, `dataset`), and
+the Benchmark tab runs every canonical model back to back in one process (see
+`web/benchmark.py`), so neither repo may be left occupying them.
 
-So `import_vendor()` imports MoECLIP's modules inside a window where
-
-1. `components/moeclip` is `sys.path[0]`, and
-2. any already-imported module owning one of those names (i.e. Dinomaly's)
-   is temporarily removed from `sys.modules`,
-
-then *takes MoECLIP's modules back out* of `sys.modules` and keeps them in
-a private cache, restoring whatever was there before. The imported module
-objects keep working afterwards -- their cross-references were resolved
-into module globals at import time -- but they no longer occupy the shared
-names, so Dinomaly's `import utils` still finds Dinomaly's. The one rule
-this relies on is that the vendored code does not `import utils`/`import
-dataset...` lazily from inside a function body; it doesn't (checked
-against the pinned commit).
+`core.vendor.VendoredRepo` handles that; see it for the mechanism and its one
+assumption. This file is the only place in the project allowed to name
+MoECLIP's upstream modules.
 
 MoECLIP also hardcodes `torch.device("cuda:0")` when allocating its LoRA
 expert weights (`model/moe_adapter.py::SimpleLoraExpert.__init__`), which
-makes the model unconstructable on any CPU/MPS machine. Until that is
-patched on the fork (the proper fix -- see `components/README.md`),
+makes the model unconstructable on any CPU/MPS machine. Until that is patched
+on the fork (the proper fix -- see `components/README.md`),
 `cuda_free_module_init()` supplies a scoped compatibility shim.
 """
 
 from __future__ import annotations
 
-import importlib
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Iterator
 
-_VENDOR_ROOT = Path(__file__).resolve().parents[4] / "components" / "moeclip"
+from fabric_defect_hub.core.vendor import VendoredRepo
 
-# Top-level names the vendored checkout owns. `model` and `dataset` are
-# packages, so their submodules (`model.clip`, `dataset.constants`, ...)
-# have to be moved in and out along with them.
-_OWNED_ROOTS = ("utils", "dataset", "model", "forward_utils")
-
-# Modules `import_vendor()` resolves, in dependency order.
-_ENTRY_MODULES = (
-    "utils",
-    "dataset.constants",
-    "model.clip",
-    "model.moe_adapter",
-    "model.tokenizer",
-    "forward_utils",
+_REPO = VendoredRepo(
+    name="MoECLIP",
+    directory="moeclip",
+    # `model` and `dataset` are packages, so their submodules
+    # (`model.clip`, `dataset.constants`, ...) move in and out along with them.
+    owned_roots=("utils", "dataset", "model", "forward_utils"),
+    entry_modules=(
+        "utils",
+        "dataset.constants",
+        "model.clip",
+        "model.moe_adapter",
+        "model.tokenizer",
+        "forward_utils",
+    ),
+    missing_hint=(
+        "Expected the submodule under components/moeclip -- run "
+        "'git submodule update --init --recursive' (see components/README.md)."
+    ),
 )
-
-_cache: dict[str, ModuleType] = {}
 
 
 def vendor_root() -> Path:
-    return _VENDOR_ROOT
-
-
-def _owned(name: str) -> bool:
-    return any(name == root or name.startswith(f"{root}.") for root in _OWNED_ROOTS)
+    return _REPO.root
 
 
 def import_vendor() -> dict[str, ModuleType]:
-    """Import (once) and return MoECLIP's vendored modules by name.
-
-    Keys are the module paths in `_ENTRY_MODULES`, e.g.
+    """Import (once) and return MoECLIP's vendored modules by name, e.g.
     `import_vendor()["model.moe_adapter"].MoECLIP`.
     """
 
-    if _cache:
-        return _cache
-
-    if not _VENDOR_ROOT.is_dir():
-        raise FileNotFoundError(
-            f"MoECLIP vendor checkout not found at {_VENDOR_ROOT}. Expected the "
-            "submodule under components/moeclip -- run "
-            "'git submodule update --init --recursive' (see components/README.md)."
-        )
-
-    displaced = {name: module for name, module in sys.modules.items() if _owned(name)}
-    for name in displaced:
-        del sys.modules[name]
-
-    path_str = str(_VENDOR_ROOT)
-    sys.path.insert(0, path_str)
-    try:
-        imported = {name: importlib.import_module(name) for name in _ENTRY_MODULES}
-    finally:
-        # Reclaim MoECLIP's modules out of the shared namespace, then put
-        # back whatever (Dinomaly, or a genuine third-party `dataset`) was
-        # there before. Runs even on failure so a half-finished import
-        # can't leave the process in a mixed state.
-        for name in [name for name in sys.modules if _owned(name)]:
-            del sys.modules[name]
-        sys.modules.update(displaced)
-        if path_str in sys.path:
-            sys.path.remove(path_str)
-
-    _cache.update(imported)
-    return _cache
+    return _REPO.modules()
 
 
 @contextmanager
