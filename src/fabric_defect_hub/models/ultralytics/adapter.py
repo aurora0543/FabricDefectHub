@@ -63,9 +63,9 @@ class UltralyticsAdapter(ModelAdapter):
     backend = "ultralytics"
 
     # Ultralytics `YOLO.train` argument names that a recipe is allowed to set.
-    # A recipe's raw hyperparameter dict also carries architecture/aug flags
-    # (e.g. `spd_conv_downsample`) and differently-named loss gains; forwarding
-    # those to `train()` would raise, so only these curated keys are injected.
+    # A recipe's raw hyperparameter dict may also carry model-constructor knobs
+    # and differently-named loss gains; forwarding those to `train()` would
+    # raise, so only these curated keys are injected.
     _RECIPE_TRAINER_ARGS = frozenset(
         {
             "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "epochs", "batch", "optimizer",

@@ -7,7 +7,7 @@ claimed here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import register_recipe
@@ -44,5 +44,3 @@ class RD4ADRecipe(BaseModelRecipe):
             "anomaly_map_mode": "add",
         }
 
-    def configure_loss(self, **kwargs) -> Any:
-        return None

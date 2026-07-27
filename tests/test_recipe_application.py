@@ -3,9 +3,9 @@ that `fdh list-recipes` can print it.
 
 The wiring contract (`recipes.apply`):
   * `load_model(recipe=...)`        -> attaches `_recipe`.
-  * `run_experiment` (train path)   -> fires the recipe's hooks, attaches
-    `_recipe_hparams` / `_recipe_loss`, adapts a materialised module, and
-    stamps the recipe id onto the trained artifact's metadata.
+  * `run_experiment` (train path)   -> resolves the recipe's settings, attaches
+    `_recipe_hparams`, and stamps the recipe id onto the trained artifact's
+    metadata. A profile supplies settings only -- it never touches the model.
   * a backend                       -> folds the *trainer-safe* subset of the
     recipe's hyperparameters into its own trainer (`recipe_trainer_overrides`).
 
@@ -35,15 +35,9 @@ class _FakeRecipe:
 
     def get_default_hyperparameters(self):
         # Mixes a trainer knob (`lr0`), a differently-named loss gain
-        # (`box_loss_weight`) and an architecture flag (`spd_conv_downsample`),
+        # (`box_loss_weight`) and a model-constructor knob (`backbone`),
         # exactly like the real recipes — only `lr0` is trainer-safe.
-        return {"lr0": 0.005, "box_loss_weight": 7.5, "spd_conv_downsample": True}
-
-    def configure_loss(self, **kwargs):
-        return "fake-loss-object"
-
-    def adapt_architecture(self, module):
-        return {"adapted_from": module}
+        return {"lr0": 0.005, "box_loss_weight": 7.5, "backbone": "wide_resnet50_2"}
 
 
 @register_model("recipe-fake-backend")
@@ -100,13 +94,13 @@ def _runtime():
 # recipe_trainer_overrides — the safety filter (pure, dependency-free)
 # --------------------------------------------------------------------------- #
 def test_recipe_trainer_overrides_keeps_only_safe_accepted_keys():
-    hparams = {"lr0": 0.005, "box_loss_weight": 7.5, "spd_conv_downsample": True, "momentum": 0.9}
+    hparams = {"lr0": 0.005, "box_loss_weight": 7.5, "backbone": "wide_resnet50_2", "momentum": 0.9}
     accepted = {"lr0", "momentum", "epochs"}
 
     overrides = recipe_trainer_overrides(hparams, accepted)
 
     # lr0 & momentum are both recognised trainer knobs and accepted here;
-    # box_loss_weight / spd_conv_downsample are dropped (not trainer-safe).
+    # box_loss_weight / backbone are dropped (not trainer-safe).
     assert overrides == {"lr0": 0.005, "momentum": 0.9}
 
 
@@ -117,18 +111,15 @@ def test_recipe_trainer_overrides_respects_backend_acceptance():
 
 
 # --------------------------------------------------------------------------- #
-# apply_recipe_to_training — hook invocation & attachment
+# apply_recipe_to_training — settings resolution & attachment
 # --------------------------------------------------------------------------- #
-def test_apply_recipe_invokes_hooks_and_attaches_outputs():
+def test_apply_recipe_attaches_resolved_hyperparameters():
     model = _RecipeFakeModel()
-    model._model = "raw-module"  # a materialised module to be adapted
     attach_recipe(model, _FakeRecipe())
 
     apply_recipe_to_training(model, {"epochs": 1})
 
     assert model._recipe_hparams["lr0"] == 0.005
-    assert model._recipe_loss == "fake-loss-object"
-    assert model._model == {"adapted_from": "raw-module"}
 
 
 def test_apply_recipe_is_noop_without_a_recipe():
@@ -137,18 +128,30 @@ def test_apply_recipe_is_noop_without_a_recipe():
 
     assert out == {"epochs": 1}
     assert not hasattr(model, "_recipe_hparams")
-    assert not hasattr(model, "_recipe_loss")
 
 
-def test_apply_recipe_skips_architecture_when_no_module_materialised():
-    # Must NOT force a lazy backend to build/load its module just to adapt it.
+def test_apply_recipe_never_touches_the_model():
+    # A profile supplies settings only: no architecture/loss/augmentation hook
+    # may exist, so a materialised module must come out the far side untouched.
     model = _RecipeFakeModel()
+    model._model = "raw-module"
     attach_recipe(model, _FakeRecipe())
 
     apply_recipe_to_training(model, {})
 
-    assert "_model" not in model.__dict__  # untouched
-    assert model._recipe_hparams["lr0"] == 0.005  # non-architecture hooks still fired
+    assert model._model == "raw-module"
+    assert not hasattr(model, "_recipe_loss")
+    assert model._recipe_hparams["lr0"] == 0.005
+
+
+def test_base_recipe_exposes_no_model_modification_hooks():
+    # Guards the benchmark-integrity rule in `core.base_recipe`: if one of these
+    # hooks ever comes back, a profile could silently make the row labelled
+    # "YOLOv8" no longer stock YOLOv8.
+    from fabric_defect_hub.core.base_recipe import BaseModelRecipe
+
+    for hook in ("adapt_architecture", "configure_loss", "configure_optimizer", "configure_augmentations"):
+        assert not hasattr(BaseModelRecipe, hook), hook
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +234,6 @@ def test_real_yolov8_recipe_only_exposes_trainer_safe_keys_to_ultralytics():
     assert overrides["box"] == 7.5
     assert overrides["cls"] == 0.5
     assert overrides["dfl"] == 1.5
-    # Architecture / augmentation flags never reach YOLO.train.
+    # The profile carries no architecture / augmentation flags at all.
     assert "spd_conv_downsample" not in overrides
     assert "fabric_aug_enabled" not in overrides

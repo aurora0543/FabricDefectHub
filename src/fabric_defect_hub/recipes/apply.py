@@ -3,29 +3,27 @@ rather than only being printed by `fdh list-recipes`.
 
 Before this module the `recipes/*.py` classes were resolvable
 (`get_recipe`) and self-describing (`get_recipe_summary`) but nothing ever
-called `adapt_architecture` / `configure_loss` / `get_default_hyperparameters`
-on the train/predict path — the recipe was documentation, not behaviour.
+called `get_default_hyperparameters` on the train/predict path — the recipe
+was documentation, not behaviour.
 
-Here a recipe influences a run in three concrete, inspectable ways:
-
-  * architecture  — `adapt_architecture` is invoked on the adapter's live
-    module *if one is already materialised* (guarded via ``__dict__`` so we
-    never force a lazy backend to load weights just to look at it).
-  * loss          — the configured criterion is attached as ``_recipe_loss``
-    for backends that consume a custom loss.
-  * hyperparameters — resolved once and attached as ``_recipe_hparams`` so a
-    backend can fold the trainer-relevant subset into its own trainer.
+A recipe influences a run in exactly one concrete, inspectable way:
+hyperparameters are resolved once and attached as ``_recipe_hparams`` so a
+backend can fold the trainer-relevant subset into its own trainer.
 
 `load_model(..., recipe=...)` calls `attach_recipe`; `run_experiment` calls
 `apply_recipe_to_training` immediately before `model.train`.
 
+A profile may *only* supply settings — never a loss, an architecture change,
+or an augmentation pipeline (see `core.base_recipe`): a benchmark row labelled
+"YOLOv8" has to be stock YOLOv8 for the comparison to mean anything.
+
 Deliberately *not* done here: flattening every recipe hyperparameter into the
-backend's ``train(**kwargs)``. Recipe hyperparameter dicts mix trainer args
-(``lr0``) with architecture/aug flags (``spd_conv_downsample``) and use names
-that don't always match a backend's trainer (YOLO wants ``box``, the recipe
-says ``box_loss_weight``). Blindly forwarding them would crash a real trainer,
-so each backend opts in to the keys it understands via
-`recipe_trainer_overrides` (see `UltralyticsAdapter.train`).
+backend's ``train(**kwargs)``. Recipe hyperparameter dicts use names that don't
+always match a backend's trainer (YOLO wants ``box``, some upstream papers say
+``box_loss_weight``), and carry model-constructor knobs that are not trainer
+args at all. Blindly forwarding them would crash a real trainer, so each
+backend opts in to the keys it understands via `recipe_trainer_overrides`
+(see `UltralyticsAdapter.train`).
 """
 
 from __future__ import annotations
@@ -33,7 +31,8 @@ from __future__ import annotations
 from typing import Any
 
 # Recipe hyperparameter keys that name a real, framework-agnostic *training*
-# knob (as opposed to an architecture/augmentation toggle). A backend adapter
+# knob (as opposed to a model-constructor argument such as `backbone`, which
+# reaches the backend via `recipe_model_kwargs` instead). A backend adapter
 # intersects this with its own trainer's accepted arguments before use.
 _TRAINER_HPARAM_KEYS = frozenset(
     {
@@ -116,29 +115,20 @@ def recipe_model_kwargs(hparams: dict[str, Any], accepted: set[str] | frozenset[
 
 
 def apply_recipe_to_training(model_adapter: Any, train_config: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Invoke the attached recipe's hooks just before training and attach
-    their outputs to `model_adapter` for the backend to consume.
+    """Resolve the attached recipe's settings just before training and attach
+    them to `model_adapter` for the backend to consume.
 
-    Idempotent side effects:
-      * ``_recipe_hparams`` — the resolved default hyperparameters.
-      * ``_recipe_loss``    — the configured loss module (may be ``None``).
-      * ``_model``          — replaced by ``adapt_architecture`` iff a module
-        was already materialised on the adapter.
+    Idempotent side effect: ``_recipe_hparams`` — the resolved default
+    hyperparameters. The model itself is never touched; a profile supplies
+    settings only.
 
     Returns `train_config` unchanged; the backend is responsible for reading
-    the attached attributes (via `recipe_trainer_overrides` for trainer args).
+    the attached attribute (via `recipe_trainer_overrides` for trainer args).
     """
 
     recipe_obj = getattr(model_adapter, "_recipe", None)
     if recipe_obj is None:
         return train_config
 
-    module = model_adapter.__dict__.get("_model", None)
-    if module is not None:
-        adapted = recipe_obj.adapt_architecture(module)
-        if adapted is not None:
-            model_adapter._model = adapted
-
-    model_adapter._recipe_loss = recipe_obj.configure_loss()
     model_adapter._recipe_hparams = dict(recipe_obj.get_default_hyperparameters())
     return train_config

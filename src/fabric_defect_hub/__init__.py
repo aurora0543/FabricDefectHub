@@ -1,6 +1,7 @@
 """FabricDefectHub (UTAD-Framework): Unified Modular SDK & Benchmark for Fabric Defect Inspection.
 
-Provides per-model config profiles, adaptive loading strategies, in-house neural network modules (fdh.nn), losses, metric evaluators, and reporting tools.
+Provides per-model config profiles, adaptive loading strategies, metric
+evaluators, and reporting tools.
 
 Quick Usage:
     import fabric_defect_hub as fdh
@@ -10,20 +11,14 @@ Quick Usage:
 
     # 2. Load model with TTA flip-multiscale inference strategy
     model = fdh.load_model("ultralytics", "yolov8n", tta_mode="flip_multiscale")
-
-    # 3. Assemble custom model using autonomous fdh.nn modules
-    backbone, layers = fdh.nn.get_backbone("resnet18")
-    hook_engine = fdh.nn.FeatureHookEngine(backbone, layers)
-    neck = fdh.nn.TextileAttentionNeck(in_channels_list=[128, 256], mode="sd_attn")
 """
 
-from fabric_defect_hub import nn, recipes
+from fabric_defect_hub import recipes
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import get_recipe, list_recipes
 from fabric_defect_hub.evaluation.lmei_profiler import calculate_lmei
 from fabric_defect_hub.evaluation.pro_calculator import compute_pro_score
 from fabric_defect_hub.loader import load_dataset, load_model, run_experiment
-from fabric_defect_hub.optim.losses import AFDLoss, DynamicLossScaler
 from fabric_defect_hub.reporting.latex_generator import generate_latex_table
 from fabric_defect_hub.strategies.loader_strategies import (
     BatchNormCalibrator,
@@ -39,12 +34,9 @@ __all__ = [
     "load_model",
     "run_experiment",
     "recipes",
-    "nn",
     "BaseModelRecipe",
     "get_recipe",
     "list_recipes",
-    "AFDLoss",
-    "DynamicLossScaler",
     "compute_pro_score",
     "calculate_lmei",
     "generate_latex_table",

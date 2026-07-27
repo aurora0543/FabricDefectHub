@@ -1,6 +1,6 @@
-# Native Python SDK & Autonomous Neural Network Modules (`fdh.nn`)
+# Native Python SDK (`fabric_defect_hub`)
 
-This guide documents the native Python SDK interface (`fabric_defect_hub`) and the autonomous in-house neural network modules (`fdh.nn`).
+This guide documents the native Python SDK interface (`fabric_defect_hub`).
 
 ---
 
@@ -38,62 +38,21 @@ pro_score = fdh.compute_pro_score(gt_masks, pred_maps)
 
 ---
 
-## 2. In-House Autonomous Modules (`fdh.nn`)
+## 2. Scope: this is a benchmark platform, not a model zoo of our own
 
-To eliminate black-box dependencies on external frameworks, `fdh.nn` provides autonomous modules for feature interception, attention necks, and task heads:
+The SDK's job is to run *other people's* published methods under one contract
+(`ModelAdapter` / `DatasetAdapter` / `Evaluator`) so their numbers are
+comparable. It deliberately ships **no in-house network components** — no
+backbones, necks, heads, losses, or augmentation modules of our own.
 
-```
-src/fabric_defect_hub/nn/
-├── hooks.py              # FeatureHookEngine (Non-intrusive PyTorch Forward Hooks)
-├── backbones.py          # get_backbone (Lightweight ResNet/WideResNet/EfficientNet wrapper)
-├── necks/
-│   ├── base_neck.py      # BaseNeck Abstract Class
-│   └── textile_neck.py   # TextileAttentionNeck (SD-Attn, CBAM, Coordinate Attention)
-└── heads/
-    └── anomaly_head.py   # DefectSegmentationHead & AnomalyHeatmapDecoder
-```
+An earlier revision carried an `fdh.nn` package (feature hooks, a
+`TextileAttentionNeck`, a segmentation head, an anomaly heatmap decoder) plus
+`fdh.optim.losses` and `fdh.augmentations`. None of it was ever called by any
+of the 18 registered models, and a config profile that could swap in its own
+loss or architecture would have made the benchmark unsound — the row labelled
+"YOLOv8" has to be stock YOLOv8. All of it was removed; see
+`core/base_recipe.py` for the settings-only rule that replaced it.
 
-### Modular Assembly Example
-
-```python
-import torch
-import fabric_defect_hub as fdh
-
-# 1. Obtain backbone and default layer targets
-backbone, target_layers = fdh.nn.get_backbone("resnet18", pretrained=True)
-
-# 2. Attach PyTorch Forward Hook Engine
-hook_engine = fdh.nn.FeatureHookEngine(backbone, target_layers)
-
-# 3. Assemble Textile Attention Neck (SD-Attn Mode)
-sd_neck = fdh.nn.TextileAttentionNeck(
-    in_channels_list=[64, 128],
-    out_channels=256,
-    mode="sd_attn",
-)
-
-# 4. Forward execution & feature enhancement
-dummy_input = torch.randn(2, 3, 256, 256)
-feature_maps = hook_engine.extract_features(dummy_input)
-enhanced_features = sd_neck(feature_maps)
-
-# 5. Decode predictions via in-house segmentation head & heatmap decoder
-mask_logits = fdh.nn.DefectSegmentationHead(in_channels=256)(enhanced_features, target_size=(256, 256))
-heatmap = fdh.nn.AnomalyHeatmapDecoder.decode(enhanced_features, target_size=(256, 256))
-```
-
----
-
-## 3. Module Specifications
-
-### `FeatureHookEngine(backbone: nn.Module, target_layers: List[str])`
-- Intercepts PyTorch module outputs during `forward()` using non-intrusive registration hooks.
-- Method `extract_features(x: torch.Tensor) -> Dict[str, torch.Tensor]`.
-- Method `remove_hooks()` prevents GPU memory leaks.
-
-### `TextileAttentionNeck(in_channels_list, out_channels=256, mode="sd_attn")`
-- Supported modes: `"sd_attn"` (Space-to-Depth Downsampling Attention), `"cbam"` (Channel & Spatial Attention), `"identity"`.
-- Converts multi-scale feature channels to `out_channels` and applies spatial-channel attention.
-
-### `DefectSegmentationHead(in_channels=256, num_classes=1)`
-- Interpolates multi-resolution neck outputs and fuses them into pixel-wise defect logits.
+If method-level contributions are added later, they belong in a separate line
+of work evaluated *against* this benchmark, wired in through the same public
+`ModelAdapter` contract as any other method.

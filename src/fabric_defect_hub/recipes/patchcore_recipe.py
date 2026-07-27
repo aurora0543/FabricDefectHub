@@ -7,7 +7,7 @@ vocabulary. No modification of the method is claimed here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import register_recipe
@@ -44,10 +44,3 @@ class PatchCoreRecipe(BaseModelRecipe):
             "coreset_sampling_ratio": 0.1,
             "num_neighbors": 9,
         }
-
-    def configure_loss(self, **kwargs) -> Any:
-        # One-class memory bank models don't use standard backprop loss during training
-        return None
-
-    def configure_augmentations(self, img_size: Tuple[int, int] = (256, 256)) -> Any:
-        return None

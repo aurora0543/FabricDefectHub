@@ -7,7 +7,7 @@
 
 **FabricDefectHub (UTAD-Framework)** is a unified, modular Python SDK and benchmarking framework for industrial textile anomaly detection and defect segmentation. 
 
-It integrates 18 model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, in-house neural-network modules (`fdh.nn`), and LaTeX table generation.
+It integrates 18 model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, and LaTeX table generation.
 
 ---
 
@@ -17,7 +17,7 @@ The benchmark consolidates **18 models** across supervised detectors and unsuper
 
 | # | Model Architecture | Paradigm | Config profile (`recipe_id`) | Backbone / Notes |
 | :-: | --- | --- | --- | --- |
-| 1 | **YOLOv8n / YOLOv8s** | Supervised (CNN) | `yolov8` | Ultralytics detector; fabric training settings (SPD-Conv motivation) |
+| 1 | **YOLOv8n / YOLOv8s** | Supervised (CNN) | `yolov8` | Ultralytics detector; Ultralytics' documented training defaults |
 | 2 | **YOLO11n** | Supervised (CNN) | `yolov8` | Ultralytics YOLO11 detector |
 | 3 | **Faster / Cascade R-CNN** | Supervised (R-CNN) | — *(torchvision baseline)* | FPN multi-scale features |
 | 4 | **DETR** | Supervised (ViT) | — *(torchvision baseline)* | Query init & Hungarian matching |
@@ -87,8 +87,8 @@ fdh-ui
 
 Detailed technical specifications and user guides are organized under `docs/`:
 
-- 📐 **[SDK & In-House NN Engine Guide](docs/SDK_AND_NN.md)**: Modular SDK usage and autonomous `fdh.nn` (Feature Hooks, Necks, Heads).
-- ⚙️ **[Model Configuration](docs/MODEL_CONFIGURATION.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, the loss/augmentation modules one profile wires in, and validating on a held-out dataset.
+- 📐 **[Python SDK Guide](docs/SDK.md)**: Modular SDK usage, and why the platform ships no in-house network components.
+- ⚙️ **[Model Configuration](docs/MODEL_CONFIGURATION.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, and validating on a held-out dataset.
 - 🚀 **[SDLP Loading & Testing Strategies](docs/SDLP_STRATEGIES.md)**: Sparse ratio sampling (`sparse_ratio`), 4K Sliding-Window Tiling, TTA, and BN Calibration.
 - 📊 **[Benchmark Protocols & LaTeX Generator](docs/BENCHMARK_AND_LATEX.md)**: PRO-Score, LMEI Edge Index calculation, and automated LaTeX table rendering.
 - 🌳 **[Extending FabricDefectHub](docs/EXTENDING.md)**: the dataset/backend availability decision tree (`fdh doctor`), the `--set` tuning window, and how to add a new dataset, backend, or config profile.

@@ -7,7 +7,7 @@ claimed here; text prompts are configured via `model.prompt_class`/`prompts`.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import register_recipe
@@ -44,5 +44,3 @@ class MoECLIPRecipe(BaseModelRecipe):
             "moe_top_k": 2,          # experts routed per patch
         }
 
-    def configure_loss(self, **kwargs) -> Any:
-        return None

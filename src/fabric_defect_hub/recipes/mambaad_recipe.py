@@ -6,7 +6,7 @@ schedule). No modification of the method is claimed here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import register_recipe
@@ -45,5 +45,3 @@ class MambaADRecipe(BaseModelRecipe):
             "total_iters": 5000,
         }
 
-    def configure_loss(self, **kwargs) -> Any:
-        return None

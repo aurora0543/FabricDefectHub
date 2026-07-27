@@ -1,19 +1,23 @@
 """Base contract for a model *config profile*.
 
 A profile is an honest, named bundle of run settings for one method: the
-hyperparameters we run it with, plus optional loss / augmentation / architecture
-hooks, all anchored to the method's real upstream paper via `paper_reference`.
-It is NOT a novel research contribution and carries no invented acronym — it is
-the "these are the settings, and here is the paper they come from" seam that
-`load_model(recipe=...)` feeds into training/inference. If and when a profile
-grows a genuine, measured modification of its own, that earned change can be
-named then — not before.
+hyperparameters we run it with, anchored to the method's real upstream paper via
+`paper_reference`. It is NOT a novel research contribution and carries no
+invented acronym — it is the "these are the settings, and here is the paper they
+come from" seam that `load_model(recipe=...)` feeds into training/inference.
+
+Deliberately settings-only: a profile may not change a model's loss,
+architecture, or augmentation pipeline. This project is a *benchmark* platform,
+and a profile that silently modified the model would mean the row labelled
+"YOLOv8" in a results table is not stock YOLOv8, making every cross-model
+comparison unsound. Method-level modifications belong in a separate line of
+work, evaluated against this benchmark rather than hidden inside it.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 class BaseModelRecipe(ABC):
@@ -41,25 +45,6 @@ class BaseModelRecipe(ABC):
     def get_default_hyperparameters(self) -> Dict[str, Any]:
         """The default settings for this profile, expressed in the backend's real vocabulary."""
         pass
-
-    def adapt_architecture(self, model: Any) -> Any:
-        """Optional model-level modification hook. Default is identity — override
-        only when the profile makes a *real* architectural change (and then
-        prove its effect before naming it).
-        """
-        return model
-
-    def configure_loss(self, **kwargs) -> Any:
-        """Optional loss module for this profile. Default None (backend's own loss)."""
-        return None
-
-    def configure_optimizer(self, model: Any, lr: float = 1e-3, weight_decay: float = 1e-4) -> Any:
-        """Optional optimizer for this profile. Default None (backend's own optimizer)."""
-        return None
-
-    def configure_augmentations(self, img_size: Tuple[int, int] = (256, 256)) -> Any:
-        """Optional augmentation pipeline for this profile. Default None."""
-        return None
 
     def get_recipe_summary(self) -> Dict[str, Any]:
         """A structured summary of this profile for logging and run provenance."""

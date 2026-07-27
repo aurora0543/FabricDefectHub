@@ -72,11 +72,14 @@ run and reading a traceback.
 ## 2. Config profiles (`fabric_defect_hub.recipes`)
 
 A config profile is a named, paper-anchored bundle of run settings for one
-method — hyperparameters in the *backend's real vocabulary*, plus optional
-loss/augmentation/architecture hooks — fed into a run via
-`load_model(..., recipe="patchcore")`. See `docs/MODEL_CONFIGURATION.md` for
-the current six profiles (and the loss/augmentation modules one of them
-wires in) and `core/base_recipe.py` for the contract.
+method — hyperparameters in the *backend's real vocabulary* — fed into a run
+via `load_model(..., recipe="patchcore")`. See `docs/MODEL_CONFIGURATION.md`
+for the current six profiles and `core/base_recipe.py` for the contract.
+
+**Settings only.** A profile may not supply a loss, an architecture change, or
+an augmentation pipeline; those hooks used to exist and were removed. A
+benchmark row labelled "YOLOv8" has to be stock YOLOv8, or no cross-model
+comparison in the results table means anything.
 
 **A profile is not a novel contribution and carries no invented acronym.**
 If you make a genuine, measured architectural change (not just a settings

@@ -1,21 +1,15 @@
 """Config profile for the YOLO series (YOLOv8, YOLO11) on fabric detection.
 
 Just the training settings we run these variants with, in Ultralytics' real
-argument vocabulary, anchored to the SPD-Conv paper for the small-object
-motivation. No architectural change is claimed here.
+argument vocabulary. No modification of the method is claimed here.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
-import torch
-import torch.nn as nn
-
-from fabric_defect_hub.augmentations.textile_aug import TextilePeriodicAugmenter
 from fabric_defect_hub.core.base_recipe import BaseModelRecipe
 from fabric_defect_hub.core.registry import register_recipe
-from fabric_defect_hub.optim.losses import AFDLoss, DynamicLossScaler
 
 
 @register_recipe("yolov8")
@@ -32,15 +26,18 @@ class YOLOv8Recipe(BaseModelRecipe):
 
     @property
     def paper_reference(self) -> str:
-        return "Sunkara & Luo, 'No More Strided Convolutions or Pooling: A New CNN Building Block for Low-Resolution Images and Small Objects', ECML PKDD 2022 (arXiv:2208.03641)."
+        # The values below are Ultralytics' own documented training defaults,
+        # so the honest citation is Ultralytics itself, not a method paper.
+        # (This profile previously cited the SPD-Conv paper (arXiv:2208.03641)
+        # as an "anchor" for a small-object architecture change it never made;
+        # that hook has been removed along with the citation.)
+        return "Jocher et al., Ultralytics YOLO (v8/v11), default training configuration (`ultralytics/cfg/default.yaml`)."
 
     def get_default_hyperparameters(self) -> Dict[str, Any]:
         # Trainer knobs use Ultralytics' *real* `YOLO.train` argument names
         # (`box`/`cls`/`dfl` are its loss gains, not `*_loss_weight`), so
         # `UltralyticsAdapter.train` folds them in directly via
-        # `recipe_trainer_overrides`. The two trailing flags are NOT trainer
-        # args — they drive `adapt_architecture` (SPD-Conv) and
-        # `configure_augmentations`, and are filtered out of the train kwargs.
+        # `recipe_trainer_overrides`.
         return {
             "lr0": 0.01,
             "lrf": 0.01,
@@ -50,15 +47,4 @@ class YOLOv8Recipe(BaseModelRecipe):
             "box": 7.5,
             "cls": 0.5,
             "dfl": 1.5,
-            "spd_conv_downsample": True,
-            "fabric_aug_enabled": True,
         }
-
-    def configure_loss(self, **kwargs) -> Any:
-        return DynamicLossScaler(
-            num_losses=3,
-            init_weights=[7.5, 0.5, 1.5],
-        )
-
-    def configure_augmentations(self, img_size: Tuple[int, int] = (640, 640)) -> Any:
-        return TextilePeriodicAugmenter(grid_freq=16, phase_shift_prob=0.4, texture_noise_std=0.02)

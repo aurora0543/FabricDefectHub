@@ -45,5 +45,3 @@ class DinomalyRecipe(BaseModelRecipe):
             "crop_size": 392,
         }
 
-    def configure_loss(self, **kwargs) -> Any:
-        return None
