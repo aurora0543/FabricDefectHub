@@ -76,9 +76,7 @@ def record_weight(
         },
         "metrics": _json_safe(metrics or {}),
         "artifact_metadata": _json_safe(registered_artifact.metadata),
-        # Same block `reporting.append_run_log` attaches to evaluation rows,
-        # so a weight and a result can be matched to one code state — repo
-        # commit *and* each vendored upstream checkout's pinned commit.
+        # Same block `reporting.append_run_log` attaches to evaluation rows.
         "provenance": collect_provenance(),
     }
     manifest_path = models_root / MANIFEST_FILENAME

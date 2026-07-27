@@ -271,9 +271,6 @@ class DinomalyAdapter(ModelAdapter):
                     "crop_size": kwargs["crop_size"],
                     "history_csv": str(history_path),
                     "trusted": True,
-                    # B4: the facilities this run actually used (upstream's
-                    # StableAdamW + WarmCosineScheduler), read off the live
-                    # objects so the record cannot drift from the code.
                     "training": describe_training(optimizer, lr_scheduler),
                     **parameter_counts(model),
                 },

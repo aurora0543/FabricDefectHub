@@ -419,8 +419,8 @@ class MambaADAdapter(ModelAdapter):
                 "num_direction": arch["num_direction"],
                 "gaussian_sigma": presets.ANOMALY_MAP_GAUSSIAN_SIGMA,
                 "trusted": True,
-                # B4: the schedule is the inline `lr_at` above (upstream's
-                # warmup + step decay), so it exists only as a description.
+                # No scheduler object exists; the schedule is the inline
+                # `lr_at` above (upstream's warmup + step decay).
                 "training": describe_training(
                     optimizer, "linear-warmup+step-decay (upstream schedule)"
                 ),

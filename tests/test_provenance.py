@@ -1,8 +1,6 @@
-"""`core.provenance`: the record of what produced a run.
-
-The vendored-components half runs against this repository's real submodules —
-if `components/` gains or loses a checkout these tests describe reality and
-should be updated, not loosened.
+"""Runs against this repo's real submodules, not mocks — update the expected
+set in `test_vendored_components_lists_every_submodule` if `components/`
+changes.
 """
 
 from __future__ import annotations

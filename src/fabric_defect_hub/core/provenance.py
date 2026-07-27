@@ -1,17 +1,4 @@
-"""What produced a result: git state, vendored-checkout state, and the
-training facilities a run actually used.
-
-Two sinks share these helpers so their records can be compared line by line:
-`reporting.append_run_log` (the evaluation-side JSONL ledger) and
-`weight_registry.record_weight` (the training-side weight manifest).
-
-`vendored_components` closes the gap C3 left open (see
-`docs/INTERFACE_TASKS.md`): git submodules already pin each upstream checkout
-to a commit, but that hash lived only in the repository — a result row could
-not say which upstream code produced it. `describe_training` covers B4: which
-optimizer / scheduler / precision a `train()` call actually ran with, read
-off the live objects rather than re-declared by hand.
-"""
+"""Provenance shared by `reporting.append_run_log` and `weight_registry.record_weight`."""
 
 from __future__ import annotations
 
@@ -39,15 +26,7 @@ def git_commit(cwd: str | Path | None = None) -> str:
 
 
 def vendored_components(cwd: str | Path | None = None) -> dict[str, dict[str, Any]]:
-    """Pinned commit and dirty-state of every vendored checkout (git
-    submodule), keyed by its path (e.g. "components/moeclip").
-
-    `git submodule status` prefixes the hash with " " (clean, at the pinned
-    commit), "+" (checked out at a different commit or dirty) or "-" (not
-    initialised). A "+" in a result row means the run used upstream code the
-    repository does not pin — exactly what a reproduction attempt needs to
-    know. Empty dict off-repo / without git / without submodules.
-    """
+    """Pinned commit + dirty-state of each git submodule, keyed by path."""
 
     try:
         output = subprocess.run(
@@ -77,8 +56,6 @@ def vendored_components(cwd: str | Path | None = None) -> dict[str, dict[str, An
 
 
 def collect_provenance(cwd: str | Path | None = None) -> dict[str, Any]:
-    """The full provenance block both record sinks attach to a row."""
-
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit(cwd),
@@ -92,13 +69,9 @@ def describe_training(
     scheduler: Any = None,
     precision: str = "fp32",
 ) -> dict[str, Any]:
-    """JSON-safe record of the training facilities a run used, for
-    `Artifact.metadata["training"]`.
-
-    `optimizer`/`scheduler` accept the live object (class name and — for the
-    optimizer — lr / weight_decay are read off it, so the record cannot drift
-    from the code) or a plain string for facilities that exist only as a
-    description (Ultralytics' "auto", MambaAD's inline schedule).
+    """Record for `Artifact.metadata["training"]`. Accepts a live optimizer/
+    scheduler object (reads class name + lr/weight_decay off it) or a plain
+    string when there's no object to introspect (e.g. Ultralytics' "auto").
     """
 
     record: dict[str, Any] = {"precision": precision}

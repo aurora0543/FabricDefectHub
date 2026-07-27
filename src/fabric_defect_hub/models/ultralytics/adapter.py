@@ -281,10 +281,9 @@ class UltralyticsAdapter(ModelAdapter):
         )
 
     def _training_facilities(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        """B4 record for the run log. Ultralytics' `optimizer="auto"` (its
-        default) picks the real class at runtime, so read it off the trainer
-        the completed run left behind; fall back to the requested config
-        values if a future ultralytics stops exposing it.
+        """Ultralytics' `optimizer="auto"` picks the real class at runtime,
+        so read it off the finished trainer; fall back to the requested
+        config if the trainer doesn't expose it.
         """
 
         trainer = getattr(self.model, "trainer", None)

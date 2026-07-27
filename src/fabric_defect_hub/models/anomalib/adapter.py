@@ -132,10 +132,8 @@ class AnomalibAdapter(ModelAdapter):
 
         ckpt_path = engine.trainer.checkpoint_callback.best_model_path
 
-        # B4: Lightning owns optimizer construction (`configure_optimizers`
-        # inside each anomalib model), so read what the finished run actually
-        # held. An empty optimizer list is a real state, not an error:
-        # PatchCore fits a memory bank without one.
+        # Lightning owns optimizer construction; an empty list is a real
+        # state (PatchCore fits a memory bank, no gradient step), not a bug.
         optimizers = getattr(engine.trainer, "optimizers", None) or []
         schedulers = [
             scheduler_config.scheduler

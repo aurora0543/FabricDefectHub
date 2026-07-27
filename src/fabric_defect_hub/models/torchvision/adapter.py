@@ -359,9 +359,8 @@ class TorchvisionAdapter(ModelAdapter):
             num_workers=num_workers, collate_fn=collate,
         )
 
-        # B4: `run_training` builds the optimizer/scheduler internally; the
-        # epoch callback is the one place the live objects surface, so it
-        # doubles as the capture point for the metadata record below.
+        # `run_training` builds the optimizer/scheduler internally; the epoch
+        # callback is the only place they surface.
         seen_facilities: dict[str, Any] = {}
 
         def on_epoch_end(log, optimizer, scheduler, best_map, improved):
