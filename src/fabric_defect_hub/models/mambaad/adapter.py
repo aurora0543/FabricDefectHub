@@ -74,6 +74,7 @@ from typing import Any
 
 import torch.nn.functional as F
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -326,9 +327,6 @@ class MambaADAdapter(ModelAdapter):
         shortcut -- see `presets.DEFAULT_TRAIN_KWARGS`' comment.
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         import torch
@@ -421,6 +419,12 @@ class MambaADAdapter(ModelAdapter):
                 "num_direction": arch["num_direction"],
                 "gaussian_sigma": presets.ANOMALY_MAP_GAUSSIAN_SIGMA,
                 "trusted": True,
+                # B4: the schedule is the inline `lr_at` above (upstream's
+                # warmup + step decay), so it exists only as a description.
+                "training": describe_training(
+                    optimizer, "linear-warmup+step-decay (upstream schedule)"
+                ),
+                "batch_spec": dataset.batch_spec().as_run_metadata(),
                 **parameter_counts(model),
             },
         )

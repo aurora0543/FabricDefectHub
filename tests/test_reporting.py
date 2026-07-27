@@ -44,7 +44,12 @@ def test_append_run_log_writes_one_json_line_with_provenance(tmp_path):
     row = json.loads(lines[0])
     assert row["experiment_id"] == "exp-1"
     assert row["metrics"] == {"map50": 0.8, "fps": 100.0}
-    assert set(row["provenance"]) == {"timestamp_utc", "git_commit", "hostname"}
+    assert set(row["provenance"]) == {
+        "timestamp_utc",
+        "git_commit",
+        "hostname",
+        "vendored_components",
+    }
 
 
 def test_append_run_log_appends_across_different_metric_shapes(tmp_path):

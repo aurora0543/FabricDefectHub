@@ -32,6 +32,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -184,9 +185,6 @@ class UltralyticsAdapter(ModelAdapter):
         the trained model is left loaded in this adapter.
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         cfg = dict(config)
@@ -248,6 +246,7 @@ class UltralyticsAdapter(ModelAdapter):
                 "run_dir": str(save_dir),
                 "last_weights": str(last) if last.exists() else None,
                 "train_kwargs": cfg,
+                "training": self._training_facilities(cfg),
                 "results_csv": str(save_dir / "results.csv"),
                 "sample_summary": sample_summary,
                 **parameter_counts(self.model.model),
@@ -273,7 +272,29 @@ class UltralyticsAdapter(ModelAdapter):
         return Artifact(
             path=str(best),
             backend=self.backend,
-            metadata={"variant": self._safe_variant(), "run_dir": str(save_dir), "resumed_from": last_weights},
+            metadata={
+                "variant": self._safe_variant(),
+                "run_dir": str(save_dir),
+                "resumed_from": last_weights,
+                "training": self._training_facilities(cfg),
+            },
+        )
+
+    def _training_facilities(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        """B4 record for the run log. Ultralytics' `optimizer="auto"` (its
+        default) picks the real class at runtime, so read it off the trainer
+        the completed run left behind; fall back to the requested config
+        values if a future ultralytics stops exposing it.
+        """
+
+        trainer = getattr(self.model, "trainer", None)
+        optimizer = getattr(trainer, "optimizer", None) or cfg.get("optimizer", "auto")
+        scheduler = getattr(trainer, "scheduler", None) or (
+            "cosine" if cfg.get("cos_lr") else "linear"
+        )
+        amp = getattr(trainer, "amp", cfg.get("amp", True))
+        return describe_training(
+            optimizer, scheduler, precision="amp-mixed" if amp else "fp32"
         )
 
     # ------------------------------------------------------------------ #

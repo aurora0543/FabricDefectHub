@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
-import platform
-import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
+from fabric_defect_hub.core.provenance import collect_provenance
 from fabric_defect_hub.core.serialization import experiment_result_to_dict
 from fabric_defect_hub.core.types import ExperimentResult
 from fabric_defect_hub.reporting.latex_generator import generate_latex_table
@@ -70,7 +68,7 @@ def _flatten(result: ExperimentResult, columns: list[str]) -> dict[str, object]:
 def append_run_log(result: ExperimentResult, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    row = {**experiment_result_to_dict(result), "provenance": _provenance()}
+    row = {**experiment_result_to_dict(result), "provenance": collect_provenance()}
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
     return path
@@ -121,24 +119,6 @@ def latest_run_per_model(rows: list[dict]) -> list[dict]:
         if name not in latest or timestamp > current_timestamp:
             latest[name] = row
     return list(latest.values())
-
-
-def _provenance() -> dict[str, str]:
-    try:
-        git_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        git_commit = "unknown"
-    return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "git_commit": git_commit,
-        "hostname": platform.node(),
-    }
 
 
 def _markdown(columns: list[str], rows: list[dict[str, object]]) -> str:

@@ -60,8 +60,10 @@
   `models/mambaad/data.py`、`models/moeclip/data.py`、`models/torchvision/dataset.py` 四个转换类全部实现它，**转换实现保持各自独立**。
   副产物：MambaAD 用 ImageNet 统计、MoECLIP 用 CLIP 统计，这个区别以前只存在于源码里，现在是可查询、可写进 run log 的声明。
 
-- [ ] **B4 训练设施可控可记录**（P1）
-  现状 Dinomaly 直接用上游 `StableAdamW` + `WarmCosineScheduler`。基准平台不需要自研优化器，只需要**每次跑用了什么 optimizer/scheduler/精度被完整记录进 run log**，否则结果不可复现。
+- [x] **B4 训练设施可控可记录**
+  `core/provenance.py`：`describe_training`（optimizer/scheduler/精度从 live 对象读取——Ultralytics 的 `"auto"` 记运行时解析出的真实类，Lightning 后端读 trainer，PatchCore 无优化器如实记 `none`）+ `collect_provenance`（仓库 commit + 每个 submodule 的 pinned commit 及 clean/modified 状态）。
+  两个账本同一个块：训练侧 `weight_registry.record_weight`（`Artifact.metadata["training"]` + `"batch_spec"` 随 `artifact_metadata` 落盘）、评测侧 `reporting.append_run_log`。C3 的遗留（hash 进 run log）一并关闭。
+  守护：`tests/test_provenance.py`。
 
 ## Track C — vendor 边界纪律
 
@@ -76,15 +78,15 @@
   `tests/test_vendor_boundary.py` 用 `ast` 解析 `src/` 下每个文件（不是 grep：字符串里的同名词不会误报，函数体内的延迟导入不会漏报），并附行为断言——导入后端后 `sys.modules` 不留痕、checkout 不留在 `sys.path`，以及两个仓库的 `utils` 确实是两个不同对象。
 
 - [x] **C3 `components/` 记录上游 commit hash + 是否被修改**
-  已经由 git submodule 机制提供：`git submodule status` 同时给出 pinned commit 和 `+`（脏/偏离）标记。无需额外工作。
-  真正缺的是把这个 hash 写进 run log / 结果表，归入 B4。
+  已经由 git submodule 机制提供：`git submodule status` 同时给出 pinned commit 和 `+`（脏/偏离）标记。
+  hash 写进 run log / 结果表已随 B4 落地（`core/provenance.py::vendored_components`）。
 
 - [ ] **C4 clean-room 实现要有对照验证**
   MambaAD 是自己重写的（`models/mambaad/adapter.py:2`），需要一个与论文/上游数值对齐的验证记录，否则重写反而是风险点。
 
 ## Track D — 交付物（P1）
 
-- [ ] **D1 一页 interface spec**（给导师：五个抽象 + 数据契约 + "新增模型只需实现 3 个方法"）
+- [x] **D1 一页 interface spec** → `docs/INTERFACE_SPEC.md`（五个抽象 + 数据契约 + 复现契约 + "新增模型只需实现 3 个方法"）
 - [x] **D2 更新 `docs/EXTENDING.md` 为"新增模型三步走"**
 - [ ] **D3 接口冻结打 tag**，之后改接口需要走一次评审
 
@@ -94,9 +96,8 @@
 
 | 优先级 | 项 | 说明 |
 |---|---|---|
-| P1 | B4 | 训练设施 + vendored commit hash 写进 run log（optimizer / scheduler / 精度 / `BatchSpec` / submodule hash） |
-| P1 | C4 | MambaAD clean-room 数值对照 |
-| P1 | D1 / D3 | 一页 interface spec；接口冻结打 tag |
+| P1 | C4 | MambaAD clean-room 数值对照（需 GPU 上与论文/上游数值对齐，本地做不了） |
+| P1 | D3 | 接口冻结打 tag，之后改契约走评审 |
 
 华纺数据集接入走 `DatasetAdapter`，不受本清单影响，可并行推进。
 
@@ -111,6 +112,7 @@
 | `DataAdapter` / `BatchSpec` | `core/data_adapter.py` | `tests/test_data_adapter_contract.py` |
 | `BasePipeline` / `RunResult` | `core/pipeline.py` | `tests/test_pipeline_contract.py` |
 | vendor 边界（上游模块名只在 `vendor.py`） | `core/vendor.py` | `tests/test_vendor_boundary.py` |
+| provenance 块 + 训练设施记录 | `core/provenance.py` | `tests/test_provenance.py` |
 | `DatasetAdapter` | `datasets/base.py` | — |
 | `Evaluator` | `evaluation/base.py` | — |
 | 配置档案只提供设置 | `core/base_recipe.py` | `tests/test_recipe_application.py` |

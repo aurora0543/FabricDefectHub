@@ -38,6 +38,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -290,9 +291,6 @@ class MoECLIPAdapter(ModelAdapter):
         checkpoint past process exit), plus any architecture knob.
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         import torch
@@ -425,6 +423,8 @@ class MoECLIPAdapter(ModelAdapter):
                 "class_names": class_names,
                 "history_csv": str(history_path),
                 "trusted": True,
+                "training": describe_training(optimizer, scheduler),
+                "batch_spec": dataset.batch_spec().as_run_metadata(),
                 **arch,
                 **stats,
                 **parameter_counts(model),

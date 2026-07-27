@@ -31,6 +31,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -263,9 +264,6 @@ class TorchvisionAdapter(ModelAdapter):
             `device`, `seed`, `amp`, `resume`, `run_dir`, `save_every_epoch`.
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         from torch.utils.data import DataLoader
@@ -361,7 +359,14 @@ class TorchvisionAdapter(ModelAdapter):
             num_workers=num_workers, collate_fn=collate,
         )
 
+        # B4: `run_training` builds the optimizer/scheduler internally; the
+        # epoch callback is the one place the live objects surface, so it
+        # doubles as the capture point for the metadata record below.
+        seen_facilities: dict[str, Any] = {}
+
         def on_epoch_end(log, optimizer, scheduler, best_map, improved):
+            seen_facilities["optimizer"] = optimizer
+            seen_facilities["scheduler"] = scheduler
             self._save_checkpoint(
                 last_path, class_names, optimizer=optimizer, scheduler=scheduler,
                 epoch=log.epoch, best_map=best_map,
@@ -412,6 +417,16 @@ class TorchvisionAdapter(ModelAdapter):
                 "resumed_from_epoch": resume_state["epoch"] if resume_state else None,
                 "best_map": best_map,
                 "final_val_metrics": final_metrics,
+                # `engine.run_training` resolves `amp` to False off CUDA;
+                # mirror that resolution so the record states what ran.
+                "training": describe_training(
+                    seen_facilities.get("optimizer", cfg.get("optimizer", "sgd")),
+                    seen_facilities.get("scheduler", cfg.get("lr_scheduler", "cosine")),
+                    precision="amp-mixed"
+                    if cfg.get("amp", False) and self._device.type == "cuda"
+                    else "fp32",
+                ),
+                "batch_spec": train_ds.batch_spec().as_run_metadata(),
                 **parameter_counts(self.model),
             },
         )

@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -173,9 +174,6 @@ class DinomalyAdapter(ModelAdapter):
         past process exit).
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         import torch
@@ -273,6 +271,10 @@ class DinomalyAdapter(ModelAdapter):
                     "crop_size": kwargs["crop_size"],
                     "history_csv": str(history_path),
                     "trusted": True,
+                    # B4: the facilities this run actually used (upstream's
+                    # StableAdamW + WarmCosineScheduler), read off the live
+                    # objects so the record cannot drift from the code.
+                    "training": describe_training(optimizer, lr_scheduler),
                     **parameter_counts(model),
                 },
             )

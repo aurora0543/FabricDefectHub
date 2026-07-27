@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from fabric_defect_hub.core.provenance import collect_provenance
+
 
 MANIFEST_FILENAME = "weight_manifest.jsonl"
 
@@ -74,6 +76,10 @@ def record_weight(
         },
         "metrics": _json_safe(metrics or {}),
         "artifact_metadata": _json_safe(registered_artifact.metadata),
+        # Same block `reporting.append_run_log` attaches to evaluation rows,
+        # so a weight and a result can be matched to one code state — repo
+        # commit *and* each vendored upstream checkout's pinned commit.
+        "provenance": collect_provenance(),
     }
     manifest_path = models_root / MANIFEST_FILENAME
     with manifest_path.open("a", encoding="utf-8") as handle:

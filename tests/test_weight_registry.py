@@ -45,6 +45,14 @@ def test_record_weight_captures_both_storage_locations_and_config(tmp_path):
     }
     snapshot = json.loads((tmp_path / "artifacts" / "models" / "records" / f"{record['record_id']}.config.json").read_text())
     assert snapshot["train"]["batch"] == 32
+    # The manifest carries the same provenance block as the run log, so a
+    # weight and a result row can be matched to one code state.
+    assert set(record["provenance"]) == {
+        "timestamp_utc",
+        "git_commit",
+        "hostname",
+        "vendored_components",
+    }
 
 
 def test_record_weight_marks_unavailable_parameter_counts(tmp_path):

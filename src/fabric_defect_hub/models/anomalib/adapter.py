@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
 from fabric_defect_hub.core.types import Prediction, Sample
@@ -97,9 +98,6 @@ class AnomalibAdapter(ModelAdapter):
         `Engine`).
         """
 
-        # A `TrainConfig` is translated into this backend's own argument
-        # names here; a plain dict passes straight through (see
-        # `core.train_config`).
         config = resolve_train_config(config, self.TRAIN_CONFIG_KEYS)
 
         model_kwargs = {**default_model_kwargs(self.name), **config.get("model_kwargs", {})}
@@ -133,6 +131,22 @@ class AnomalibAdapter(ModelAdapter):
             engine.fit(model=model, datamodule=datamodule)
 
         ckpt_path = engine.trainer.checkpoint_callback.best_model_path
+
+        # B4: Lightning owns optimizer construction (`configure_optimizers`
+        # inside each anomalib model), so read what the finished run actually
+        # held. An empty optimizer list is a real state, not an error:
+        # PatchCore fits a memory bank without one.
+        optimizers = getattr(engine.trainer, "optimizers", None) or []
+        schedulers = [
+            scheduler_config.scheduler
+            for scheduler_config in getattr(engine.trainer, "lr_scheduler_configs", None) or []
+        ]
+        training = describe_training(
+            optimizers[0] if optimizers else "none (non-gradient fit)",
+            schedulers[0] if schedulers else None,
+            precision=str(getattr(engine.trainer, "precision", "32-true")),
+        )
+
         return Artifact(
             path=str(ckpt_path),
             backend=self.backend,
@@ -140,6 +154,7 @@ class AnomalibAdapter(ModelAdapter):
                 "model_class": self.resolved_class_name,
                 "model_kwargs": model_kwargs,
                 "trusted": True,
+                "training": training,
                 **parameter_counts(model),
             },
         )
