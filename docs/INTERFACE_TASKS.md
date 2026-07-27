@@ -81,14 +81,15 @@
   已经由 git submodule 机制提供：`git submodule status` 同时给出 pinned commit 和 `+`（脏/偏离）标记。
   hash 写进 run log / 结果表已随 B4 落地（`core/provenance.py::vendored_components`）。
 
-- [ ] **C4 clean-room 实现要有对照验证**
+- [ ] **C4 clean-room 实现要有对照验证**（阻塞：需 GPU + 数据集，本地 Mac 做不了）
   MambaAD 是自己重写的（`models/mambaad/adapter.py:2`），需要一个与论文/上游数值对齐的验证记录，否则重写反而是风险点。
+  待云端执行的具体动作：在有 MVTec AD 的 GPU 机器上跑 `fdh` 的 mambaad 后端（ResNet34 teacher，上游默认超参已内置于 `presets.DEFAULT_TRAIN_KWARGS`），对照 MambaAD 论文 Table 1 的 MVTec image-AUROC（多类统一训练，论文报 97.8）；差距 >1 个点即视为未对齐，需逐层排查 scan/SSM。结果（含 run log 行）存入 `docs/`，作为 clean-room 的验证记录。
 
 ## Track D — 交付物（P1）
 
 - [x] **D1 一页 interface spec** → `docs/INTERFACE_SPEC.md`（五个抽象 + 数据契约 + 复现契约 + "新增模型只需实现 3 个方法"）
 - [x] **D2 更新 `docs/EXTENDING.md` 为"新增模型三步走"**
-- [ ] **D3 接口冻结打 tag**，之后改接口需要走一次评审
+- [x] **D3 接口冻结打 tag** → `interface-freeze-v1.0`（含 A1–A5 / B3–B4 / C1–C3 / D1–D2 全部落地），之后改"已冻结的契约"表中任何一项需先改守护测试并走评审
 
 ---
 
@@ -96,8 +97,7 @@
 
 | 优先级 | 项 | 说明 |
 |---|---|---|
-| P1 | C4 | MambaAD clean-room 数值对照（需 GPU 上与论文/上游数值对齐，本地做不了） |
-| P1 | D3 | 接口冻结打 tag，之后改契约走评审 |
+| P1 | C4 | MambaAD clean-room 数值对照——唯一未完成项，阻塞在 GPU/数据集，执行步骤见上方 C4 条目 |
 
 华纺数据集接入走 `DatasetAdapter`，不受本清单影响，可并行推进。
 
