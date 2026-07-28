@@ -1,6 +1,20 @@
 # ============================================================================
-# Anomalib (PatchCore / PaDiM / RD4AD / EfficientAD / SuperSimpleNet)
-# experiment config example.
+# Anomalib experiment config example, and the annotated field reference the
+# other anomalib configs in this directory point back to.
+#
+# This file's defaults are shaped for the memory-bank models
+# (PatchCore / PaDiM), which fit in a single pass -- note `max_epochs: 1`.
+# Models that genuinely train have their own file so the run length isn't
+# something every caller has to remember to override:
+#     anomalib_stfpm.yaml      teacher-student
+#     anomalib_ganomaly.yaml   adversarial (GAN), image-level scores only
+#     anomalib_draem.yaml      reconstruction (needs DTD staged at data/DTD)
+#
+# The full set of names this backend accepts lives in
+# models/anomalib/presets.py::MODEL_ALIASES -- also reachable from any
+# config here via `--variant`, e.g.
+#     fdh train anomalib_example --variant FastFlow
+# `fabric_defect_hub.list_models("anomalib")` prints them.
 #
 # Usage (configuration-driven, not command-line flags):
 #     from fabric_defect_hub.models.anomalib import run_from_yaml
@@ -26,7 +40,10 @@
 
 # ---- Model: pick one ----
 model:
-  name: PatchCore   # PatchCore | PaDiM | RD4AD | EfficientAD | SuperSimpleNet | WinCLIP (case-insensitive)
+  name: PatchCore   # any alias from presets.MODEL_ALIASES, case-insensitive:
+                    #   PatchCore | PaDiM | RD4AD | STFPM | UniNet | DRAEM | DSR
+                    #   | GANomaly | FastFlow | SuperSimpleNet | GLASS
+                    #   | WinCLIP | AnomalyDINO | EfficientAD
   # WinCLIP is zero-shot by default (needs no training images); pass
   # train.model_kwargs: {k_shot: 5} to use few-shot normal references instead.
   # weights: artifacts/models/published/PatchCore.ckpt

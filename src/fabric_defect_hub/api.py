@@ -1,0 +1,418 @@
+"""The public, flat entry points -- `fdh.load_config` / `load_dataset` /
+`load_model` / `from_pretrained` / `train` / `predict` / `evaluate`.
+
+Why this module exists
+----------------------
+The project already had two ways in, with different shapes:
+
+* the composable one (`loader.load_dataset` + `loader.load_model` +
+  `loader.run_experiment`), which is what `docs/SDK.md` documented but
+  which makes the caller assemble `ModelInfo`/`RuntimeInfo` by hand, and
+* the config-driven one (`training.run_train` / `predict.run_predict`),
+  which is what `fdh train` actually runs and what every example config is
+  written for -- but which was not exported from the package at all, so
+  `import fabric_defect_hub` could not reach it.
+
+This module makes the second one the front door, so using this project from
+another codebase is five imports-worth of work rather than a study of its
+internals:
+
+    import fabric_defect_hub as fdh
+
+    fdh.list_models("anomalib")          # what can I run?
+    cfg = fdh.load_config("stfpm", dataset="zju-leaper", epochs=50)
+    run = fdh.train(cfg)                 # -> TrainRunResult
+    out = fdh.predict("stfpm", weights=run.result.registered_artifact.path,
+                      source="a.jpg")
+
+    weights = fdh.from_pretrained("PatchCore")   # a published checkpoint
+    fdh.evaluate("PatchCore", weights=weights, dataset="tilda-400")
+
+What this module is NOT
+-----------------------
+It holds **no logic of its own**. Every function here resolves arguments
+into the shape an existing, contract-tested entry point already accepts and
+delegates. That is a deliberate constraint, not an accident of the current
+implementation:
+
+* `models/base.py`, `core/data_adapter.py`, `core/train_config.py` and
+  `core/pipeline.py` are the frozen contracts (`docs/INTERFACE_SPEC.md`),
+  guarded by `test_adapter_contract.py` / `test_pipeline_contract.py` /
+  `test_data_adapter_contract.py`. Anything that decides something has to
+  live behind those tests.
+* A convenience layer that starts deciding things -- "if backend is X do Y"
+  -- ends up as a second, untested implementation of the pipeline that
+  those tests cannot see. `tests/test_api_facade.py` checks at the AST
+  level that the functions here stay branch-free delegations, so this
+  property is enforced rather than merely intended.
+
+Where a uniform surface genuinely needs per-backend knowledge (e.g. `epochs`
+lands in a different config key for each backend), that knowledge lives in
+the layer it belongs to -- `training.RUN_LENGTH_KEYS` -- and is looked up
+here, not re-derived.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from fabric_defect_hub.models.base import Artifact
+
+# Preset module + its published-variant lister, per backend. Every backend's
+# preset module exposes `list_supported_variants()` under that one name (see
+# each `models/<backend>/presets.py`), so this stays a table lookup rather
+# than a per-backend branch.
+_PRESET_MODULES: dict[str, str] = {
+    "ultralytics": "fabric_defect_hub.models.ultralytics.presets",
+    "torchvision": "fabric_defect_hub.models.torchvision.presets",
+    "anomalib": "fabric_defect_hub.models.anomalib.presets",
+    "dinomaly": "fabric_defect_hub.models.dinomaly.presets",
+    "moeclip": "fabric_defect_hub.models.moeclip.presets",
+    "mambaad": "fabric_defect_hub.models.mambaad.presets",
+}
+
+
+# --------------------------------------------------------------------------- #
+# Layer 1 -- configuration
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class RunConfig:
+    """A resolved experiment configuration: which config file, which model
+    inside it, and the override layers to apply on top.
+
+    Deliberately a *description* of a run rather than a live object -- it
+    holds exactly the arguments `training.run_train` takes, so `train(cfg)`
+    is a call, not a translation. `raw` is the parsed config as it stands
+    before the override layers are applied, for inspection.
+    """
+
+    model: str
+    backend: str
+    config_path: Path
+    variant: str | None = None
+    overrides: Any = None  # training.DatasetOverrides
+    set_overrides: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def with_set(self, **dotted: Any) -> "RunConfig":
+        """Return a copy with extra dotted-path overrides layered on, e.g.
+        `cfg.with_set(**{"train.engine_kwargs.max_epochs": 5})`.
+        """
+
+        from dataclasses import replace
+
+        return replace(self, set_overrides={**self.set_overrides, **dotted})
+
+
+def load_config(
+    model: str,
+    *,
+    dataset: str | None = None,
+    dataset_root: str | None = None,
+    variant: str | None = None,
+    epochs: int | None = None,
+    num_samples: int | None = None,
+    seed: int | None = None,
+    config_dir: str | Path | None = None,
+    set: dict[str, Any] | None = None,  # noqa: A002 - mirrors `fdh train --set`
+) -> RunConfig:
+    """Resolve `model` to a config and layer the given overrides onto it.
+
+    `model` accepts everything `fdh train` does: a config path, a config
+    filename stem, or a bare model keyword (`"stfpm"`, `"yolov8n"`,
+    `"patchcore"`) matched against every config's declared model.
+
+    `dataset`/`dataset_root`/`num_samples`/`seed` become a
+    `training.DatasetOverrides` (the same layer `--dataset`/`--num-samples`
+    use). `set` is the arbitrary dotted-path escape hatch, highest priority,
+    identical to `fdh train --set a.b.c=v`.
+
+    `epochs` is resolved through `training.RUN_LENGTH_KEYS` into whichever
+    config key that backend counts its run length in. It raises for the two
+    backends that count optimizer iterations rather than epochs (Dinomaly,
+    MambaAD) instead of quietly writing an epoch count they would ignore --
+    those take `set={"train.total_iters": N}`.
+    """
+
+    from fabric_defect_hub.training import (
+        DEFAULT_MODEL_CONFIG_DIR,
+        RUN_LENGTH_KEYS,
+        DatasetOverrides,
+        infer_backend,
+        load_raw_config,
+        resolve_model_config_and_variant,
+    )
+
+    config_path, implied_variant = resolve_model_config_and_variant(
+        model, config_dir=config_dir or DEFAULT_MODEL_CONFIG_DIR
+    )
+    raw = load_raw_config(config_path)
+    backend = infer_backend(raw)
+
+    set_overrides = dict(set or {})
+    if epochs is not None:
+        key, unit = RUN_LENGTH_KEYS[backend]
+        if unit != "epochs":
+            raise ValueError(
+                f"the {backend} backend counts its run length in {unit}, not epochs; "
+                f"pass set={{{key!r}: N}} instead of epochs={epochs}"
+            )
+        set_overrides.setdefault(key, epochs)
+
+    return RunConfig(
+        model=model,
+        backend=backend,
+        config_path=config_path,
+        variant=variant if variant is not None else implied_variant,
+        overrides=DatasetOverrides(
+            dataset=dataset,
+            dataset_root=dataset_root,
+            num_samples=num_samples,
+            seed=seed,
+        ),
+        set_overrides=set_overrides,
+        raw=raw,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Layer 2 -- weights
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class PretrainedWeights:
+    """A published checkpoint from this project's own model catalog.
+
+    Passes straight into `predict`/`evaluate`'s `weights=` (it implements
+    `__fspath__`), while still carrying the provenance the frontend shows --
+    which backend and variant produced it, and what `source` string the
+    leaderboard labels it with.
+    """
+
+    key: str
+    path: str
+    backend: str
+    variant: str
+    task: str
+    source: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __fspath__(self) -> str:
+        return self.path
+
+    def __str__(self) -> str:
+        return self.path
+
+    def as_artifact(self) -> Artifact:
+        """The `models.base.Artifact` handle an adapter's `predict`/`export`
+        takes directly, for callers going through the adapter layer rather
+        than through `api.predict`.
+        """
+
+        return Artifact(path=self.path, backend=self.backend, metadata=dict(self.metadata))
+
+
+def from_pretrained(key: str) -> PretrainedWeights:
+    """Look up a published checkpoint by its catalog key (`"PatchCore"`,
+    `"yolov8n"`, `"STFPM"`, ... -- see `fdh.list_pretrained()`).
+
+    Raises `FileNotFoundError` when the model is in the catalog but has not
+    been trained and published on this machine, which is the common case on
+    a fresh checkout: the catalog names what this project *publishes*, and
+    the weights themselves are produced by `fdh train`, not shipped in git.
+    """
+
+    from fabric_defect_hub.catalog import find_canonical_model_by_key, metadata_for, published_path
+
+    model = find_canonical_model_by_key(key)
+    path = published_path(model)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"no published weights for {key!r} at {path}. Train and publish it first "
+            f"(`fdh train {model.config}` with variant {model.variant!r}), or pick another "
+            f"model from fdh.list_pretrained()."
+        )
+    return PretrainedWeights(
+        key=model.key,
+        path=str(path),
+        backend=model.backend,
+        variant=model.variant,
+        task=model.task,
+        source=model.source,
+        metadata=metadata_for(model),
+    )
+
+
+def list_pretrained(*, available_only: bool = False) -> list[str]:
+    """Catalog keys `from_pretrained` accepts. With `available_only`, only
+    those whose weights are actually present on this machine.
+    """
+
+    from fabric_defect_hub.catalog import CANONICAL_MODELS, published_path
+
+    return [
+        model.key
+        for model in CANONICAL_MODELS
+        if not available_only or published_path(model).is_file()
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Layer 3 -- discovery
+# --------------------------------------------------------------------------- #
+def list_models(backend: str | None = None) -> dict[str, list[str]] | list[str]:
+    """Every model this project can run: `{backend: [variant, ...]}`, or
+    just one backend's list when `backend` is given.
+
+    Reads each backend's own preset module, so it reflects what is actually
+    registered rather than a hand-maintained list -- adding an alias to
+    `models/anomalib/presets.py::MODEL_ALIASES` shows up here immediately.
+    """
+
+    import importlib
+
+    backends = [backend] if backend is not None else list(_PRESET_MODULES)
+    listed = {
+        name: importlib.import_module(_PRESET_MODULES[name]).list_supported_variants()
+        for name in backends
+    }
+    return listed[backend] if backend is not None else listed
+
+
+def list_datasets() -> list[str]:
+    """Every registered dataset name `load_dataset`/`predict` accept."""
+
+    import importlib
+
+    importlib.import_module("fabric_defect_hub.datasets")  # triggers @register_dataset
+    from fabric_defect_hub.core.registry import list_datasets as _list
+
+    return _list()
+
+
+# --------------------------------------------------------------------------- #
+# Verbs
+# --------------------------------------------------------------------------- #
+def train(config: RunConfig | str, *, publish: bool = True, **kwargs: Any):
+    """Run training. `config` is a `RunConfig` from `load_config`, or a bare
+    model keyword for a run that needs no overrides (`fdh.train("stfpm")`).
+
+    Returns `training.TrainRunResult`. `kwargs` pass through to
+    `training.run_train` (e.g. `profile=`, `config_dir=`).
+    """
+
+    from fabric_defect_hub.training import run_train
+
+    cfg = config if isinstance(config, RunConfig) else load_config(config)
+    return run_train(
+        cfg.model,
+        backend=cfg.backend,
+        variant=cfg.variant,
+        overrides=cfg.overrides,
+        set_overrides=cfg.set_overrides,
+        publish=publish,
+        **kwargs,
+    )
+
+
+def predict(
+    model: str,
+    weights: str | os.PathLike[str] | PretrainedWeights,
+    source: str | list[str] | None = None,
+    *,
+    dataset: str | None = None,
+    dataset_root: str | None = None,
+    split: str = "test",
+    num_samples: int | None = None,
+    pattern: str | int | None = None,
+    category: str | None = None,
+    seed: int = 0,
+    output_dir: str | None = None,
+    **kwargs: Any,
+):
+    """Run inference. Give either `source` (one image path or a list of
+    them) or `dataset` (a registered dataset name, optionally sliced by
+    `num_samples`/`pattern`/`category`).
+
+    Returns `predict.PredictRunResult`. `kwargs` pass through to
+    `predict.run_predict` (`enable_tiling=`, `enable_tta=`, `tile_size=`,
+    `tile_overlap=`, `backend=`, `variant=`, `config_dir=`).
+    """
+
+    from fabric_defect_hub.predict import run_predict
+
+    return run_predict(
+        model,
+        weights=os.fspath(weights),
+        source=_as_predict_input(
+            source, dataset, dataset_root, split, num_samples, pattern, category, seed
+        ),
+        output_dir=output_dir,
+        **kwargs,
+    )
+
+
+def evaluate(
+    model: str,
+    weights: str | os.PathLike[str] | PretrainedWeights,
+    *,
+    dataset: str,
+    dataset_root: str | None = None,
+    split: str = "test",
+    num_samples: int | None = None,
+    pattern: str | int | None = None,
+    category: str | None = None,
+    seed: int = 0,
+    task: str | None = None,
+    **kwargs: Any,
+):
+    """Score a checkpoint against a dataset's ground truth -- the scriptable
+    equivalent of the web Benchmark tab's leaderboard row.
+
+    Returns `predict.EvaluateRunResult`. A dataset is required (raw image
+    paths carry no ground truth to score against).
+    """
+
+    from fabric_defect_hub.predict import run_evaluate
+
+    return run_evaluate(
+        model,
+        weights=os.fspath(weights),
+        source=_as_predict_input(
+            None, dataset, dataset_root, split, num_samples, pattern, category, seed
+        ),
+        task=task,
+        **kwargs,
+    )
+
+
+def _as_predict_input(
+    source: str | list[str] | None,
+    dataset: str | None,
+    dataset_root: str | None,
+    split: str,
+    num_samples: int | None,
+    pattern: str | int | None,
+    category: str | None,
+    seed: int,
+):
+    """Pack the flat inference arguments into the `PredictInput` that
+    `run_predict`/`run_evaluate` already take. Shared by both verbs so the
+    two keep identical source-selection semantics.
+    """
+
+    from fabric_defect_hub.predict import PredictInput
+
+    images = [source] if isinstance(source, str) else list(source or [])
+    return PredictInput(
+        images=images,
+        dataset=dataset,
+        dataset_root=dataset_root,
+        split=split,
+        num_samples=num_samples,
+        pattern=pattern,
+        category=category,
+        seed=seed,
+    )

@@ -135,3 +135,31 @@ def test_run_metadata_is_json_safe_and_omits_unset_fields():
 
     assert metadata == {"epochs": 5, "lr": 0.01, "precision": "fp32"}
     assert set(metadata) <= {*CANONICAL_KEYS, "precision"}
+
+
+# --------------------------------------------------------------------------- #
+# Run length, per backend
+# --------------------------------------------------------------------------- #
+def test_run_length_keys_match_test_speed_overrides():
+    """`training.RUN_LENGTH_KEYS` tells `api.load_config` where a backend's
+    run length lives; `_apply_test_speed_overrides` writes to that same place
+    when `--mode test` caps a smoke run. They are two statements of one fact,
+    so this pins them together -- otherwise a backend could get its run-length
+    key changed in one and not the other, and `epochs=` would silently write
+    to a key nobody reads.
+    """
+
+    from fabric_defect_hub.training import RUN_LENGTH_KEYS, _apply_test_speed_overrides
+
+    for backend, (dotted_key, unit) in RUN_LENGTH_KEYS.items():
+        assert unit in {"epochs", "iterations"}, f"{backend}: unknown run-length unit {unit!r}"
+
+        capped = _apply_test_speed_overrides({}, backend)
+        section: object = capped
+        for part in dotted_key.split("."):
+            assert isinstance(section, dict) and part in section, (
+                f"{backend}: RUN_LENGTH_KEYS says the run length is at {dotted_key!r}, but "
+                f"--mode test does not write there"
+            )
+            section = section[part]
+        assert isinstance(section, int) and section > 0

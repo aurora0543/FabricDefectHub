@@ -7,13 +7,13 @@
 
 **FabricDefectHub (UTAD-Framework)** is a unified, modular Python SDK and benchmarking framework for industrial textile anomaly detection and defect segmentation. 
 
-It integrates 18 model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, and LaTeX table generation.
+It integrates 20 published model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, and LaTeX table generation.
 
 ---
 
 ## 🏛️ System Architecture & Model Matrix
 
-The benchmark consolidates **18 models** across supervised detectors and unsupervised anomaly segmenters. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
+The benchmark consolidates **20 published models** across supervised detectors and unsupervised anomaly segmenters. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
 
 | # | Model Architecture | Paradigm | Config profile (`recipe_id`) | Backbone / Notes |
 | :-: | --- | --- | --- | --- |
@@ -27,11 +27,22 @@ The benchmark consolidates **18 models** across supervised detectors and unsuper
 | 8 | **PaDiM / SuperSimpleNet** | Feature Embedding | `patchcore` | Feature-embedding baselines |
 | 9 | **RD4AD** | Teacher-Student | `rd4ad` | WideResNet-50 reverse distillation (paper settings) |
 | 10 | **EfficientAD** | Teacher-Student | `rd4ad` | Teacher-student distillation |
-| 11 | **MambaAD** | State Space (SSM) | `mambaad` | State-space decoder; upstream defaults |
-| 12 | **Dinomaly** | DINOv2 Enc-Dec | `dinomaly` | DINOv2 encoder-decoder (ViTill); upstream defaults |
-| 13 | **MoECLIP / WinCLIP** | Vision-Language | `moeclip` | CLIP + LoRA mixture-of-experts; upstream defaults |
+| 11 | **STFPM** | Teacher-Student | — *(see note)* | Feature-pyramid matching, student trained from scratch |
+| 12 | **GANomaly** | Adversarial (GAN) | — *(see note)* | Enc-dec-enc generator + discriminator; image-level scores only |
+| 13 | **MambaAD** | State Space (SSM) | `mambaad` | State-space decoder; upstream defaults |
+| 14 | **Dinomaly** | DINOv2 Enc-Dec | `dinomaly` | DINOv2 encoder-decoder (ViTill); upstream defaults |
+| 15 | **MoECLIP / WinCLIP** | Vision-Language | `moeclip` | CLIP + LoRA mixture-of-experts; upstream defaults |
 
-Coverage: the six `recipe_id`s supply run settings for the anomaly/detection methods (rows 1–2, 7–13). The torchvision detectors/segmenters (rows 3–6) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
+Coverage: the six `recipe_id`s supply run settings for the anomaly/detection methods (rows 1–2, 7–10, 13–15). The torchvision detectors/segmenters (rows 3–6) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
+
+Rows 11–12 (STFPM, GANomaly) carry no profile either, and that is a statement of fact rather than a gap to fill later: a `recipe_id` here means "these settings are anchored to that method's paper", and neither has been reproduced against its paper in this project yet. Both run on the constructor defaults declared in `models/anomalib/presets.py`, with each preset's comment saying explicitly which values are upstream's own and which (if any) were adjusted for fabric. A profile gets added when a reproduction earns it — see `docs/REPRODUCTION_PATCHCORE.md` for what that involves.
+
+Beyond the published catalog above, the anomalib backend also reaches
+**DRAEM**, **DSR**, **GLASS**, **FastFlow**, **UniNet** and **AnomalyDINO**
+through `models/anomalib/presets.py` — reconstruction, normalizing-flow and
+zero-shot-DINOv2 families that are runnable today (`fdh train draem`) but not
+yet trained and published here, so they are deliberately kept out of the
+catalog and the UI dropdown. `fdh.list_models("anomalib")` prints the full set.
 
 ---
 
@@ -51,13 +62,26 @@ and MoECLIP, install `pip install -r requirements-full.txt` instead.
 ```python
 import fabric_defect_hub as fdh
 
-# Load dataset with 10% sparse ratio and 256x256 4K tiling strategy
+# What can I run?
+fdh.list_models("anomalib")     # every anomalib model this backend accepts
+fdh.list_datasets()             # every registered dataset
+
+# Configure -> train -> infer, all config-driven (same path as `fdh train`)
+cfg = fdh.load_config("stfpm", dataset="zju-leaper", num_samples=300, epochs=50)
+run = fdh.train(cfg)
+out = fdh.predict("stfpm", weights=run.result.registered_artifact.path, source="sample.jpg")
+
+# Or score a previously published checkpoint against another dataset
+weights = fdh.from_pretrained("PatchCore")
+metrics = fdh.evaluate("PatchCore", weights=weights, dataset="tilda-400").metrics
+```
+
+Prefer to assemble the pieces yourself? The loading strategies and the raw
+adapters are still directly available:
+
+```python
 dataset = fdh.load_dataset("raw-fabric", root="data/RAW_FABRID", sparse_ratio=0.1, tiling=True)
-
-# Load model with TTA flip-multiscale inference strategy
 model = fdh.load_model("ultralytics", "yolov8n", tta_mode="flip_multiscale")
-
-# Run prediction & compute Per-Region Overlap (PRO-Score)
 predictions = model.predict(dataset.load_samples())
 pro_score = fdh.compute_pro_score(gt_masks, pred_anomaly_maps)
 ```
@@ -70,6 +94,10 @@ fdh train yolov8n
 # Score a trained checkpoint against a validation dataset (e.g. the smaller
 # TILDA-400 / Fabric Defects sets) without opening the web UI
 fdh evaluate patchcore_textile --weights artifacts/models/published/PatchCore.ckpt --dataset tilda-400
+
+# List every model this project can run, grouped by backend
+fdh models
+fdh models --backend anomalib
 
 # List all academic recipes
 fdh recipes

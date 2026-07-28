@@ -15,8 +15,8 @@ from fabric_defect_hub.catalog import (
 )
 
 
-def test_canonical_models_has_eighteen_entries():
-    assert len(CANONICAL_MODELS) == 18
+def test_canonical_models_has_twenty_entries():
+    assert len(CANONICAL_MODELS) == 20
 
 
 def test_canonical_model_keys_are_unique():
@@ -42,6 +42,10 @@ def test_canonical_model_labels_are_unique():
         ("anomalib", "patchcore", "PatchCore"),  # case-insensitive
         ("anomalib", "WinClip", "WinCLIP"),
         ("anomalib", "winclip", "WinCLIP"),  # case-insensitive
+        ("anomalib", "STFPM", "STFPM"),
+        ("anomalib", "Stfpm", "STFPM"),  # case-insensitive
+        ("anomalib", "GANomaly", "GANomaly"),
+        ("anomalib", "ganomaly", "GANomaly"),  # case-insensitive
         ("dinomaly", "dinov2reg_vit_base_14", "Dinomaly"),
         ("moeclip", "ViT-L-14-336", "MoECLIP"),
         ("moeclip", "vit-l-14-336", "MoECLIP"),  # case-insensitive

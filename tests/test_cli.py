@@ -172,6 +172,30 @@ def test_cli_parser_accepts_doctor():
     assert build_parser().parse_args(["doctor"]).command == "doctor"
 
 
+def test_cli_parser_accepts_models():
+    args = build_parser().parse_args(["models"])
+    assert args.command == "models"
+    assert args.backend is None
+    assert build_parser().parse_args(["models", "--backend", "anomalib"]).backend == "anomalib"
+
+
+def test_run_models_lists_every_backend_and_matches_the_python_api():
+    """`fdh models` and `fdh.list_models()` must not drift: the CLI is the
+    same lookup, not a second list maintained by hand.
+    """
+
+    from fabric_defect_hub.api import list_models
+    from fabric_defect_hub.cli import _run_models
+
+    listed = _run_models(None)
+    assert listed == list_models()
+    assert set(listed) == {
+        "ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip", "mambaad",
+    }
+    assert all(variants for variants in listed.values())
+    assert _run_models("anomalib") == list_models("anomalib")
+
+
 def test_cli_parser_train_set_is_repeatable():
     args = build_parser().parse_args(
         [

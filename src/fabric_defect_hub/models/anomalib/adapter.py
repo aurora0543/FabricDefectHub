@@ -29,6 +29,7 @@ from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.datasets.anomalib_folder import anomalib_folder_staging_dir
 from fabric_defect_hub.model_statistics import parameter_counts
 from fabric_defect_hub.models.anomalib.presets import (
+    IMAGE_LEVEL_ONLY,
     default_model_kwargs,
     resolve_model_class,
     resolve_model_class_name,
@@ -66,9 +67,19 @@ class AnomalibAdapter(ModelAdapter):
     }
 
     def capabilities(self) -> ModelCapabilities:
+        # Per-model, not per-backend: most anomalib models return a pixel-level
+        # `anomaly_map` alongside the image score, but some (GANomaly) return
+        # only the score -- see `presets.IMAGE_LEVEL_ONLY`. Declaring
+        # `anomaly_map` for those would tell an evaluator that pixel
+        # AUROC/AUPRO is computable when it is not, which is exactly the
+        # implicit-convention problem `ModelCapabilities` exists to remove.
+        fields: tuple[str, ...] = ("anomaly_score", "labels")
+        if self.resolved_class_name not in IMAGE_LEVEL_ONLY:
+            fields = ("anomaly_score", "anomaly_map", "labels")
+
         return ModelCapabilities(
             tasks=("anomaly",),
-            prediction_fields=("anomaly_score", "anomaly_map", "labels"),
+            prediction_fields=fields,
             # One-class training needs normal images only; no labels required.
             required_annotations=(),
             export_targets=("onnx", "openvino", "torch"),
@@ -195,6 +206,30 @@ class AnomalibAdapter(ModelAdapter):
                     f"got {imagenet_dir!r}. There is no fabric-appropriate default — "
                     "pass a real path, e.g. an Imagenette download."
                 )
+
+        if self.resolved_class_name == "Draem":
+            # Unlike EfficientAD, anomalib's Draem does not fail on a missing
+            # texture source: it calls `download_and_extract(dtd_dir,
+            # DTD_DOWNLOAD_INFO)` and fetches ~600MB mid-training. That is a
+            # surprise on a metered or offline training box, so require the
+            # directory to exist and make the download an explicit opt-in
+            # rather than a side effect of starting a run.
+            dtd_dir = model_kwargs.get("dtd_dir")
+            allow_download = bool(model_kwargs.get("allow_dtd_download", False))
+            if not allow_download and (not dtd_dir or not Path(dtd_dir).is_dir()):
+                raise ValueError(
+                    f"DRAEM needs a DTD texture directory to synthesize anomalies; "
+                    f"model_kwargs['dtd_dir']={dtd_dir!r} is not an existing directory. "
+                    "Stage DTD at data/DTD (this project's data/<Dataset> convention), "
+                    "or set train.model_kwargs.dtd_dir to a writable path and pass "
+                    "train.model_kwargs.allow_dtd_download: true to let anomalib "
+                    "download ~600MB there itself."
+                )
+
+        # `allow_dtd_download` is this adapter's own opt-in flag, not an
+        # anomalib constructor argument — strip it before the kwargs reach the
+        # model, or anomalib rejects it as unknown.
+        model_kwargs.pop("allow_dtd_download", None)
 
     def predict(
         self,

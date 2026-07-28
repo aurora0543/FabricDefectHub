@@ -192,6 +192,30 @@ class DatasetOverrides:
         return all(getattr(self, f.name) is None for f in fields(self))
 
 
+# Where each backend's run length lives in its own config, and what that
+# length actually counts. The six backends genuinely disagree on both --
+# anomalib's is a Lightning engine kwarg, the two distillation backends
+# count optimizer *iterations* rather than passes over the data -- so any
+# caller wanting to say "train for N" has to know this table.
+#
+# It exists so that knowledge stays in this layer, next to the config
+# handling it belongs to, instead of being re-derived by `api.load_config`
+# (whose whole contract is to hold no logic of its own) or by every user
+# script that wants to shorten a run.
+#
+# `tests/test_train_config.py::test_run_length_keys_match_test_speed_overrides`
+# pins this against what `_apply_test_speed_overrides` actually writes, so
+# the two cannot drift apart.
+RUN_LENGTH_KEYS: dict[str, tuple[str, str]] = {
+    "anomalib": ("train.engine_kwargs.max_epochs", "epochs"),
+    "ultralytics": ("train.epochs", "epochs"),
+    "torchvision": ("train.epochs", "epochs"),
+    "moeclip": ("train.epochs", "epochs"),
+    "dinomaly": ("train.total_iters", "iterations"),
+    "mambaad": ("train.total_iters", "iterations"),
+}
+
+
 def infer_backend(raw: dict[str, Any]) -> str:
     """Keyword-based backend detection over a parsed model-config mapping.
 

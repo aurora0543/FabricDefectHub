@@ -73,3 +73,11 @@ def encoder_preset(name: str) -> dict[str, Any]:
 
 def default_train_kwargs() -> dict[str, Any]:
     return dict(DEFAULT_TRAIN_KWARGS)
+
+
+def list_supported_variants() -> list[str]:
+    """Every encoder this backend accepts, under the name all six backends'
+    preset modules share (`api.list_models` calls it on each of them).
+    """
+
+    return sorted(ENCODER_PRESETS)

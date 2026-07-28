@@ -73,6 +73,26 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "anomalib_example.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("SuperSimpleNet", "anomalib", "SuperSimpleNet", "anomaly",
                     "anomalib_example.yaml", "SuperSimpleNet · Normal Lab trained", "Normal Lab"),
+    # Two further anomalib families, added so the leaderboard covers more
+    # than memory-bank/distillation approaches. Both are listed here (rather
+    # than left reachable only through `presets.MODEL_ALIASES`) because both
+    # train from fabric data alone -- no external texture source, no
+    # `imagenet_dir` -- so they can be published from a plain
+    # `fdh train` on any machine that has ZJU-Leaper staged.
+    #
+    # The other new presets (DRAEM, DSR, GLASS, FastFlow, UniNet,
+    # AnomalyDINO) stay out of this catalog on purpose: this list drives the
+    # frontend dropdown and the fixed published-weight paths, so an entry
+    # with no trained checkpoint shows up as a selectable-but-missing model
+    # (`web/single_image.py::model_status`). They are added here once they
+    # have actually been trained and published.
+    CanonicalModel("STFPM", "anomalib", "STFPM", "anomaly",
+                    "anomalib_example.yaml", "STFPM · Normal Lab trained", "Normal Lab"),
+    # The benchmark's only adversarial entry. Image-level scores only -- its
+    # `capabilities()` drops `anomaly_map` (see `presets.IMAGE_LEVEL_ONLY`),
+    # so its row has image AUROC but no pixel AUROC/AUPRO.
+    CanonicalModel("GANomaly", "anomalib", "GANomaly", "anomaly",
+                    "anomalib_example.yaml", "GANomaly · Normal Lab trained", "Normal Lab"),
     # -- WinCLIP: CLIP-based, zero-shot by default (no fabric training data) --
     CanonicalModel("WinCLIP", "anomalib", "WinClip", "anomaly",
                     "anomalib_example.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),
@@ -116,6 +136,24 @@ def find_canonical_model(backend: str, variant: str) -> CanonicalModel | None:
         if model.backend == backend and model.variant.strip().lower() == needle:
             return model
     return None
+
+
+def find_canonical_model_by_key(key: str) -> CanonicalModel:
+    """Look a catalog entry up by its stable key (`"PatchCore"`, `"yolov8n"`),
+    case-insensitively — the lookup `api.from_pretrained` is built on.
+
+    Raises `KeyError` listing the valid keys, rather than returning None:
+    every caller of this has already committed to a specific model, so an
+    unknown key is a typo to report, not a case to branch on (unlike
+    `find_canonical_model`, whose callers are asking "is this one of ours?").
+    """
+
+    match = _BY_KEY.get(key) or next(
+        (model for model in CANONICAL_MODELS if model.key.lower() == key.strip().lower()), None
+    )
+    if match is None:
+        raise KeyError(f"unknown model key {key!r}. Known keys: {sorted(_BY_KEY)}")
+    return match
 
 
 def published_path(model: CanonicalModel) -> Path:

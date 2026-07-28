@@ -91,13 +91,38 @@
 - [x] **D2 更新 `docs/EXTENDING.md` 为"新增模型三步走"**
 - [x] **D3 接口冻结打 tag** → `interface-freeze-v1.0`（含 A1–A5 / B3–B4 / C1–C3 / D1–D2 全部落地），之后改"已冻结的契约"表中任何一项需先改守护测试并走评审
 
+## Track E — 门面层与后端广度（冻结之后）
+
+Track A–D 面向"接一个新模型的人"，这一条面向"用这个项目的人"。两者不冲突：门面建在已冻结的契约之上，不新增抽象。
+
+- [x] **E1 anomalib 后端从 6 个模型扩到 14 个**
+  `MODEL_ALIASES` / `MODEL_PRESETS` 新增 STFPM、UniNet（师生）、DRAEM、DSR（重构）、GANomaly（对抗）、FastFlow（流）、GLASS（合成异常 + 判别器）、AnomalyDINO（零样本 DINOv2）。全部是配置工作，零 adapter 改动——这条本身就是"新增模型 = 填表"的检验。
+  三处**在实现中发现、而非事先假设**的事实：
+  1. GANomaly 的推理输出只有 image-level score，没有 anomaly map（对照 `GanomalyModel.forward` 确认）。`capabilities()` 因此改为 per-model：`presets.IMAGE_LEVEL_ONLY` 里的模型不再声明 `anomaly_map`，否则评测器会以为像素级 AUROC/AUPRO 可算。
+  2. DRAEM 在 `dtd_dir` 缺失时**不报错**，而是 `download_and_extract` 拉 ~600MB。`_validate_model_kwargs` 改为提前拒绝，下载需显式 `allow_dtd_download: true`。
+  3. GANomaly 的 `batch_size` 是构造器参数、`TrainConfig.batch_size` 到不了它——但在 anomalib 2.5.0 里它只用于两个没人读的 label buffer，所以只记录、不加守卫（加了就是断言一个此版本并不存在的耦合）。
+  `tests/test_anomalib_config.py` 新增两条反射测试：每个 preset 的 key 必须是**已安装的** anomalib 的真实构造器参数；`IMAGE_LEVEL_ONLY` 必须与各模型 `torch_model.forward` 的实际输出一致。二者都在升级打破它的那次失败，而不是几个月后。
+  STFPM 与 GANomaly 进 `catalog.CANONICAL_MODELS`（无外部数据依赖，任何机器 `fdh train` 即可发布）；其余六个留在 presets 可用但不进目录，避免 UI 下拉框出现点了没权重的条目。
+
+- [x] **E2 门面层 `api.py`**
+  `load_config` / `train` / `predict` / `evaluate` / `from_pretrained` / `list_models` / `list_datasets` / `list_pretrained`，从包根导出；`fdh models` 子命令是同一查表的 CLI 视图。
+  背景：此前 `import fabric_defect_hub` 只够得到可组合的低层入口（`load_dataset` + `load_model` + `run_experiment`，要自己拼 `ModelInfo`/`RuntimeInfo`），而 config 驱动的 `run_train`/`run_predict`——`fdh train` 实际走的那条——根本没导出。
+  约束由 `tests/test_api_facade.py` 在 AST 层钉死：门面函数体内不得出现任何后端名字（if 链和以后端名为键的 dict 查找同罪），每个公开函数必须委派进契约层，`api.py` 模块级不得 import 任何深度学习框架。
+  确实需要按后端区分的知识提到契约层：`training.RUN_LENGTH_KEYS`（各后端的 run length 写在哪个 key、单位是 epoch 还是 iteration），由 `test_train_config.py::test_run_length_keys_match_test_speed_overrides` 与 `_apply_test_speed_overrides` 互钉。
+  顺带统一：六个后端的 presets 模块现在都有 `list_supported_variants()`，此前是 `list_supported_models` / `list_supported_variants` / 什么都没有三种写法。
+
+- [ ] **E3 新增族系的复现验证**（阻塞：与 C4 同因，需 GPU + 完整训练）
+  E1 的八个模型目前只验证到"能构造、能端到端跑通"（STFPM/GANomaly 已在 ZJU-Leaper 上跑通 train → predict → evaluate 全链路，8 张图 1 epoch 的冒烟规模）。**它们都还没有 `recipe_id`，这是事实陈述而非待补的坑**——profile 意味着"设置锚定到该方法的论文"，在复现兑现之前不发这个名分（见 `project_recipe_citation_integrity` 的规则：先锚上游 → 再复现 → 才配拥有名字）。
+  待云端执行：按各自论文设置跑满，与论文报告的 MVTec 数值对照，达标后再补 profile 与目录条目。
+
 ---
 
 ## 剩余工作
 
 | 优先级 | 项 | 说明 |
 |---|---|---|
-| P1 | C4 | MambaAD clean-room 数值对照——唯一未完成项，阻塞在 GPU/数据集，执行步骤见上方 C4 条目 |
+| P1 | C4 | MambaAD clean-room 数值对照，阻塞在 GPU/数据集，执行步骤见上方 C4 条目 |
+| P2 | E3 | E1 新增八个族系的论文对照复现；在此之前它们不配 `recipe_id`，见上方 E3 条目 |
 
 华纺数据集接入走 `DatasetAdapter`，不受本清单影响，可并行推进。
 
@@ -116,3 +141,4 @@
 | `DatasetAdapter` | `datasets/base.py` | — |
 | `Evaluator` | `evaluation/base.py` | — |
 | 配置档案只提供设置 | `core/base_recipe.py` | `tests/test_recipe_application.py` |
+| 门面层只做委派（无后端分支） | `api.py` | `tests/test_api_facade.py` |

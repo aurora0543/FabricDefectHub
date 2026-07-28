@@ -48,3 +48,26 @@ class NewModelAdapter(ModelAdapter):
 ```
 
 `export` 不支持时抛 `NotImplementedError` 即可（capabilities 里 `export_targets=()` 已声明）。接完跑 `pytest tests/test_adapter_contract.py`——没实现完，测试直接红。操作步骤见 `docs/EXTENDING.md`"新增模型三步走"。
+
+## 门面层（`api.py`）
+
+上面五个抽象是**契约**，面向的是"接一个新模型的人"。另有一层**门面**，面向的是"用这个项目的人"——`fabric_defect_hub.api`，从包根导出：
+
+```python
+fdh.list_models() / list_datasets() / list_pretrained()   # 有什么
+fdh.load_config(model, dataset=..., epochs=...)           # → RunConfig
+fdh.train(cfg) / fdh.predict(...) / fdh.evaluate(...)     # 三个动词
+fdh.from_pretrained(key)                                  # 已发布的权重
+```
+
+门面**不是第六个抽象**，它不新增任何概念，只是把 `training.run_train` / `predict.run_predict` / `catalog` 这些已有入口用一致的名字暴露出来（此前它们没有从包根导出，`import fabric_defect_hub` 够不到 config 驱动的那条路径，而那恰恰是 `fdh train` 实际走的路径）。
+
+**约束（由 `tests/test_api_facade.py` 在 AST 层钉死）**：
+
+- 门面函数体内**不允许出现任何后端名字**——不管是 `if backend == "anomalib"` 还是以后端名为键的 dict 查找，两者耦合度相同。
+- 每个公开函数**必须**委派进契约层模块（`training` / `predict` / `loader` / `catalog` / `core.registry`），委派不到任何东西的函数说明它在自己干活。
+- `api.py` 模块级不得 import 任何深度学习框架——`import fabric_defect_hub` 在没装任何后端的机器上也要能做发现和配置。
+
+理由和五个抽象的理由是同一个：一个友好的扁平接口正是"就加这一个 anomalib 特例"最容易堆积的地方，堆起来之后项目就有了两条流水线——被 `test_pipeline_contract.py` 守着的那条，和它看不见的影子那条。确实需要按后端区分的知识（如"run length 写在哪个 key"）放在拥有它的那一层（`training.RUN_LENGTH_KEYS`），门面只做查表。
+
+改动门面的公开签名与改动上面五个契约同级，需先改测试并走评审。

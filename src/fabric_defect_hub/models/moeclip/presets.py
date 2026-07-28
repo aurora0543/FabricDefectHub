@@ -229,3 +229,13 @@ def register_class_prompts(class_names, overrides: dict[str, str] | None = None)
         if real.get(class_name) != resolved:
             real[class_name] = resolved
     return PROMPT_DATASET_KEY
+
+
+def list_supported_variants() -> list[str]:
+    """Every backbone this backend accepts, under the name all six backends'
+    preset modules share (`api.list_models` calls it on each of them). One
+    entry, and that is upstream's limit rather than an omission here -- see
+    this module's `MODEL_PRESETS` comment.
+    """
+
+    return sorted(MODEL_PRESETS)

@@ -170,6 +170,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="list every model config profile",
     )
 
+    models_parser = subparsers.add_parser(
+        "models",
+        help=(
+            "list every model this project can run, grouped by backend — the CLI view of "
+            "`fabric_defect_hub.list_models()`. Not the same list as `fdh recipes` (profiles) "
+            "or the web UI's dropdown (`catalog.CANONICAL_MODELS`, i.e. what gets published)"
+        ),
+    )
+    models_parser.add_argument(
+        "--backend",
+        help="only this backend (ultralytics | torchvision | anomalib | dinomaly | moeclip | mambaad)",
+    )
+
     subparsers.add_parser(
         "doctor",
         help=(
@@ -258,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_list()
         elif args.command == "recipes":
             payload = _run_recipes()
+        elif args.command == "models":
+            payload = _run_models(args.backend)
         elif args.command == "doctor":
             payload = _run_doctor()
         elif args.command == "export-latex":
@@ -277,6 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
+
+
+def _run_models(backend: str | None) -> Any:
+    from fabric_defect_hub.api import list_models
+
+    return list_models(backend)
 
 
 def _run_recipes() -> dict[str, Any]:
