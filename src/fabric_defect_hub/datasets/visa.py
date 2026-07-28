@@ -28,9 +28,8 @@ from pathlib import Path
 
 from fabric_defect_hub.core.registry import register_dataset
 from fabric_defect_hub.core.types import Annotations, Sample, Task
-from fabric_defect_hub.datasets.base import DatasetAdapter
+from fabric_defect_hub.datasets.base import IMAGE_SUFFIXES, DatasetAdapter
 
-_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".JPG")
 
 
 @register_dataset("visa")
@@ -113,7 +112,7 @@ class VisADataset(DatasetAdapter):
         if not directory.is_dir():
             return []
         return sorted(
-            path for path in directory.iterdir() if path.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp")
+            path for path in directory.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES
         )
 
     # ------------------------------------------------------------------ #

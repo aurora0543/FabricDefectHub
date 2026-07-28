@@ -13,7 +13,31 @@ from fabric_defect_hub.evaluation.detection import DetectionEvaluator
 from fabric_defect_hub.evaluation.industrial import IndustrialEvaluator
 from fabric_defect_hub.evaluation.segmentation import SegmentationEvaluator
 
-__all__ = ["AnomalyEvaluator", "DetectionEvaluator", "SegmentationEvaluator", "IndustrialEvaluator", "evaluator_for_task"]
+__all__ = [
+    "AnomalyEvaluator",
+    "DetectionEvaluator",
+    "SegmentationEvaluator",
+    "IndustrialEvaluator",
+    "evaluator_for_task",
+    "ground_truth_task",
+]
+
+
+def ground_truth_task(model_task: str) -> str:
+    """The ground-truth shape a model's task is scored against.
+
+    A `ModelAdapter` may declare `instance_segmentation` (Mask R-CNN), but a
+    `DatasetAdapter`'s `task` only ever needs to be one of the three shapes
+    in `core.types.Task` to decide which annotations to attach, and
+    `SegmentationEvaluator` scores both the same way -- over a unioned binary
+    mask. So instance segmentation folds into the segmentation bucket.
+
+    Lives beside `evaluator_for_task` because it answers the same kind of
+    question and has the same single correct answer. The Benchmark tab used
+    to carry its own copy, which put a scoring rule in the UI.
+    """
+
+    return "segmentation" if model_task == "instance_segmentation" else model_task
 
 
 def evaluator_for_task(task: str):

@@ -123,6 +123,27 @@ def test_detection_backends_fill_boxes(backend):
 
 
 @pytest.mark.parametrize("backend", INSTALLED_BACKENDS)
+def test_every_backend_declares_a_known_export_input_style(backend):
+    """The shape an exported module wants (`batched` vs `list`) has to be
+    declared, because whoever profiles it must synthesize an input for it and
+    cannot introspect a TorchScript signature. It used to be decided in
+    `web/benchmark.py` by an `if backend == "torchvision" and ...`, which put
+    a fact about torchvision's forward signature in the UI.
+    """
+
+    from fabric_defect_hub.models.base import EXPORT_INPUT_STYLES
+
+    assert _adapter(backend).capabilities().export_input_style in EXPORT_INPUT_STYLES
+
+
+def test_export_input_style_is_vocabulary_checked():
+    with pytest.raises(ValueError, match="export_input_style"):
+        ModelCapabilities(
+            tasks=("detection",), prediction_fields=("boxes",), export_input_style="tensor"
+        )
+
+
+@pytest.mark.parametrize("backend", INSTALLED_BACKENDS)
 def test_declared_export_targets_are_honest(backend):
     """A backend whose `export()` unconditionally raises `NotImplementedError`
     must declare no export targets — otherwise a caller that checks

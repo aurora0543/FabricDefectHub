@@ -19,7 +19,7 @@ from fabric_defect_hub.models.anomalib.pipeline import (
     run_from_config,
     run_from_yaml,
 )
-from fabric_defect_hub.models.anomalib.presets import list_supported_models
+from fabric_defect_hub.models.anomalib.presets import list_supported_variants
 
 __all__ = [
     "AnomalibAdapter",
@@ -27,5 +27,5 @@ __all__ = [
     "AnomalibRunResult",
     "run_from_config",
     "run_from_yaml",
-    "list_supported_models",
+    "list_supported_variants",
 ]

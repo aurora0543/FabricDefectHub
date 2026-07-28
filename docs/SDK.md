@@ -49,9 +49,12 @@ cfg = fdh.load_config(
 )
 ```
 
-`load_config` resolves the model the same way `fdh train` does and returns a
-`RunConfig` — a description of the run, not a live object. Layer anything else
-on with dotted paths, identical to `fdh train --set`:
+`load_config` resolves the model the same way `fdh train` does — a bare name
+lands on that backend's general-purpose config, a purpose-built config is
+addressed by its filename, and `cfg.config_path` / `cfg.variant` tell you what
+it picked (full rules: [`MODEL_CONFIGURATION.md`](MODEL_CONFIGURATION.md)). It
+returns a `RunConfig` — a description of the run, not a live object. Layer
+anything else on with dotted paths, identical to `fdh train --set`:
 
 ```python
 cfg = cfg.with_set(**{
@@ -81,6 +84,22 @@ metrics = fdh.evaluate("stfpm", weights=weights, dataset="tilda-400").metrics
 `predict` takes either `source=` (one image path or a list) or `dataset=`
 (sliced by `num_samples` / `pattern` / `category`). `evaluate` requires a
 dataset — raw image paths carry no ground truth to score against.
+
+For an anomaly model, pass `output_dir=` to `predict`/`evaluate` to get
+pixel-level metrics:
+
+```python
+fdh.evaluate("stfpm", weights=weights, dataset="tilda-400",
+             output_dir="artifacts/anomaly_maps/eval").metrics
+# with output_dir:    image_auroc, image_f1, ..., pixel_auroc, pixel_aupro, pixel_f1, iap
+# without output_dir: image_auroc, image_f1, ... only
+```
+
+The adapters fill `Prediction.anomaly_map` only when given somewhere to write
+it (one `.npy` per sample), and `AnomalyEvaluator` scores pixels from that
+field — so the maps are opt-in, and the metrics follow. It has no effect on a
+model whose `capabilities()` doesn't fill `anomaly_map` (GANomaly) or on the
+detection/segmentation backends, which score from boxes and masks.
 
 ### Published weights
 

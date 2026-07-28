@@ -69,6 +69,7 @@ from typing import Any, Iterator
 
 from fabric_defect_hub.core.registry import get_profiler_cls
 from fabric_defect_hub.core.types import ModelInfo, RuntimeInfo
+from fabric_defect_hub.evaluation import evaluator_for_task, ground_truth_task
 from fabric_defect_hub.evaluation.cross_domain import cross_domain_degradation
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 from fabric_defect_hub.inference.session import clear_accelerator_cache
@@ -80,6 +81,7 @@ from fabric_defect_hub.web.single_image import (
     MODEL_CATALOG,
     shot_text,
     artifact_for_model,
+    dataset_tasks,
     default_dataset_root,
     shot_regime_kwargs,
     slice_value,
@@ -113,17 +115,6 @@ def score_preset_choices(lang: str = DEFAULT_LANGUAGE) -> list[tuple[str, str]]:
     ]
 
 
-def _dataset_task_for(model_task: str) -> str:
-    """A `DatasetAdapter`'s `task` only ever needs to be one of
-    detection/segmentation/anomaly (see `core.types.Task`) to decide which
-    ground-truth fields to attach — `instance_segmentation` (Mask R-CNN's
-    catalog task) is scored the same way as semantic segmentation (both via
-    `SegmentationEvaluator`'s unioned binary mask), so it maps onto the
-    dataset's `segmentation` bucket too."""
-
-    return "segmentation" if model_task == "instance_segmentation" else model_task
-
-
 def compatible_models(dataset_label: str) -> list[str]:
     """Models this dataset can supply real ground truth for — i.e. every
     catalog model whose task the dataset's `tasks` set covers (ZJU-Leaper
@@ -131,14 +122,8 @@ def compatible_models(dataset_label: str) -> list[str]:
     compatible; RAW-FABRID/MVTec AD have anomaly labels and masks but no
     boxes, so only anomaly and segmentation models are)."""
 
-    tasks = DATASET_CATALOG[dataset_label]["tasks"]
-    return [label for label, spec in MODEL_CATALOG.items() if _dataset_task_for(spec["task"]) in tasks]
-
-
-def _evaluator_for_task(task: str):
-    from fabric_defect_hub.evaluation import evaluator_for_task
-
-    return evaluator_for_task(task)
+    tasks = dataset_tasks(DATASET_CATALOG[dataset_label]["name"])
+    return [label for label, spec in MODEL_CATALOG.items() if ground_truth_task(spec["task"]) in tasks]
 
 
 def _detect_device() -> str:
@@ -154,30 +139,28 @@ def _detect_device() -> str:
     return "cpu"
 
 
-def _input_style_for(model_spec: dict[str, Any]) -> str:
-    return (
-        "list" if model_spec["backend"] == "torchvision" and model_spec["task"] in ("detection", "instance_segmentation")
-        else "batched"
-    )
-
-
-def _profile_setup(model_spec: dict[str, Any], device: str):
+def _profile_setup(model: Any, device: str):
     """Build the (profiler, config, export_target) triple `run_experiment`
     needs to also measure FPS/latency/memory for this model, mirroring
     `benchmark.py::_profile_from_spec`'s pytorch-engine defaults but with
     lighter warmup/measured-run counts so an interactive UI click doesn't
     stall for as long as an unattended CLI benchmark would tolerate.
+
+    `input_style` comes from the model's own `capabilities()`. This module
+    used to derive it from `backend == "torchvision" and task in (...)` --
+    a fact about torchvision's exported forward signature, asserted by the
+    benchmark tab, which is not in a position to know it.
     """
 
     profiler = get_profiler_cls("pytorch")()
     config = ProfileConfig(
         device=device, engine="pytorch", precision="fp32", input_size=(640, 640),
-        input_style=_input_style_for(model_spec), warmup_runs=5, measured_runs=20,
+        input_style=model.capabilities().export_input_style, warmup_runs=5, measured_runs=20,
     )
     return profiler, config, "torchscript"
 
 
-def _resolution_sweep(model: Any, artifact: Any, model_spec: dict[str, Any], device: str) -> dict[str, float]:
+def _resolution_sweep(model: Any, artifact: Any, device: str) -> dict[str, float]:
     """Export once, profile that same export at `RESOLUTION_SWEEP_SIZES`,
     and fit the throughput decay slope. See the module docstring's
     `include_resolution_sweep` entry for why this doesn't just call
@@ -188,7 +171,7 @@ def _resolution_sweep(model: Any, artifact: Any, model_spec: dict[str, Any], dev
     from fabric_defect_hub.profiling.scaling import throughput_resolution_slope
 
     profiler = get_profiler_cls("pytorch")()
-    input_style = _input_style_for(model_spec)
+    input_style = model.capabilities().export_input_style
     exported = model.export(artifact, target="torchscript")
     resolutions: list[float] = []
     throughputs: list[float] = []
@@ -231,7 +214,8 @@ def _flops_and_lmei(
     from fabric_defect_hub.profiling.flops import compute_model_flops
 
     flops_g = compute_model_flops(
-        raw_module, input_size=(640, 640), input_style=_input_style_for(model_spec), device=device,
+        raw_module, input_size=(640, 640),
+        input_style=model.capabilities().export_input_style, device=device,
     )
     params_m = parameter_counts(raw_module).get("parameter_count", 0) / 1e6
     return {
@@ -259,7 +243,7 @@ def _cross_domain_probe(
     """
 
     target_spec = DATASET_CATALOG.get(target_label)
-    if target_spec is None or dataset_task not in target_spec["tasks"]:
+    if target_spec is None or dataset_task not in dataset_tasks(target_spec["name"]):
         return None
     root = default_dataset_root(target_label)
     if not root:
@@ -272,7 +256,7 @@ def _cross_domain_probe(
     if not samples:
         return None
     predictions = model.predict(samples, artifact)
-    return _evaluator_for_task(dataset_task).evaluate(samples, predictions)
+    return evaluator_for_task(dataset_task).evaluate(samples, predictions)
 
 
 def _release_model(model: Any) -> None:
@@ -342,7 +326,7 @@ def run_benchmark(
         technical_weight, overhead_weight = SCORE_PRESETS.get(score_preset, SCORE_PRESETS["balanced"])
 
     spec = DATASET_CATALOG[dataset_label]
-    dataset_tasks = spec["tasks"]
+    supported_tasks = dataset_tasks(spec["name"])
     num_samples, defect_ratio = shot_regime_kwargs(shot_mode)
     base_dataset_kwargs: dict[str, Any] = dict(
         root=root,
@@ -364,8 +348,8 @@ def run_benchmark(
 
     for index, model_label in enumerate(model_labels, start=1):
         model_spec = MODEL_CATALOG[model_label]
-        dataset_task = _dataset_task_for(model_spec["task"])
-        if dataset_task not in dataset_tasks:
+        dataset_task = ground_truth_task(model_spec["task"])
+        if dataset_task not in supported_tasks:
             errors.append(tr(lang, "bench_task_mismatch", model=model_label, dataset=dataset_label, task=model_spec["task"]))
             yield _render(
                 rows, sample_count, shot_mode, errors, lang=lang,
@@ -377,10 +361,10 @@ def run_benchmark(
         try:
             dataset = load_dataset(spec["name"], task=dataset_task, **base_dataset_kwargs)
             model = load_model(model_spec["backend"], model_spec["name"])
-            evaluator = _evaluator_for_task(dataset_task)
+            evaluator = evaluator_for_task(dataset_task)
             profiler = profile_config = export_target = None
             if include_profiling:
-                profiler, profile_config, export_target = _profile_setup(model_spec, device)
+                profiler, profile_config, export_target = _profile_setup(model, device)
             started = time.perf_counter()
             result = run_experiment(
                 experiment_id=f"benchmark-{_slug(model_label)}",
@@ -410,7 +394,7 @@ def run_benchmark(
             # accuracy/profiling row already computed above.
             if include_resolution_sweep:
                 try:
-                    row.update(_resolution_sweep(model, artifact_for_model(model_spec), model_spec, device))
+                    row.update(_resolution_sweep(model, artifact_for_model(model_spec), device))
                 except Exception as exc:
                     errors.append(f"{model_label}: resolution sweep skipped ({type(exc).__name__}: {exc})")
             if include_profiling:

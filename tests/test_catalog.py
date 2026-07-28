@@ -29,6 +29,43 @@ def test_canonical_model_labels_are_unique():
     assert len(labels) == len(set(labels))
 
 
+@pytest.mark.parametrize("model", CANONICAL_MODELS, ids=lambda entry: entry.key)
+def test_every_published_model_is_reachable_by_its_own_name(model):
+    """`fdh train <name>` must work for every model this project publishes,
+    and must land on the config that entry itself declares.
+
+    This is the invariant that was broken before keyword resolution grew its
+    catalog step: half of these (PaDiM, RD4AD, WinCLIP, DETR, UNet++, ...)
+    were unreachable by name because no config declared them, and PatchCore
+    was ambiguous across three configs. Parameterized over the catalog so
+    adding an entry without a resolvable config fails here rather than in
+    somebody's training run.
+    """
+
+    from fabric_defect_hub.training import resolve_model_config_and_variant
+
+    path, variant = resolve_model_config_and_variant(model.variant)
+
+    assert path.name == model.config
+    assert variant is not None
+    assert variant.strip().lower() == model.variant.strip().lower()
+
+
+def test_every_catalogued_config_exists_on_disk():
+    """`CanonicalModel.config` is what keyword resolution reads to answer
+    "which config trains this model", so a typo there is a broken
+    `fdh train <name>`, not just stale documentation.
+    """
+
+    from fabric_defect_hub.training import DEFAULT_MODEL_CONFIG_DIR
+
+    missing = sorted(
+        {model.config for model in CANONICAL_MODELS
+         if not (Path(DEFAULT_MODEL_CONFIG_DIR) / model.config).is_file()}
+    )
+    assert not missing, f"catalog names configs that do not exist: {missing}"
+
+
 @pytest.mark.parametrize(
     ("backend", "variant", "expected_key"),
     [

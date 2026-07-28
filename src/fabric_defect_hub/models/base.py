@@ -34,6 +34,14 @@ ANNOTATION_FIELDS = ("boxes", "masks", "labels", "is_anomalous", "anomaly_mask")
 # normalised to `"detection"` at the adapter boundary).
 TASKS = ("detection", "segmentation", "instance_segmentation", "anomaly", "industrial")
 
+# How an exported module wants its input: one batched NCHW tensor, or a list
+# of per-image CHW tensors (torchvision's detection/instance-segmentation
+# models). `profiling.base.ProfileConfig.input_style` needs the answer to
+# feed a profiler a correctly-shaped dummy input, and only the backend knows
+# it -- the benchmark UI used to decide with an
+# `if backend == "torchvision" and task in (...)` of its own.
+EXPORT_INPUT_STYLES = ("batched", "list")
+
 
 @dataclass
 class Artifact:
@@ -73,6 +81,10 @@ class ModelCapabilities:
     required_annotations: tuple[str, ...] = ()
     export_targets: tuple[str, ...] = ()
     supports_amp: bool = False
+    # Shape the exported module expects, for whoever has to synthesize an
+    # input for it (`profiling.base.ProfileConfig.input_style`). "batched" is
+    # the common case, so only the backends that differ say so.
+    export_input_style: str = "batched"
 
     def __post_init__(self) -> None:
         for name, values, vocabulary in (
@@ -90,6 +102,11 @@ class ModelCapabilities:
             raise ValueError("ModelCapabilities.tasks must not be empty")
         if not self.prediction_fields:
             raise ValueError("ModelCapabilities.prediction_fields must not be empty")
+        if self.export_input_style not in EXPORT_INPUT_STYLES:
+            raise ValueError(
+                f"ModelCapabilities.export_input_style={self.export_input_style!r} is unknown; "
+                f"expected one of {EXPORT_INPUT_STYLES}"
+            )
 
     def supports_task(self, task: str) -> bool:
         return task in self.tasks

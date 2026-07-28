@@ -8,6 +8,18 @@ from dataclasses import asdict
 from typing import Any
 
 
+def _shot_modes() -> tuple[str, ...]:
+    """The `--mode` vocabulary, read off `training.ShotMode` rather than
+    retyped here. The two used to be separate literals that had to agree.
+    """
+
+    import typing
+
+    from fabric_defect_hub.training import ShotMode
+
+    return typing.get_args(ShotMode)
+
+
 def _model_backend_choices() -> tuple[str, ...]:
     from fabric_defect_hub.loader import list_model_backends
 
@@ -82,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--test-dataset-root", help="root path for --test-dataset; falls back to data/<Dataset>"
     )
     train_parser.add_argument(
-        "--mode", choices=("full", "medium", "few", "test"), default=None,
+        "--mode", choices=_shot_modes(), default=None,
         help=(
             "shot mode: full=use every sample, every ZJU-Leaper pattern (num_samples=null); "
             "medium=every ZJU-Leaper pattern but capped per-pattern (150 train / 50 val each); "
@@ -118,6 +130,15 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--tile-overlap", type=float, help="YOLO only: tile overlap in [0, 1)")
     train_parser.add_argument("--profile", default="configs/training_profile.yaml", help="shared ZJU training policy YAML")
     train_parser.add_argument("--no-profile", action="store_true", help="ignore the shared training profile")
+    train_parser.add_argument(
+        "--no-publish",
+        action="store_true",
+        help=(
+            "keep the result out of artifacts/models/published/. Training a model that is in "
+            "catalog.CANONICAL_MODELS otherwise overwrites the checkpoint the web UI serves for "
+            "it — use this for smoke runs and experiments"
+        ),
+    )
 
     predict_parser = subparsers.add_parser(
         "predict",
@@ -254,6 +275,14 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument(
         "--task", choices=("anomaly", "detection", "segmentation"),
         help="force a specific evaluator instead of the dataset samples' own task",
+    )
+    evaluate_parser.add_argument(
+        "--output-dir",
+        help=(
+            "anomalib/dinomaly/moeclip/mambaad only: persist each sample's pixel-level anomaly "
+            "map (.npy) here, which is what makes pixel_auroc/pixel_aupro/iap computable — "
+            "without it an anomaly model is scored on image-level metrics alone"
+        ),
     )
     evaluate_parser.add_argument("--enable-tiling", action="store_true", help="YOLO only: sliding-window prediction with global NMS")
     evaluate_parser.add_argument("--enable-tta", action="store_true", help="YOLO only: enable native flip/multiscale TTA")
@@ -487,10 +516,13 @@ def _run_train(args: argparse.Namespace) -> Any:
         variant=args.variant,
         set_overrides=set_overrides,
         profile=None if args.no_profile else args.profile,
+        publish=not args.no_publish,
     )
     result = run.result
     return {
         "backend": run.backend,
+        "resolved_config": run.config_path,
+        "resolved_variant": run.variant,
         "metrics": result.metrics,
         "trained_artifact": _artifact_dict(result.trained_artifact),
         "registered_artifact": _artifact_dict(result.registered_artifact),
@@ -501,7 +533,7 @@ def _run_train(args: argparse.Namespace) -> Any:
 
 
 def _run_predict(args: argparse.Namespace) -> Any:
-    from fabric_defect_hub.predict import PredictInput, run_predict
+    from fabric_defect_hub.inference.runner import PredictInput, run_predict
 
     source = PredictInput(
         images=args.images,
@@ -533,6 +565,7 @@ def _run_predict(args: argparse.Namespace) -> Any:
         save_predictions(run.predictions, args.output)
     return {
         "backend": run.backend,
+        "resolved_config": run.config_path,
         "variant": run.variant,
         "num_predictions": len(predictions),
         "predictions": predictions,
@@ -540,7 +573,7 @@ def _run_predict(args: argparse.Namespace) -> Any:
 
 
 def _run_evaluate(args: argparse.Namespace) -> Any:
-    from fabric_defect_hub.predict import PredictInput, run_evaluate
+    from fabric_defect_hub.inference.runner import PredictInput, run_evaluate
 
     source = PredictInput(
         dataset=args.dataset,
@@ -559,6 +592,7 @@ def _run_evaluate(args: argparse.Namespace) -> Any:
         variant=args.variant,
         config_dir=args.config_dir,
         task=args.task,
+        output_dir=args.output_dir,
         enable_tiling=args.enable_tiling,
         enable_tta=args.enable_tta,
         tile_size=args.tile_size,
@@ -566,6 +600,7 @@ def _run_evaluate(args: argparse.Namespace) -> Any:
     )
     return {
         "backend": run.backend,
+        "resolved_config": run.config_path,
         "variant": run.variant,
         "sample_count": run.sample_count,
         "metrics": run.metrics,

@@ -23,9 +23,8 @@ import random
 from pathlib import Path
 
 from fabric_defect_hub.core.types import Annotations, Sample, Task
-from fabric_defect_hub.datasets.base import DatasetAdapter
+from fabric_defect_hub.datasets.base import IMAGE_SUFFIXES, DatasetAdapter
 
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
 
 class FlatFolderAnomalyDataset(DatasetAdapter):
@@ -95,7 +94,7 @@ class FlatFolderAnomalyDataset(DatasetAdapter):
     def _images(directory: Path) -> list[Path]:
         if not directory.is_dir():
             return []
-        return sorted(path for path in directory.iterdir() if path.suffix.lower() in _IMAGE_SUFFIXES)
+        return sorted(path for path in directory.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES)
 
     def _defect_dirnames(self) -> list[str]:
         if not self.base_path.is_dir():

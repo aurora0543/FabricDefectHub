@@ -87,12 +87,12 @@ CANONICAL_MODELS: list[CanonicalModel] = [
     # (`web/single_image.py::model_status`). They are added here once they
     # have actually been trained and published.
     CanonicalModel("STFPM", "anomalib", "STFPM", "anomaly",
-                    "anomalib_example.yaml", "STFPM · Normal Lab trained", "Normal Lab"),
+                    "anomalib_stfpm.yaml", "STFPM · Normal Lab trained", "Normal Lab"),
     # The benchmark's only adversarial entry. Image-level scores only -- its
     # `capabilities()` drops `anomaly_map` (see `presets.IMAGE_LEVEL_ONLY`),
     # so its row has image AUROC but no pixel AUROC/AUPRO.
     CanonicalModel("GANomaly", "anomalib", "GANomaly", "anomaly",
-                    "anomalib_example.yaml", "GANomaly · Normal Lab trained", "Normal Lab"),
+                    "anomalib_ganomaly.yaml", "GANomaly · Normal Lab trained", "Normal Lab"),
     # -- WinCLIP: CLIP-based, zero-shot by default (no fabric training data) --
     CanonicalModel("WinCLIP", "anomalib", "WinClip", "anomaly",
                     "anomalib_example.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),

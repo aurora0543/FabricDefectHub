@@ -199,16 +199,84 @@ tail -n 1 artifacts/models/weight_manifest.jsonl | python -m json.tool
 ls -la artifacts/models/published/
 ```
 
-Expect 18 files: `yolov8n.pt`, `yolov8s.pt`, `yolo11n.pt`,
+Expect 20 files: `yolov8n.pt`, `yolov8s.pt`, `yolo11n.pt`,
 `fasterrcnn_resnet50_fpn.pt`, `cascadercnn_resnet50_fpn.pt`,
 `detr_resnet50.pt`, `maskrcnn_resnet50_fpn.pt`, `unetplusplus_resnet34.pt`,
 `deeplabv3plus_resnet50.pt`, `PatchCore.ckpt`, `PaDiM.ckpt`, `RD4AD.ckpt`,
-`EfficientAD.ckpt`, `SuperSimpleNet.ckpt`, `WinCLIP.ckpt`, `Dinomaly.pth`,
-`MoECLIP.pth`, `MambaAD.pth`.
+`EfficientAD.ckpt`, `SuperSimpleNet.ckpt`, `STFPM.ckpt`, `GANomaly.ckpt`,
+`WinCLIP.ckpt`, `Dinomaly.pth`, `MoECLIP.pth`, `MambaAD.pth`.
+
+`STFPM.ckpt` and `GANomaly.ckpt` are the two newest entries and have not been
+produced anywhere yet — see §10.
 
 This is the stable location the frontend's `MODEL_CATALOG`
 (`web/single_image.py`) reads from — re-running training for any one
 model overwrites just that model's file here, nothing else.
+
+## 10. Outstanding GPU work (INTERFACE_TASKS.md C4 / E3)
+
+Three things are blocked on this box specifically and nowhere else. Verified
+locally only to "constructs and runs end to end at smoke scale" — no accuracy
+claim is attached to any of them yet.
+
+### 10a. Train and publish STFPM + GANomaly
+
+The two newest catalog entries. Both train from fabric alone (no external
+corpus), so nothing extra needs staging:
+
+```bash
+fdh train stfpm --set train.engine_kwargs.accelerator=gpu
+fdh train ganomaly --set train.engine_kwargs.accelerator=gpu
+```
+
+Each has its own config (`configs/models/anomalib_stfpm.yaml`,
+`anomalib_ganomaly.yaml`) with `max_epochs: 100` — a starting point, not a
+tuned value, so expect to move it via `--set`. Check `resolved_config` in the
+output is the file you expect before reading the metrics.
+
+GANomaly reports **image-level metrics only** (`image_auroc`, no
+`pixel_auroc`/`pixel_aupro`). That is correct, not a failure: it scores the
+distance between two latent vectors and has no spatial output — see
+`models/anomalib/presets.py::IMAGE_LEVEL_ONLY`.
+
+### 10b. Reproduce the eight new anomalib families against their papers (E3)
+
+`fdh models --backend anomalib` now lists 14 models; eight were added without
+a reproduction, and therefore deliberately carry **no `recipe_id`** (a profile
+in this project means "settings anchored to that method's paper"). Earning one
+means running the model at its published settings, comparing against the
+paper's reported MVTec numbers, and recording the result the way
+`docs/REPRODUCTION_PATCHCORE.md` does.
+
+Runnable with nothing extra staged: `fdh train fastflow`, `dsr`, `uninet`,
+`glass`, `anomalydino` (each resolves to `anomalib_example.yaml`, so pass
+`--variant` is unnecessary — the keyword carries it).
+
+DRAEM additionally needs the DTD texture set:
+
+```bash
+# stage it like any other dataset
+ln -s /path/to/dtd data/DTD
+fdh train draem --set train.engine_kwargs.accelerator=gpu
+```
+
+Without it the run refuses to start with a message naming this step. That
+guard is deliberate: anomalib's own Draem would otherwise download ~600MB
+mid-training. To take that download instead, pass
+`--set train.model_kwargs.allow_dtd_download=true`.
+
+### 10c. MambaAD clean-room numeric parity (C4)
+
+The oldest open item and the highest-risk one, because MambaAD is a
+reimplementation rather than a vendored checkout. Run the mambaad backend on
+MVTec AD at upstream's defaults (already in `presets.DEFAULT_TRAIN_KWARGS`,
+ResNet-34 teacher) and compare image-AUROC against the MambaAD paper's
+Table 1 (multi-class unified training, 97.8 reported). A gap of more than one
+point counts as misaligned and means auditing the scan/SSM port layer by
+layer. File the result, including its run-log line, under `docs/`.
+
+Use `--no-publish` for any exploratory run of a catalogued model — training
+one otherwise overwrites the checkpoint the web UI serves for it.
 
 ## Known gaps at time of writing
 

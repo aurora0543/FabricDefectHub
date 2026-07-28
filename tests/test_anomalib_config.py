@@ -19,7 +19,7 @@ from fabric_defect_hub.models.anomalib.presets import (
     IMAGE_LEVEL_ONLY,
     MODEL_PRESETS,
     default_model_kwargs,
-    list_supported_models,
+    list_supported_variants,
     resolve_model_class_name,
 )
 
@@ -30,7 +30,7 @@ requires_anomalib = pytest.mark.skipif(
 
 
 def test_model_name_resolution_and_aliases():
-    assert set(list_supported_models()) == {
+    assert set(list_supported_variants()) == {
         # memory bank / statistics
         "Patchcore", "Padim",
         # teacher-student

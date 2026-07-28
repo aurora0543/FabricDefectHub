@@ -1,44 +1,35 @@
 # frontend
 
-FabricDefectHub uses Gradio to provide a deployable model workspace, rather
-than building a separate mock frontend disconnected from the backend. Pages
-consume the unified `Sample`, `Prediction`, and `ExperimentResult` contracts
-directly.
+FabricDefectHub's front end **is** the Gradio app in
+`src/fabric_defect_hub/web/` — there is no separate SPA, and that is a
+decision rather than an omission: a second front end would either duplicate
+the `Sample` / `Prediction` / `ExperimentResult` contracts or drift from
+them. The pages consume those contracts directly, through the same
+`ModelCapabilities` / `core.availability` / `core.checkpoint` seams the CLI
+and SDK use (the rules are pinned by `tests/test_web_layering.py`).
+
+This directory previously also held an empty `src/pages/*` skeleton for that
+never-built SPA. It has been removed — six empty directories asserting a plan
+that the paragraph above explicitly rejects.
 
 ## Launch
 
 ```bash
-pip install -r requirements.txt
-fdh-ui
+pip install -r requirements.txt   # lean UI/inference set
+fdh-ui                            # or: python app.py
 ```
 
-Hugging Face Spaces can use the repository root's `app.py` directly. After
-setting `ZJU_LEAPER_ROOT`, the Single Image Detection page randomly samples
-a set of local images from a chosen ZJU-Leaper split; use the left/right
-buttons to browse, and run real inference according to the selected
-model/weights.
+`app.py` at the repository root is the Hugging Face Spaces entry point and
+launches the same app.
 
-## Inference Sessions
+## What you see on a fresh clone
 
-The single-image page doesn't recreate the model on every inference click.
-First pick an artifact from the local model dropdown, then click
-**Load model** — this action, via the backend `InferenceSessionManager`,
-keeps the model resident on an auto-selected CUDA, Apple MPS, or CPU device.
-The page shows model parameter/buffer memory usage, current process RSS,
-and CUDA/MPS allocated memory (where the platform supports it).
-**Unload model** releases the active model and accelerator cache.
+Every model shows **🟠 Checkpoint missing**. That is expected: checkpoints
+are produced by `fdh train`, not shipped in git (`/artifacts/` is
+gitignored). Run `fdh doctor` to see which backends are trainable on this
+machine, then `fdh train <model>` — the result is published to
+`artifacts/models/published/` and the page picks it up on refresh. See
+`docs/cloud_training_runbook.md` for the full path.
 
-The UI only calls the backend's `load`, `predict`, and `unload` interfaces,
-so the same session mechanism can be reused by Gradio, the CLI, a server
-API, or another platform's UI; the UI never holds a framework model object
-directly.
-
-## Current Pages
-
-- **Single Image Detection**: dataset random sampling, image browsing,
-  model status, checkpoint/pretrained selection, and bbox/mask/anomaly-map
-  result display.
-- **Benchmark**: pick a dataset and one or more compatible trained models,
-  then run them through the same mount → test → unmount pipeline one at a
-  time (never more than one resident model in memory), streaming leaderboard
-  rows back as each model finishes.
+Datasets work the same way: stage them under `data/<Dataset>` (usually a
+symlink onto external storage) and the sampler finds them.

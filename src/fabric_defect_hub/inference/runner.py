@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
-from fabric_defect_hub.models.base import Artifact
+from fabric_defect_hub.models.base import Artifact, ModelCapabilities
 from fabric_defect_hub.training import (
     DEFAULT_DATASET_ROOTS,
     DEFAULT_MODEL_CONFIG_DIR,
+    BACKEND_MODEL_KEY,
     apply_default_dataset_root,
     apply_model_overrides,
     infer_backend,
@@ -44,9 +45,20 @@ _ADAPTER_MODULES: dict[str, tuple[str, str]] = {
     "mambaad": ("fabric_defect_hub.models.mambaad.adapter", "MambaADAdapter"),
 }
 
-# Backends whose `predict()` accepts `output_dir=` to persist pixel-level
-# anomaly maps (see `_run_predict`/`--output-dir` in cli.py).
-_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly", "moeclip", "mambaad"}
+# NOTE: there used to be an `_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly",
+# "moeclip", "mambaad"}` set here, consulted for three unrelated questions:
+# what task a bare image path implies, which config key names the model, and
+# whether `predict()` should be handed an `output_dir`. The three answers
+# coincided for those four backends by accident, not by definition, and each
+# already has an owner:
+#
+#   task            -> ModelCapabilities.supports_task / .tasks
+#   config key      -> training.BACKEND_MODEL_KEY
+#   output_dir      -> ModelCapabilities.fills("anomaly_map")
+#
+# Asking the owner keeps a seventh backend from having to be added to a list
+# it doesn't know exists — and stopped `predict` from advertising a pixel map
+# for GANomaly, an anomalib model that has none.
 
 
 @dataclass
@@ -71,6 +83,10 @@ class PredictRunResult:
     variant: str
     predictions: list[Prediction]
     samples: list[Sample] = field(default_factory=list)
+    # Which config the `model` argument resolved to — same reason
+    # `TrainRunResult` carries it: keyword resolution can pick a config the
+    # caller never named, so the choice has to be inspectable.
+    config_path: str | None = None
 
 
 @dataclass
@@ -79,6 +95,7 @@ class EvaluateRunResult:
     variant: str
     metrics: dict[str, float]
     sample_count: int
+    config_path: str | None = None
 
 
 def _build_adapter(backend: str, variant: str):
@@ -104,11 +121,20 @@ def _resolve_weights_artifact(backend: str, weights: str) -> Artifact | str:
     return Artifact(path=weights, backend="anomalib", metadata={"model_class": model_class, "trusted": True})
 
 
-def _load_samples(source: PredictInput, backend: str) -> list[Sample]:
+def _load_samples(source: PredictInput, capabilities: ModelCapabilities) -> list[Sample]:
+    """Resolve `source` to `Sample`s.
+
+    A raw image path carries no task of its own, so the model's declared
+    capabilities supply one: "anomaly" when the model serves it, otherwise
+    whatever it does serve. Reading it from `capabilities` rather than from a
+    list of backend names means a backend that grows a second task, or a new
+    backend entirely, needs no edit here.
+    """
+
     if source.images and source.dataset:
         raise ValueError("pass either --image or --dataset, not both")
     if source.images:
-        task = "anomaly" if backend in _ANOMALY_MAP_BACKENDS else "detection"
+        task = "anomaly" if capabilities.supports_task("anomaly") else capabilities.tasks[0]
         return [
             Sample(id=Path(image_path).stem, image_path=image_path, task=task, annotations=Annotations())
             for image_path in source.images
@@ -191,15 +217,19 @@ def run_predict(
         if enable_tta:
             predict["tta_mode"] = "flip_multiscale"
         raw["predict"] = predict
-    model_key = "name" if resolved_backend in _ANOMALY_MAP_BACKENDS else "variant"
+    # Which key under `model:` names the model is a fact about each backend's
+    # config shape, owned by `training.BACKEND_MODEL_KEY` — the same table
+    # `apply_model_overrides` writes through, so the two cannot disagree.
+    model_key = BACKEND_MODEL_KEY[resolved_backend]
     resolved_variant = raw.get("model", {}).get(model_key)
     if not resolved_variant:
         raise ValueError(f"config has no model.{model_key}; pass --variant explicitly")
 
     adapter = _build_adapter(resolved_backend, resolved_variant)
+    capabilities = adapter.capabilities()
     artifact = adapter.load_trained_model(_resolve_weights_artifact(resolved_backend, weights))
 
-    samples = _load_samples(source, resolved_backend)
+    samples = _load_samples(source, capabilities)
     if not samples:
         raise ValueError("no samples resolved to run inference on")
 
@@ -210,11 +240,21 @@ def run_predict(
         predictions = adapter.predict(samples, artifact, config=config.predict.as_overrides() | {
             "tta_mode": config.predict.tta_mode,
         })
-    elif resolved_backend in _ANOMALY_MAP_BACKENDS:
+    elif capabilities.fills("anomaly_map"):
+        # Only a model that actually produces a pixel map gets somewhere to
+        # write one. GANomaly is an anomalib model that does not (see
+        # `anomalib.presets.IMAGE_LEVEL_ONLY`), and under the old
+        # backend-name check it was handed an `output_dir` regardless.
         predictions = adapter.predict(samples, artifact, output_dir=output_dir)
     else:
         predictions = adapter.predict(samples, artifact)
-    return PredictRunResult(backend=resolved_backend, variant=resolved_variant, predictions=predictions, samples=samples)
+    return PredictRunResult(
+        backend=resolved_backend,
+        variant=resolved_variant,
+        predictions=predictions,
+        samples=samples,
+        config_path=str(model_config),
+    )
 
 
 def run_evaluate(
@@ -225,6 +265,7 @@ def run_evaluate(
     variant: str | None = None,
     config_dir: str | Path = DEFAULT_MODEL_CONFIG_DIR,
     task: str | None = None,
+    output_dir: str | None = None,
     enable_tiling: bool = False,
     enable_tta: bool = False,
     tile_size: int | None = None,
@@ -244,6 +285,19 @@ def run_evaluate(
     default (e.g. scoring a segmentation-capable dataset's masks as
     image-level anomaly detection instead).
 
+    `output_dir` is what makes **pixel-level** metrics possible for the
+    anomaly backends. `AnomalyEvaluator` reads each prediction's
+    `anomaly_map`, and the adapters only persist that map (and fill the
+    field) when given somewhere to write it — so without this argument an
+    anomaly model returns image AUROC/F1 and nothing else, however capable
+    of pixel-level output it is. Pass a directory to also get
+    `pixel_auroc` / `pixel_aupro` / `iap`.
+
+    Not the default: the maps are one `.npy` per sample, so writing them is
+    the caller's decision, exactly as in `run_predict`. It has no effect for
+    a model whose `capabilities()` does not fill `anomaly_map` (GANomaly), or
+    for the detection/segmentation backends, which score from boxes/masks.
+
     `source` must resolve via `--dataset` (a `PredictInput.images` source
     carries no ground truth to score against).
     """
@@ -255,6 +309,7 @@ def run_evaluate(
 
     run = run_predict(
         model, weights=weights, source=source, backend=backend, variant=variant, config_dir=config_dir,
+        output_dir=output_dir,
         enable_tiling=enable_tiling, enable_tta=enable_tta, tile_size=tile_size, tile_overlap=tile_overlap,
     )
     if not run.samples:
@@ -266,4 +321,5 @@ def run_evaluate(
         variant=run.variant,
         metrics={key: float(value) for key, value in metrics.items()},
         sample_count=len(run.samples),
+        config_path=run.config_path,
     )

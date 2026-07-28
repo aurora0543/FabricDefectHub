@@ -100,16 +100,31 @@ class _FakeWebBenchTargetDataset(DatasetAdapter):
 
 
 def _install_fake_catalog(monkeypatch, tmp_path):
+    # The UI reads "which tasks can this dataset be scored on" from
+    # `core.dataset_capabilities`, not from its own catalog, so a fake
+    # dataset has to declare capabilities exactly like a real one does.
+    # That is the point of the arrangement -- the fixture models the
+    # production requirement instead of restating the answer.
+    from fabric_defect_hub.core.dataset_capabilities import (
+        all_capabilities,
+        register_capabilities,
+    )
+
+    already = all_capabilities()
+    for name in ("fake-fabric-webbench", "fake-fabric-webbench-target"):
+        # `register_capabilities` refuses a re-registration (a real dataset
+        # declaring itself twice is a bug); this fixture runs once per test.
+        if name not in already:
+            register_capabilities(name, default_root=str(tmp_path), roles=set(), tasks=("anomaly",))
+
     dataset_catalog = {
         "Fake Dataset": {
             "name": "fake-fabric-webbench",
             "slice_kwarg": None,
-            "tasks": ("anomaly",),
         },
         "Fake Target Dataset": {
             "name": "fake-fabric-webbench-target",
             "slice_kwarg": None,
-            "tasks": ("anomaly",),
         },
     }
     model_catalog = {

@@ -60,14 +60,33 @@ fdh.train(cfg) / fdh.predict(...) / fdh.evaluate(...)     # 三个动词
 fdh.from_pretrained(key)                                  # 已发布的权重
 ```
 
-门面**不是第六个抽象**，它不新增任何概念，只是把 `training.run_train` / `predict.run_predict` / `catalog` 这些已有入口用一致的名字暴露出来（此前它们没有从包根导出，`import fabric_defect_hub` 够不到 config 驱动的那条路径，而那恰恰是 `fdh train` 实际走的路径）。
+门面**不是第六个抽象**，它不新增任何概念，只是把 `training.run_train` / `inference.runner.run_predict` / `catalog` 这些已有入口用一致的名字暴露出来（此前它们没有从包根导出，`import fabric_defect_hub` 够不到 config 驱动的那条路径，而那恰恰是 `fdh train` 实际走的路径）。
 
 **约束（由 `tests/test_api_facade.py` 在 AST 层钉死）**：
 
 - 门面函数体内**不允许出现任何后端名字**——不管是 `if backend == "anomalib"` 还是以后端名为键的 dict 查找，两者耦合度相同。
-- 每个公开函数**必须**委派进契约层模块（`training` / `predict` / `loader` / `catalog` / `core.registry`），委派不到任何东西的函数说明它在自己干活。
+- 每个公开函数**必须**委派进契约层模块（`training` / `inference.runner` / `loader` / `catalog` / `core.registry`），委派不到任何东西的函数说明它在自己干活。
 - `api.py` 模块级不得 import 任何深度学习框架——`import fabric_defect_hub` 在没装任何后端的机器上也要能做发现和配置。
 
 理由和五个抽象的理由是同一个：一个友好的扁平接口正是"就加这一个 anomalib 特例"最容易堆积的地方，堆起来之后项目就有了两条流水线——被 `test_pipeline_contract.py` 守着的那条，和它看不见的影子那条。确实需要按后端区分的知识（如"run length 写在哪个 key"）放在拥有它的那一层（`training.RUN_LENGTH_KEYS`），门面只做查表。
 
 改动门面的公开签名与改动上面五个契约同级，需先改测试并走评审。
+
+## UI 层（`web/`）
+
+Gradio 前端是这些契约的**消费者**，不是第七个"知道每个后端怎么回事"的地方。规则由 `tests/test_web_layering.py` 在 AST 层钉死：
+
+- `web/*.py` **只允许 import `models.base`**（即契约本身：`Artifact` / `ModelAdapter` / `ModelCapabilities`），不得 import 任何 `models.<backend>.*`。
+- `web/*.py` 的**代码里不得出现任何后端名字**（注释和 docstring 除外——解释决策时点名后端是应该的）。集合成员判断、以后端名为键的 dict、if 链，三者耦合度相同。
+- `DATASET_CATALOG` 只放**呈现**信息（显示名、下拉框喂哪个 kwarg、图库默认 task、环境变量提示）。"这个数据集有哪些 task 的 ground truth"和"它在磁盘哪里"由 `core/dataset_capabilities.py` 单独声明，UI 读回来。
+
+UI 曾经违反过的四处，以及它们各自现在的归属：
+
+| UI 曾经自己回答的问题 | 现在问谁 |
+|---|---|
+| 哪些后端 `predict()` 收 `output_dir` | `ModelCapabilities.fills("anomaly_map")` |
+| 这个后端装了没 | `core.availability.backend_is_importable` |
+| 这份权重的来源可信吗 | `core.checkpoint.inspect_checkpoint`（对所有后端，不只 anomalib） |
+| 导出的模块吃 batched 还是 list 输入 | `ModelCapabilities.export_input_style` |
+
+每一处当时都是"看起来合理"的小妥协，但每一处都是同一个事实被写了两遍——其中三处已经写错了：GANomaly 被当成有像素图的 anomalib 模型、非 anomalib 权重被告知"这是原生 Ultralytics 权重"、后端安装检测探的是代理包而不是后端本身。

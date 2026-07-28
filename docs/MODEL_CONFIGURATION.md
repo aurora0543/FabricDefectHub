@@ -2,6 +2,30 @@
 
 训练由模型 YAML 驱动；Web UI 只用于加载已发布权重并推理，不会修改训练超参数。一次训练实际使用的最终配置会被写入 `artifacts/models/records/`，并由 `artifacts/models/weight_manifest.jsonl` 关联到对应权重。
 
+## `fdh train <名字>` 是怎么找到配置的
+
+一句话规则：**裸模型名解析到该后端的通用配置；专用配置（复现用、textile 调优版）按文件名寻址。**
+
+`fdh train` / `fdh predict` / `fdh.load_config()` 共用同一套解析（`training.resolve_model_config_and_variant`），按以下顺序：
+
+| # | 依据 | 例子 |
+|---|---|---|
+| 1 | 磁盘上的文件路径 | `fdh train configs/models/anomalib_example.yaml` |
+| 2 | `configs/models/` 下的文件名（可省 `.yaml`） | `fdh train patchcore_mvtec_repro` |
+| 3 | **某个配置自己声明的** `model.name` / `model.variant` / `variants.<名>` | `fdh train yolov8n`、`fdh train stfpm` |
+| 4 | **目录**：`catalog.CANONICAL_MODELS` 里该已发布模型自己声明的 `config` | `fdh train padim`、`fdh train unetplusplus_resnet34` |
+| 5 | **后端支持的变体**：某后端 presets 接受的名字 → 该后端的 `<backend>_example.yaml` | `fdh train fastflow`、`fdh train glass` |
+
+几条要点：
+
+- 第 3 步**只在恰好命中一个配置时**采用。三个配置都声明了 PatchCore（`anomalib_example` / `patchcore_textile` / `patchcore_mvtec_repro`），此时不报错，而是交给第 4 步——目录说通用的那个是 `anomalib_example.yaml`。想要另外两个，按文件名（第 2 步）寻址。
+- 第 4 步不是启发式。`CanonicalModel.config` 本来就记录着"这个已发布模型是用哪个配置训的"，因为这个答案推不出来。torchvision 上尤其明显：`unetplusplus_resnet34` 的任务是 `segmentation`，而两个 torchvision 配置声明的模型分别是 `detect` 和 `instance_segmentation`——任何按 task 猜的规则都会挑错文件，目录直接给出答案。
+- 第 3–5 步都会带出 `variant`（`--variant` 显式指定时仍然优先），所以真正训练的是你要的那个模型，而不是配置自己的默认值。第 4 步给的是目录里的规范拼写（`PaDiM` 而不是 `padim`）。
+- 第 4、5 步会**替你选一个你没点名的配置**。这是有意的——否则目录里一半模型无法按名字训练——但代价是选择必须可见：`fdh train` 的输出里有 `resolved_config` 和 `resolved_variant` 两个字段，先确认它们再看指标。
+- `tests/test_catalog.py::test_every_published_model_is_reachable_by_its_own_name` 对目录全量参数化，往目录里加模型却没配好配置，会在这里红，而不是在别人的训练里。
+
+**注意**：`fdh train <名字>` 训练一个在 `CANONICAL_MODELS` 里的模型时，**默认会把结果发布到 `artifacts/models/published/`**，覆盖 Web UI 正在用的那份权重。冒烟和实验请加 `--no-publish`。
+
 ## 配置优先级
 
 从低到高依次为：后端预设、模型 YAML、`configs/training_profile.yaml` 的 ZJU 数据策略、命令行的数据选择参数、`--set path.to.key=value`。`--set` 适合一次性实验；需要长期复现的设置应写回独立 YAML。
@@ -61,7 +85,10 @@ Config profile 是某个方法的一份诚实的运行设置集合——用该�
 | `moeclip` | MoECLIP, WinCLIP | LoRA rank / experts（上游默认值） | Park et al., "MoECLIP", CVPR 2026 (arXiv:2603.03101) |
 | `dinomaly` | Dinomaly | ViT-Base DINOv2 encoder + 上游训练计划 | Guo et al., "Dinomaly", CVPR 2025 (arXiv:2405.14325) |
 
-覆盖范围：以上六个 profile 覆盖项目 18 个模型里有独立方法可锚定的部分。torchvision 的检测器/分割器（Faster/Cascade R-CNN、DETR、Mask R-CNN、UNet++、DeepLabV3+）按 torchvision 自身默认值跑，作为标准 baseline，故意不带 profile。
+覆盖范围：以上六个 profile 覆盖已发布目录（`catalog.CANONICAL_MODELS`，20 个模型）里有独立方法可锚定的部分。两类模型**故意不带 profile**，都是事实陈述而非待补的坑：
+
+- torchvision 的检测器/分割器（Faster/Cascade R-CNN、DETR、Mask R-CNN、UNet++、DeepLabV3+）按 torchvision 自身默认值跑，作为标准 baseline。
+- STFPM、GANomaly，以及只在 presets 里可用、尚未进目录的 DRAEM / DSR / GLASS / FastFlow / UniNet / AnomalyDINO——它们跑的是各自上游的构造器默认值（`models/anomalib/presets.py` 里每条注释都写明了哪些是上游原值、哪些为织物做了调整）。profile 意味着"设置锚定到那篇论文"，在这个项目里真的复现过之前不发这个名分。执行步骤见 `docs/cloud_training_runbook.md` §10b。
 
 Profile 不只是给 `fdh list-recipes` 看的元数据，是真的接入了训练流程：
 

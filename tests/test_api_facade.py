@@ -34,7 +34,7 @@ BACKEND_NAMES = {"ultralytics", "torchvision", "anomalib", "dinomaly", "moeclip"
 # doing the work itself, which is the thing this file exists to prevent.
 DELEGATION_TARGETS = {
     "fabric_defect_hub.training",
-    "fabric_defect_hub.predict",
+    "fabric_defect_hub.inference.runner",
     "fabric_defect_hub.loader",
     "fabric_defect_hub.catalog",
     "fabric_defect_hub.core.registry",
@@ -150,6 +150,48 @@ def test_importing_the_package_pulls_in_no_deep_learning_framework():
     assert not heavy, f"api.py imports {sorted(heavy)} at module level"
 
 
+def test_facade_functions_survive_importing_every_submodule():
+    """`fdh.predict` must still be the function after anything imports a
+    submodule.
+
+    Python binds a submodule as an attribute of its package on import, so a
+    module named `fabric_defect_hub.predict` silently overwrote the facade's
+    `predict` function — and the very first `fdh.predict(...)` call did the
+    overwriting itself, since it imports `run_predict` from that module.
+    Calling it twice in one session raised `TypeError: 'module' object is not
+    callable`. The module now lives at `fabric_defect_hub.inference.runner`;
+    this test is what keeps any future top-level module from taking one of
+    these names back.
+    """
+
+    import importlib
+    import pkgutil
+
+    import fabric_defect_hub as fdh
+
+    for module in pkgutil.walk_packages(fdh.__path__, f"{fdh.__name__}."):
+        if module.name.endswith("__main__"):  # would run the CLI
+            continue
+        try:
+            importlib.import_module(module.name)
+        except ImportError:
+            continue  # an optional backend that isn't installed here
+
+    # `recipes` is deliberately a module export (the config-profile package
+    # itself); everything else in `__all__` is a function or a class.
+    intentionally_a_module = {"recipes"}
+    shadowed = sorted(
+        name
+        for name in fdh.__all__
+        if name not in intentionally_a_module
+        and isinstance(getattr(fdh, name), type(importlib))
+    )
+    assert not shadowed, (
+        f"{shadowed} in fabric_defect_hub.__all__ resolve to submodules, not to the exported "
+        f"objects — a submodule of the same name shadows them once imported."
+    )
+
+
 def test_run_config_carries_exactly_what_run_train_accepts():
     """`train(cfg)` is a call, not a translation -- which only holds if every
     field `RunConfig` forwards is a real `run_train` parameter. If `run_train`
@@ -161,3 +203,35 @@ def test_run_config_carries_exactly_what_run_train_accepts():
     accepted = set(inspect.signature(run_train).parameters)
     forwarded = {"backend", "variant", "overrides", "set_overrides", "publish"}
     assert forwarded <= accepted, sorted(forwarded - accepted)
+
+
+def test_train_routes_config_dir_to_both_resolution_and_the_run(tmp_path):
+    """`config_dir` has to reach the keyword resolution *and* the training
+    call. Left in `**kwargs` it reached only the latter, so a custom config
+    directory would have its backend inferred from the default directory's
+    config and then trained from its own — a silent mismatch, not an error.
+    """
+
+    from fabric_defect_hub import api
+
+    directory = tmp_path / "models"
+    directory.mkdir()
+    (directory / "anomalib_example.yaml").write_text("model:\n  name: PaDiM\n")
+
+    captured = {}
+
+    def fake_run_train(model, **kwargs):
+        captured.update(model=model, **kwargs)
+        return "ran"
+
+    import fabric_defect_hub.training as training_module
+
+    original = training_module.run_train
+    training_module.run_train = fake_run_train
+    try:
+        assert api.train("padim", config_dir=directory) == "ran"
+    finally:
+        training_module.run_train = original
+
+    assert captured["config_dir"] == directory
+    assert captured["backend"] == "anomalib"

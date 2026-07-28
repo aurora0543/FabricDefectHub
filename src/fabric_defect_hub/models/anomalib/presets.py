@@ -18,7 +18,7 @@ What *is* our responsibility, and what lives here, is:
 
 `MODEL_PRESETS` doubles as the registration list: a class is reachable
 through this backend only if it has an entry here (see
-`resolve_model_class_name` / `list_supported_models`). An entry whose
+`resolve_model_class_name` / `list_supported_variants`). An entry whose
 values are simply upstream's own defaults is therefore not redundant — it
 is how the model is admitted, and the comment above each entry says
 explicitly whether anything was tuned for fabric or not. Per this
@@ -350,15 +350,10 @@ def default_model_kwargs(name: str) -> dict[str, Any]:
     return dict(MODEL_PRESETS.get(class_name, {}))
 
 
-def list_supported_models() -> list[str]:
-    return sorted(MODEL_PRESETS)
-
-
 def list_supported_variants() -> list[str]:
     """Every model name this backend accepts, under the name all six
     backends' preset modules share (`api.list_models` calls it on each of
-    them). Same list as `list_supported_models`, which predates the shared
-    spelling and is kept for existing callers.
+    them).
     """
 
-    return list_supported_models()
+    return sorted(MODEL_PRESETS)

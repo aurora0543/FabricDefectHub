@@ -120,10 +120,14 @@ _BACKEND_CONFIG_CLASSES = {
 
 # Per backend: which key under `model:` selects which model gets trained.
 # Ultralytics/torchvision key their model families by `variant`
-# (yolov8n/yolov8s/..., fasterrcnn_resnet50_fpn/...); anomalib's five models
-# and Dinomaly's encoder presets are keyed by `name` instead (PatchCore/
-# PaDiM/... or dinov2reg_vit_base_14/...).
-_BACKEND_MODEL_KEY: dict[str, str] = {
+# (yolov8n/yolov8s/..., fasterrcnn_resnet50_fpn/...); the anomaly backends'
+# models and Dinomaly's encoder presets are keyed by `name` instead
+# (PatchCore/PaDiM/... or dinov2reg_vit_base_14/...).
+#
+# Public because `inference.runner.run_predict` reads this same table to find
+# the variant it should score. It used to answer that question itself, from an
+# unrelated list of backend names that happened to give the same answer.
+BACKEND_MODEL_KEY: dict[str, str] = {
     "anomalib": "name",
     "dinomaly": "name",
     "moeclip": "name",
@@ -140,11 +144,6 @@ _BACKEND_MODEL_KEY: dict[str, str] = {
 # leave its segmentation loss with nothing to learn from.
 _ONE_CLASS_BACKENDS = {"anomalib", "dinomaly", "mambaad"}
 
-# Every anomaly backend, one-class or not. These all produce a fabric
-# anomaly model, so they share the same training-source restriction
-# (`_enforce_trainable_dataset`) even though they differ on what their
-# train split may contain.
-_ANOMALY_BACKENDS = _ONE_CLASS_BACKENDS | {"moeclip"}
 
 # Per anomaly backend: which datasets it may *train* on, and a short label
 # for the error message explaining why the other kind is refused.
@@ -300,23 +299,52 @@ def resolve_model_config_and_variant(
     """Resolve a `train`/`predict` CLI argument to a config path plus the
     variant/name it implies (or `None` when it doesn't imply one).
 
+    The rule this implements, in one sentence: **a bare model name resolves
+    to that backend's general-purpose config; a purpose-built config (an
+    MVTec reproduction, a textile-tuned variant) is addressed by its
+    filename.** Everything below is that sentence made precise.
+
     `model` may be, in order of precedence:
+
     1. An existing file path (used as-is, anywhere on disk) — the original
        `fdh train configs/models/ultralytics_example.yaml` form still works.
        Implies no variant.
     2. A filename stem under `config_dir` (e.g. "ultralytics_example",
        with or without the ".yaml" suffix) — `fdh train ultralytics_example`.
-       Implies no variant.
-    3. A model keyword matched against every config under `config_dir`'s
-       declared `model.variant` / `model.name`, or (for configs using the
-       `variants.<name>` profile mechanism, see
-       `models.ultralytics.config.resolve_variant_profile`) a profile key —
-       case-insensitively, e.g. `fdh train yolov8n`, `fdh train yolov8s`, or
-       `fdh train patchcore` finds whichever example config declares that
-       variant/name, so you don't need to know (or type) the file it lives
-       in. Implies `variant=model` (the caller's explicit `--variant`, if
-       any, still wins) so the matched profile is actually the one trained,
-       not just the config's own top-level default.
+       Implies no variant. This is how a purpose-built config is reached:
+       `fdh train patchcore_mvtec_repro`.
+    3. **Declared** (`_resolve_by_declaration`): the keyword is a config's
+       own `model.variant`/`model.name`, or one of its `variants.<name>`
+       profile keys — `fdh train yolov8n`, `fdh train stfpm`. Used only when
+       exactly one config declares it; several declaring it (three configs
+       declare PatchCore) falls through to step 4 rather than erroring, so
+       the general-purpose one can win.
+    4. **Catalogued** (`_resolve_by_catalog`): the keyword is a published
+       model's catalog key or variant, and `CanonicalModel.config` already
+       records which config trains it. Not a heuristic — that field is
+       maintained precisely because the answer is not derivable. It is what
+       makes `fdh train padim` / `winclip` / `unetplusplus_resnet34` work at
+       all (none is declared by any config), and it is why this step must
+       come before step 5: `unetplusplus_resnet34` is a `segmentation`
+       variant, and *both* torchvision configs declare something else
+       (`detect` and `instance_segmentation`), so any rule that guessed from
+       the task would pick the wrong file. The catalog just says.
+    5. **Backend-supported** (`_resolve_by_backend_support`): the keyword is
+       a variant some backend's presets accept (`FastFlow`, `GLASS`,
+       `dinov2reg_vit_large_14` — runnable but not published, so absent from
+       the catalog) → that backend's `<backend>_example.yaml`. Guarded
+       against a name two backends both claim, which none currently do.
+
+    Steps 3-5 imply `variant=<the resolved name>` (the caller's explicit
+    `--variant` still wins), so the model actually trained is the one asked
+    for rather than whatever the config's own default happens to be. Step 4
+    supplies the catalog's canonical spelling (`"PaDiM"`, not `"padim"`).
+
+    Steps 4 and 5 pick a config the caller did not name. That is deliberate
+    — without them half of `CANONICAL_MODELS` is unreachable by name — but
+    it means the choice has to be *visible*: `fdh train` reports
+    `resolved_config`/`resolved_variant` in its output for exactly this
+    reason.
     """
 
     direct = Path(model)
@@ -330,20 +358,90 @@ def resolve_model_config_and_variant(
         return by_filename, None
 
     needle = model.strip().lower()
-    matches = [path for path in find_model_configs(directory) if needle in _config_keywords(path)]
-    if len(matches) == 1:
-        return matches[0], needle
-    if len(matches) > 1:
+    for resolver in (_resolve_by_declaration, _resolve_by_catalog, _resolve_by_backend_support):
+        resolved = resolver(needle, directory)
+        if resolved is not None:
+            return resolved
+
+    # Nothing resolved. If several configs *declared* the name, say so --
+    # step 3 deferred to the catalog rather than erroring, and with the
+    # catalog also silent that ambiguity is the actual reason this failed.
+    declaring = [path for path in find_model_configs(directory) if needle in _config_keywords(path)]
+    if len(declaring) > 1:
         raise ValueError(
-            f"'{model}' matches multiple configs under {directory}: "
-            f"{', '.join(str(path) for path in matches)}; pass one of these paths to disambiguate."
+            f"'{model}' is declared by multiple configs under {directory} "
+            f"({', '.join(path.name for path in declaring)}) and is not a published model the "
+            f"catalog can disambiguate; pass one of those filenames."
         )
 
-    available = ", ".join(path.stem for path in find_model_configs(directory)) or "<none found>"
     raise FileNotFoundError(
         f"could not resolve model config '{model}' (checked as a path, as a filename under "
-        f"'{directory}', and as a model keyword); available under '{directory}': {available}"
+        f"'{directory}', as a model declared by a config, as a published model in the "
+        f"catalog, and as a variant any backend's presets accept). Configs available under "
+        f"'{directory}': {', '.join(path.stem for path in find_model_configs(directory)) or '<none found>'}. "
+        f"Model names: `fdh models`."
     )
+
+
+def _resolve_by_declaration(needle: str, directory: Path) -> tuple[Path, str] | None:
+    """Step 3: a config that declares this exact model name.
+
+    Returns None when several configs declare it, deferring to the catalog
+    rather than erroring — three configs declare PatchCore
+    (`anomalib_example`, `patchcore_textile`, `patchcore_mvtec_repro`), and
+    the right answer for a bare `patchcore` is the general-purpose one,
+    which only the catalog knows.
+    """
+
+    matches = [path for path in find_model_configs(directory) if needle in _config_keywords(path)]
+    return (matches[0], needle) if len(matches) == 1 else None
+
+
+def _resolve_by_catalog(needle: str, directory: Path) -> tuple[Path, str] | None:
+    """Step 4: a published model, whose config the catalog already records."""
+
+    from fabric_defect_hub.catalog import CANONICAL_MODELS
+
+    for entry in CANONICAL_MODELS:
+        if needle not in {entry.key.strip().lower(), entry.variant.strip().lower()}:
+            continue
+        path = directory / entry.config
+        if not path.is_file():
+            # The catalog names a config that isn't in this directory --
+            # possible when `config_dir` is overridden (tests, a caller's own
+            # config tree). Fall through instead of failing: the later steps
+            # may still resolve it against the directory actually in use.
+            return None
+        return path, entry.variant
+    return None
+
+
+def _resolve_by_backend_support(needle: str, directory: Path) -> tuple[Path, str] | None:
+    """Step 5: a variant some backend's presets accept but no config
+    declares and the catalog doesn't publish -- `fdh train fastflow`.
+    """
+
+    from fabric_defect_hub.api import list_models
+
+    owners = [
+        backend
+        for backend, variants in list_models().items()
+        if needle in {variant.strip().lower() for variant in variants}
+    ]
+    if len(owners) > 1:
+        raise ValueError(
+            f"'{needle}' is a variant of more than one backend ({', '.join(sorted(owners))}); "
+            f"pass a config filename, or --backend, to disambiguate."
+        )
+    if not owners:
+        return None
+    path = directory / f"{owners[0]}_example.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"'{needle}' is a {owners[0]} variant, but that backend's general-purpose config "
+            f"{path} does not exist; pass a config path explicitly."
+        )
+    return path, needle
 
 
 def _config_keywords(path: Path) -> set[str]:
@@ -418,7 +516,7 @@ def apply_model_overrides(raw: dict[str, Any], backend: str, variant: str | None
     `data` section.
 
     `variant` is written under `model.variant` for ultralytics/torchvision
-    and `model.name` for anomalib (see `_BACKEND_MODEL_KEY`) — whichever
+    and `model.name` for anomalib (see `BACKEND_MODEL_KEY`) — whichever
     field that backend's `ModelSpec` actually reads. `None` leaves the
     config's own value alone.
 
@@ -434,7 +532,7 @@ def apply_model_overrides(raw: dict[str, Any], backend: str, variant: str | None
 
     raw = dict(raw)
     model = dict(raw.get("model") or {})
-    model[_BACKEND_MODEL_KEY[backend]] = variant
+    model[BACKEND_MODEL_KEY[backend]] = variant
     raw["model"] = model
 
     checkpoint = dict(raw.get("checkpoint") or {})
@@ -799,6 +897,12 @@ class TrainRunResult:
     result: Any  # UltralyticsRunResult | TorchvisionRunResult | AnomalibRunResult
     published_path: str | None = None  # set when (backend, variant) is one of catalog.CANONICAL_MODELS
     weight_manifest_path: str | None = None
+    # What the `model` argument actually resolved to. Reported because steps
+    # 4 and 5 of `resolve_model_config_and_variant` can pick a config the
+    # caller never named (`fdh train padim` -> anomalib_example.yaml), and a
+    # choice made on someone's behalf has to be inspectable afterwards.
+    config_path: str | None = None
+    variant: str | None = None
 
 
 def _enforce_trainable_dataset(raw: dict[str, Any], backend: str) -> None:
@@ -923,7 +1027,7 @@ def run_train(
     if publish and result.registered_artifact is not None:
         from fabric_defect_hub.catalog import publish_artifact
 
-        model_key = _BACKEND_MODEL_KEY[resolved_backend]
+        model_key = BACKEND_MODEL_KEY[resolved_backend]
         resolved_variant = raw.get("model", {}).get(model_key)
         if resolved_variant:
             destination = publish_artifact(resolved_backend, resolved_variant, result.registered_artifact.path)
@@ -933,7 +1037,7 @@ def run_train(
     if result.registered_artifact is not None:
         from fabric_defect_hub.weight_registry import record_weight
 
-        model_key = _BACKEND_MODEL_KEY[resolved_backend]
+        model_key = BACKEND_MODEL_KEY[resolved_backend]
         manifest_path = str(
             record_weight(
                 project_root=Path(__file__).resolve().parents[2],
@@ -954,6 +1058,8 @@ def run_train(
         result=result,
         published_path=published,
         weight_manifest_path=manifest_path,
+        config_path=str(model_config),
+        variant=variant,
     )
 
 

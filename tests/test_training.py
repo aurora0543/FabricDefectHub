@@ -64,10 +64,60 @@ def test_resolve_model_config_missing_raises_with_available_list(config_dir):
         resolve_model_config("nonexistent", config_dir=config_dir)
 
 
-def test_resolve_model_config_ambiguous_keyword_raises(config_dir):
+# --------------------------------------------------------------------------- #
+# Keyword resolution steps 3-5 (see resolve_model_config_and_variant)
+# --------------------------------------------------------------------------- #
+def test_a_name_several_configs_declare_is_settled_by_the_catalog(config_dir):
+    """Two configs declaring `yolov8n` is no longer an error: step 3 defers,
+    and the catalog says which config trains the published yolov8n. This is
+    the mechanism that makes a bare `fdh train patchcore` work with three
+    PatchCore configs on disk.
+    """
+
     (config_dir / "ultralytics_example2.yaml").write_text("model:\n  variant: yolov8n\n")
-    with pytest.raises(ValueError, match="multiple configs"):
-        resolve_model_config("yolov8n", config_dir=config_dir)
+
+    assert resolve_model_config("yolov8n", config_dir=config_dir) == (
+        config_dir / "ultralytics_example.yaml"
+    )
+
+
+def test_an_ambiguous_name_the_catalog_does_not_know_still_raises(config_dir):
+    """...but ambiguity the catalog *cannot* settle must still be reported,
+    naming the culprits — otherwise the deferral in step 3 would turn a
+    clear error into a confusing "could not resolve".
+    """
+
+    (config_dir / "custom_a.yaml").write_text("model:\n  variant: mymodel\n")
+    (config_dir / "custom_b.yaml").write_text("model:\n  variant: mymodel\n")
+
+    with pytest.raises(ValueError, match="declared by multiple configs"):
+        resolve_model_config("mymodel", config_dir=config_dir)
+
+
+def test_backend_supported_variant_falls_back_to_that_backends_example(config_dir):
+    """Step 5: FastFlow is runnable but unpublished, so no config declares it
+    and the catalog has no entry — it should still resolve, to the anomalib
+    general-purpose config, with the variant carried through.
+    """
+
+    path, variant = training.resolve_model_config_and_variant("fastflow", config_dir=config_dir)
+
+    assert path == config_dir / "anomalib_example.yaml"
+    assert variant == "fastflow"
+
+
+def test_a_variant_two_backends_both_claim_is_rejected(config_dir, monkeypatch):
+    """Step 5 is only unambiguous because no two backends currently share a
+    variant name. If that ever changes, resolution must say so rather than
+    silently picking whichever backend enumerates first.
+    """
+
+    monkeypatch.setattr(
+        "fabric_defect_hub.api.list_models",
+        lambda backend=None: {"anomalib": ["Collide"], "dinomaly": ["collide"]},
+    )
+    with pytest.raises(ValueError, match="more than one backend"):
+        resolve_model_config("collide", config_dir=config_dir)
 
 
 def test_find_model_configs_lists_yaml_files_sorted(config_dir):
