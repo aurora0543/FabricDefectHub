@@ -9,6 +9,11 @@ from abc import ABC, abstractmethod
 from fabric_defect_hub.core.types import Sample
 
 
+# What counts as an image file on disk. Shared because it is a fact about
+# image files, not about any one dataset's layout -- five adapters kept
+# identical private copies, so adding a format meant finding all five.
+IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".bmp")
+
 class DatasetAdapter(ABC):
     """Base class every concrete dataset (public or in-house) implements."""
 

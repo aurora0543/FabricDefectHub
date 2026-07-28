@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import random
 from pathlib import Path
 from typing import Any
 
 from fabric_defect_hub.catalog import CANONICAL_MODELS, metadata_for, published_path
+from fabric_defect_hub.core.availability import backend_is_importable
+from fabric_defect_hub.core.checkpoint import inspect_checkpoint
 from fabric_defect_hub.core.serialization import sample_from_dict, sample_to_dict
 from fabric_defect_hub.core.types import Prediction, Sample
 from fabric_defect_hub.loader import load_dataset, load_model
-from fabric_defect_hub.models.anomalib.checkpoint import inspect_checkpoint
 from fabric_defect_hub.models.base import Artifact
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, tr
 
@@ -39,28 +39,33 @@ MODEL_CATALOG = {
     for model in CANONICAL_MODELS
 }
 
-# Each entry names a registered DatasetAdapter plus the UI-facing metadata
-# needed to locate it on disk and adapt the sampler controls (texture/category
-# filter, default Sample.task) to that dataset's shape. `slice_kwarg` names the
-# DatasetAdapter constructor kwarg the "Texture / pattern" dropdown feeds (e.g.
-# "pattern" for ZJU-Leaper's textures, "category" for MVTec AD's object
-# classes); None means the dataset has no such subdivision. `task` is the
-# dataset's *default* Sample task, used by the Single Image tab's gallery
-# (ground truth isn't needed there, so one default is enough). `tasks` is the
-# superset of every task this dataset can supply real ground truth for
-# (boxes, masks, or an anomaly flag) — the Benchmark tab uses it to decide
-# which models are evaluable against a given dataset (`compatible_models`
-# below), and loads the dataset once per selected model with `task` set to
-# whichever of these that model actually needs (see `run_benchmark`), since
-# only `task == "segmentation"` makes a `DatasetAdapter` attach
-# `Sample.annotations.masks` (see e.g. `datasets/zju_leaper.py::_build_sample`).
-# Additional datasets can add a catalog entry here without changing the page
-# interaction contract, as long as `texture_choices`/`slice_value` below know
-# how to enumerate/resolve their slice_kwarg.
+# Display label -> the *presentation* facts about a registered dataset, and
+# nothing else.
+#
+# What each entry may hold:
+#   `name`         the registered `DatasetAdapter` name — the join key into
+#                  `core.dataset_capabilities`
+#   `env`          an environment variable a user may set to point elsewhere
+#   `slice_kwarg`  which DatasetAdapter constructor kwarg the "Texture /
+#                  pattern" dropdown feeds ("pattern" for ZJU-Leaper's
+#                  textures, "category" for MVTec AD's object classes; None
+#                  when the dataset has no such subdivision)
+#   `task`         the default `Sample.task` for the Single Image gallery,
+#                  which needs no ground truth and so needs only one default
+#
+# What each entry deliberately does NOT hold: which tasks the dataset can
+# supply ground truth for, and where it lives on disk. Both are declared once
+# in `core.dataset_capabilities` (`tasks`, `default_root`) and read back here
+# via `dataset_tasks()` / `_dataset_dir()`. They used to be restated in this
+# table as `tasks` and `dir`; the two copies happened to agree, which is the
+# most dangerous state for a duplicated fact to be in.
+#
+# Adding a dataset means a `register_capabilities(...)` declaration plus an
+# entry here, and no change to the page interaction contract, as long as
+# `texture_choices`/`slice_value` below know how to enumerate its slice_kwarg.
 DATASET_CATALOG = {
     "ZJU-Leaper": {
         "name": "zju-leaper",
-        "dir": "ZJU-Leaper",
         "env": "ZJU_LEAPER_ROOT",
         "slice_kwarg": "pattern",
         "task": "detection",
@@ -72,53 +77,42 @@ DATASET_CATALOG = {
         # benchmarkable against it. The anomaly models are "Normal Lab
         # trained" (see catalog.py's `source`), so scoring them here is a
         # cross-domain generalization check, not an in-domain one.
-        "tasks": ("detection", "segmentation", "anomaly"),
     },
     "RAW-FABRID": {
         "name": "raw-fabric",
-        "dir": "RAW_FABRID",
         "env": "RAW_FABRIC_ROOT",
         "slice_kwarg": None,
         "task": "anomaly",
-        "tasks": ("anomaly", "segmentation"),
     },
     "MVTec AD": {
         "name": "mvtec-ad",
-        "dir": "MVTec AD",
         "env": "MVTEC_AD_ROOT",
         "slice_kwarg": "category",
         "task": "anomaly",
-        "tasks": ("anomaly", "segmentation"),
     },
     # Cross-domain, eval-only object benchmark (logical + structural
     # anomalies); per-image ground-truth mask dirs (datasets/mvtec_loco.py).
     "MVTec LOCO": {
         "name": "mvtec-loco",
-        "dir": "MVTec LOCO",
         "env": "MVTEC_LOCO_ROOT",
         "slice_kwarg": "category",
         "task": "anomaly",
-        "tasks": ("anomaly", "segmentation"),
     },
     # Cross-domain, eval-only object benchmark; pixel masks for the Anomaly
     # split (datasets/visa.py).
     "VisA": {
         "name": "visa",
-        "dir": "VisA",
         "env": "VISA_ROOT",
         "slice_kwarg": "category",
         "task": "anomaly",
-        "tasks": ("anomaly", "segmentation"),
     },
     # In-domain fabric, image-level only (no pixel masks) — good for
     # image-level AUROC, and a training-eligible source (datasets/tilda.py).
     "TILDA-400": {
         "name": "tilda-400",
-        "dir": "TILDA_400",
         "env": "TILDA_400_ROOT",
         "slice_kwarg": None,
         "task": "anomaly",
-        "tasks": ("anomaly",),
     },
     # In-domain fabric, training-eligible (datasets/fabric_defects.py).
     # Partial pixel masks: hole/Vertical/horizontal ship binary masks
@@ -127,36 +121,20 @@ DATASET_CATALOG = {
     # offered since some samples do carry ground truth.
     "Fabric Defects": {
         "name": "fabric-defects",
-        "dir": "Fabric Defects Dataset",
         "env": "FABRIC_DEFECTS_ROOT",
         "slice_kwarg": None,
         "task": "anomaly",
-        "tasks": ("anomaly", "segmentation"),
     },
     # In-domain fabric, native bbox annotations (datasets/tianchi.py) --
     # both a detection training source and, via its normal_Images pool, an
     # anomaly-eligible / `fabric-train` member source. No pixel masks.
     "Tianchi": {
         "name": "tianchi",
-        "dir": "tianchi",
         "env": "TIANCHI_ROOT",
         "slice_kwarg": None,
         "task": "detection",
-        "tasks": ("detection", "anomaly"),
     },
 }
-# Backends whose `predict()` accepts `output_dir=` to persist pixel-level
-# anomaly maps for the heatmap overlay (`_overlay_anomaly_map`).
-_ANOMALY_MAP_BACKENDS = {"anomalib", "dinomaly", "moeclip", "mambaad"}
-
-# `model_status` probes `importlib.util.find_spec(package)` to check a
-# backend is installed. That only works when the backend name IS the pip
-# package name (true for "anomalib"/"torchvision"/"ultralytics") -- Dinomaly
-# and MoECLIP are vendored code (see components/README.md), not pip packages
-# named "dinomaly"/"moeclip", so they're probed via their actual hard
-# dependencies instead.
-_BACKEND_PROBE_MODULE = {"dinomaly": "timm", "moeclip": "kornia", "mambaad": "einops"}
-
 ALL_TEXTURES = "All textures"
 ALL_IMAGES = "All images"
 DEFECT_ONLY = "Defect only"
@@ -209,6 +187,37 @@ def shot_text(lang: str, shot_mode: str) -> str:
     return tr(lang, mapping.get(shot_mode, "choice_full_shot")).lower()
 
 
+def dataset_tasks(dataset_name: str) -> tuple[str, ...]:
+    """Every task the registered dataset `dataset_name` can supply real
+    ground truth for.
+
+    Keyed by the *registered adapter name*, not by the UI's display label:
+    label -> name is presentation (`DATASET_CATALOG`), name -> tasks is the
+    contract (`core.dataset_capabilities`). Keeping the two lookups separate
+    is what lets the Benchmark tab swap in its own catalog without also
+    having to restate what its datasets can be scored on.
+
+    The Benchmark tab uses this to decide which models are evaluable against
+    a dataset, and to pick the `task` each model's load needs — only
+    `task == "segmentation"` makes a `DatasetAdapter` attach
+    `Sample.annotations.masks` (see `datasets/zju_leaper.py::_build_sample`).
+    """
+
+    from fabric_defect_hub.core.dataset_capabilities import all_capabilities
+
+    return all_capabilities()[dataset_name].tasks
+
+
+def _dataset_dir(dataset_label: str) -> str:
+    """The directory name this dataset is staged under, from its declared
+    `default_root` (`"data/ZJU-Leaper"` -> `"ZJU-Leaper"`).
+    """
+
+    from fabric_defect_hub.core.dataset_capabilities import all_capabilities
+
+    return Path(all_capabilities()[DATASET_CATALOG[dataset_label]["name"]].default_root).name
+
+
 def _dataset_roots(dataset_label: str) -> list[Path]:
     """Return likely local roots for `dataset_label`, including the
     repository's `data/<dir>` symlink convention and the SSD layout it
@@ -217,14 +226,15 @@ def _dataset_roots(dataset_label: str) -> list[Path]:
     """
 
     spec = DATASET_CATALOG[dataset_label]
+    directory = _dataset_dir(dataset_label)
     roots: list[Path] = []
     configured = os.getenv(spec["env"])
     if configured:
         roots.append(Path(configured).expanduser())
-    roots.extend(PROJECT_ROOT / parent / spec["dir"] for parent in ("data", "Data"))
+    roots.extend(PROJECT_ROOT / parent / directory for parent in ("data", "Data"))
     volumes = Path("/Volumes")
     if volumes.is_dir():
-        roots.extend(volume / _SSD_VOLUME_PARENT / spec["dir"] for volume in volumes.iterdir())
+        roots.extend(volume / _SSD_VOLUME_PARENT / directory for volume in volumes.iterdir())
     return roots
 
 
@@ -339,11 +349,20 @@ def empty_gallery_state() -> dict[str, Any]:
 
 
 def model_status(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
+    """Whether this catalog entry can be run right now, and why not if it can't.
+
+    "Is this backend installed" is answered by `core.availability`, which
+    imports the backend's own adapter module. This panel used to keep its own
+    table of proxy pip packages to probe instead (`timm` for Dinomaly,
+    `kornia` for MoECLIP, ...), which was both a second copy of per-backend
+    knowledge and a weaker question: a present proxy package does not mean
+    the backend imports.
+    """
+
     spec = MODEL_CATALOG[model_label]
-    package = spec["backend"]
-    installed = importlib.util.find_spec(_BACKEND_PROBE_MODULE.get(package, package)) is not None
-    if not installed:
-        return tr(lang, "model_status_unavailable", package=package)
+    backend = spec["backend"]
+    if not backend_is_importable(backend):
+        return tr(lang, "model_status_unavailable", package=backend)
     path = Path(spec["checkpoint"])
     if not path.is_file():
         return tr(lang, "model_status_missing", path=path)
@@ -354,11 +373,17 @@ def model_status(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
 
 
 def checkpoint_diagnostic(model_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
-    """Return on-demand, non-executing provenance data for a selected model."""
+    """On-demand, non-executing provenance for the selected model's weights.
+
+    Offered for every model, not just the anomalib ones. The backend check
+    that used to sit here answered "is this an anomalib checkpoint?" and told
+    everyone else "native Ultralytics artifact" — untrue for torchvision,
+    Dinomaly, MoECLIP and MambaAD, and beside the point either way: a `.pt`
+    is as much an executable pickle as a `.ckpt` is, and
+    `core.checkpoint.inspect_checkpoint` reads both without loading either.
+    """
 
     spec = MODEL_CATALOG[model_label]
-    if spec["backend"] != "anomalib":
-        return tr(lang, "checkpoint_diag_native")
     diagnostic = inspect_checkpoint(spec["checkpoint"])
     if not diagnostic.exists:
         return tr(lang, "checkpoint_diag_missing", path=diagnostic.path)
@@ -376,7 +401,7 @@ def dataset_status(dataset_label: str, lang: str = DEFAULT_LANGUAGE) -> str:
     if root:
         return tr(lang, "dataset_ready", label=dataset_label)
     spec = DATASET_CATALOG[dataset_label]
-    return tr(lang, "dataset_unavailable", label=dataset_label, dir=spec["dir"], env=spec["env"])
+    return tr(lang, "dataset_unavailable", label=dataset_label, dir=_dataset_dir(dataset_label), env=spec["env"])
 
 
 def build_gallery_state(samples: list[Sample], count: int, seed: int, dataset_label: str) -> dict[str, Any]:
@@ -467,7 +492,7 @@ def detect_current(state: dict[str, Any], model_label: str, lang: str = DEFAULT_
         image = render_prediction(sample.image_path, prediction)
     except Exception as exc:
         return None, {}, tr(lang, "inference_failed", error_type=type(exc).__name__, error=exc)
-    return image, prediction_summary(prediction), tr(lang, "inference_complete")
+    return image, prediction_summary(prediction, model.capabilities()), tr(lang, "inference_complete")
 
 
 def load_selected_model(session_manager: Any, model_label: str) -> dict[str, Any]:
@@ -507,25 +532,41 @@ def detect_loaded_model(
 
     if not state.get("samples"):
         return None, {}, tr(lang, "inference_need_dataset")
-    spec = MODEL_CATALOG[model_label]
     sample = sample_from_dict(state["samples"][state["index"]])
+    capabilities = session_manager.capabilities(model_label)
     try:
-        if spec["backend"] in _ANOMALY_MAP_BACKENDS:
-            maps_dir = RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label)
-            prediction = session_manager.predict(model_label, [sample], output_dir=str(maps_dir))[0]
-        else:
-            prediction = session_manager.predict(model_label, [sample])[0]
+        prediction = session_manager.predict(
+            model_label, [sample], **_anomaly_map_kwargs(capabilities, model_label)
+        )[0]
         image = render_prediction(sample.image_path, prediction)
     except Exception as exc:
         return None, {}, tr(lang, "inference_failed", error_type=type(exc).__name__, error=exc)
-    return image, prediction_summary(prediction), tr(lang, "inference_complete")
+    return image, prediction_summary(prediction, capabilities), tr(lang, "inference_complete")
+
+
+def _anomaly_map_kwargs(capabilities: Any, model_label: str) -> dict[str, str]:
+    """`{"output_dir": ...}` for a model that produces a pixel-level anomaly
+    map, `{}` for one that doesn't.
+
+    The model's own `ModelCapabilities` decides, not a list of backend names
+    kept here. Two reasons that matters: this panel is not the place that
+    knows which backends have spatial output, and the backend-name version
+    was wrong within a backend — GANomaly is an anomalib model with no map
+    (`anomalib.presets.IMAGE_LEVEL_ONLY`), so it was being handed a directory
+    to write nothing into.
+    """
+
+    if capabilities is None or not capabilities.fills("anomaly_map"):
+        return {}
+    return {"output_dir": str(RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label))}
 
 
 def _predict_with_model(model: Any, spec: dict[str, Any], model_label: str, sample: Sample) -> list[Prediction]:
-    if spec["backend"] in _ANOMALY_MAP_BACKENDS:
-        maps_dir = RUNTIME_ANOMALY_MAP_ROOT / _model_slug(model_label)
-        return model.predict([sample], artifact_for_model(spec), output_dir=str(maps_dir))
-    return model.predict([sample], artifact_for_model(spec))
+    return model.predict(
+        [sample],
+        artifact_for_model(spec),
+        **_anomaly_map_kwargs(model.capabilities(), model_label),
+    )
 
 
 def artifact_for_model(spec: dict[str, Any]) -> Artifact:
@@ -536,7 +577,17 @@ def _model_slug(model_label: str) -> str:
     return "".join(character.lower() if character.isalnum() else "-" for character in model_label).strip("-")
 
 
-def prediction_summary(prediction: Prediction) -> dict[str, Any]:
+def prediction_summary(prediction: Prediction, capabilities: Any = None) -> dict[str, Any]:
+    """Flatten a `Prediction` for the result panel.
+
+    `capabilities` (the model's `ModelCapabilities`, when the caller has it)
+    separates two cases the panel would otherwise show identically: a model
+    that *can* produce a pixel-level anomaly map but didn't this run, and one
+    that structurally cannot — GANomaly scores the distance between two
+    latent vectors, so there is no map to render, ever. `None` keeps the
+    older, non-committal wording for callers that don't know.
+    """
+
     return {
         "sample_id": prediction.sample_id,
         "task": "anomaly" if prediction.anomaly_score is not None else "detection",
@@ -546,6 +597,7 @@ def prediction_summary(prediction: Prediction) -> dict[str, Any]:
         "anomaly_score": prediction.anomaly_score,
         "has_masks": bool(prediction.masks),
         "has_anomaly_map": prediction.anomaly_map is not None,
+        "pixel_map_supported": None if capabilities is None else capabilities.fills("anomaly_map"),
     }
 
 
@@ -571,7 +623,14 @@ def render_prediction_tags(summary: dict[str, Any], lang: str = DEFAULT_LANGUAGE
         chips = [f'<span class="fdh-tag {verdict_class}">{_html.escape(tr(lang, verdict_key))}</span>']
         if score is not None:
             chips.append(_confidence_chip(tr(lang, "tag_anomaly_score"), float(score)))
-        heatmap_key = "tag_heatmap_available" if summary["has_anomaly_map"] else "tag_heatmap_unavailable"
+        if summary["has_anomaly_map"]:
+            heatmap_key = "tag_heatmap_available"
+        elif summary.get("pixel_map_supported") is False:
+            # The model has no spatial output at all (see prediction_summary):
+            # say so, rather than implying a map that merely failed to appear.
+            heatmap_key = "tag_heatmap_unsupported"
+        else:
+            heatmap_key = "tag_heatmap_unavailable"
         chips.append(f'<span class="fdh-tag fdh-tag-neutral">{_html.escape(tr(lang, heatmap_key))}</span>')
         return f'<div class="fdh-tags">{"".join(chips)}</div>'
 

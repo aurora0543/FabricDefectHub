@@ -44,7 +44,7 @@ class AnomalibAdapter(ModelAdapter):
     `name` may be a README/paper alias ('PatchCore', 'RD4AD', 'EfficientAD',
     'SuperSimpleNet', 'PaDiM', 'WinCLIP' — case-insensitive) or the literal
     anomalib class name ('Patchcore', 'ReverseDistillation', 'WinClip', ...).
-    See `presets.list_supported_models()` for the full set.
+    See `presets.list_supported_variants()` for the full set.
     """
 
     backend = "anomalib"

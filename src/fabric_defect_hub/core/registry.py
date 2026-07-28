@@ -151,13 +151,3 @@ def list_profilers() -> list[str]:
 def list_recipes() -> list[str]:
     return sorted(_RECIPE_REGISTRY)
 
-
-def clear_registries() -> None:
-    """Clear registrations for isolated tests and interactive-session resets."""
-
-    _DATASET_REGISTRY.clear()
-    _MODEL_REGISTRY.clear()
-    _EVALUATOR_REGISTRY.clear()
-    _PROFILER_REGISTRY.clear()
-    _RECIPE_REGISTRY.clear()
-

@@ -8,7 +8,8 @@ The project already had two ways in, with different shapes:
 * the composable one (`loader.load_dataset` + `loader.load_model` +
   `loader.run_experiment`), which is what `docs/SDK.md` documented but
   which makes the caller assemble `ModelInfo`/`RuntimeInfo` by hand, and
-* the config-driven one (`training.run_train` / `predict.run_predict`),
+* the config-driven one (`training.run_train` /
+  `inference.runner.run_predict`),
   which is what `fdh train` actually runs and what every example config is
   written for -- but which was not exported from the package at all, so
   `import fabric_defect_hub` could not reach it.
@@ -295,17 +296,35 @@ def list_datasets() -> list[str]:
 # --------------------------------------------------------------------------- #
 # Verbs
 # --------------------------------------------------------------------------- #
-def train(config: RunConfig | str, *, publish: bool = True, **kwargs: Any):
+def train(
+    config: RunConfig | str,
+    *,
+    publish: bool = True,
+    config_dir: str | Path | None = None,
+    **kwargs: Any,
+):
     """Run training. `config` is a `RunConfig` from `load_config`, or a bare
     model keyword for a run that needs no overrides (`fdh.train("stfpm")`).
 
     Returns `training.TrainRunResult`. `kwargs` pass through to
-    `training.run_train` (e.g. `profile=`, `config_dir=`).
+    `training.run_train` (e.g. `profile=`).
+
+    `config_dir` is named explicitly rather than left to `**kwargs` because it
+    has to reach *both* calls below: resolving a bare keyword reads the config
+    to infer its backend, so letting it through to `run_train` alone would
+    infer the backend from one directory's config and then train from
+    another's.
     """
 
     from fabric_defect_hub.training import run_train
 
-    cfg = config if isinstance(config, RunConfig) else load_config(config)
+    if config_dir is not None:
+        kwargs["config_dir"] = config_dir
+    cfg = (
+        config
+        if isinstance(config, RunConfig)
+        else load_config(config, config_dir=config_dir)
+    )
     return run_train(
         cfg.model,
         backend=cfg.backend,
@@ -337,11 +356,11 @@ def predict(
     `num_samples`/`pattern`/`category`).
 
     Returns `predict.PredictRunResult`. `kwargs` pass through to
-    `predict.run_predict` (`enable_tiling=`, `enable_tta=`, `tile_size=`,
+    `inference.runner.run_predict` (`enable_tiling=`, `enable_tta=`, `tile_size=`,
     `tile_overlap=`, `backend=`, `variant=`, `config_dir=`).
     """
 
-    from fabric_defect_hub.predict import run_predict
+    from fabric_defect_hub.inference.runner import run_predict
 
     return run_predict(
         model,
@@ -366,6 +385,7 @@ def evaluate(
     category: str | None = None,
     seed: int = 0,
     task: str | None = None,
+    output_dir: str | None = None,
     **kwargs: Any,
 ):
     """Score a checkpoint against a dataset's ground truth -- the scriptable
@@ -373,9 +393,13 @@ def evaluate(
 
     Returns `predict.EvaluateRunResult`. A dataset is required (raw image
     paths carry no ground truth to score against).
+
+    Pass `output_dir` to get pixel-level metrics from an anomaly model: the
+    adapters only fill `Prediction.anomaly_map` when given somewhere to write
+    it, so without it the result is image-level only. See `run_evaluate`.
     """
 
-    from fabric_defect_hub.predict import run_evaluate
+    from fabric_defect_hub.inference.runner import run_evaluate
 
     return run_evaluate(
         model,
@@ -384,6 +408,7 @@ def evaluate(
             None, dataset, dataset_root, split, num_samples, pattern, category, seed
         ),
         task=task,
+        output_dir=output_dir,
         **kwargs,
     )
 
@@ -403,7 +428,7 @@ def _as_predict_input(
     two keep identical source-selection semantics.
     """
 
-    from fabric_defect_hub.predict import PredictInput
+    from fabric_defect_hub.inference.runner import PredictInput
 
     images = [source] if isinstance(source, str) else list(source or [])
     return PredictInput(

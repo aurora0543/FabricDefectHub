@@ -36,9 +36,8 @@ from pathlib import Path
 
 from fabric_defect_hub.core.registry import register_dataset
 from fabric_defect_hub.core.types import Annotations, Sample, Task
-from fabric_defect_hub.datasets.base import DatasetAdapter
+from fabric_defect_hub.datasets.base import IMAGE_SUFFIXES, DatasetAdapter
 
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
 
 @register_dataset("mvtec-ad")
@@ -125,7 +124,7 @@ class MVTecADDataset(DatasetAdapter):
     def _images(directory: Path) -> list[Path]:
         if not directory.is_dir():
             return []
-        return sorted(path for path in directory.iterdir() if path.suffix.lower() in _IMAGE_SUFFIXES)
+        return sorted(path for path in directory.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES)
 
     def _normal_pool(self) -> list[tuple[str, Path]]:
         subdir = "train" if self.split == "train" else "test"

@@ -55,6 +55,51 @@ run and reading a traceback.
    the decision tree the moment it's staged under its `default_root` on a
    given machine — no other file needs to change.
 
+### Adding a model — pick the route first
+
+Most "add a model" tasks are not backend work at all. Check in this order:
+
+| Route | When | What it costs | Precedent |
+| :-: | --- | --- | --- |
+| **A. alias + preset** | the method is already an `anomalib.models` class | one line in `MODEL_ALIASES`, one entry in `MODEL_PRESETS` | every model in `models/anomalib/presets.py` |
+| **B. vendored submodule** | upstream ships a self-contained runnable repo | a git submodule under `components/` + a `vendor.py` + an adapter | `components/dinomaly`, `components/moeclip` |
+| **C. clean-room** | upstream has no runnable code (a plugin for a framework it doesn't vendor, or a CUDA-only kernel) | reimplement the architecture; reuse only the published recipe's *values* | `models/mambaad/` |
+
+Route A is where the reconstruction / adversarial / teacher-student / flow /
+zero-shot families came from — `fdh models --backend anomalib` lists what is
+reachable today, and anomalib ships more. Check there before writing code.
+Only route C reaches the "three steps" below.
+
+#### Route A in detail
+
+1. Add the paper name to `MODEL_ALIASES` (lowercase key → anomalib class name).
+2. Add a `MODEL_PRESETS` entry keyed by the class name. Say in the comment
+   which values are upstream's own and which were adjusted for fabric, and
+   why. A preset that only restates upstream defaults is still required — it
+   is how the model is admitted (`list_supported_variants` reads it).
+3. If the model has no pixel-level output, list it in `IMAGE_LEVEL_ONLY` so
+   `capabilities()` stops advertising `anomaly_map` for it.
+4. If it needs an external corpus (DRAEM's DTD, EfficientAD's `imagenet_dir`),
+   add an up-front check to `AnomalibAdapter._validate_model_kwargs`. Do not
+   rely on upstream to fail loudly — anomalib's Draem silently downloads
+   ~600MB instead.
+5. `pytest tests/test_anomalib_config.py` — its reflection tests check every
+   preset key against the *installed* anomalib and check `IMAGE_LEVEL_ONLY`
+   against each model's actual forward.
+
+#### There is no shared block library, on purpose
+
+Route C models keep their building blocks private to their own package
+(`models/mambaad/{network,decoder,ssm,scan}.py`). If a second clean-room
+backend needs the same parts, lift them into a shared module **then** — not
+in advance — under these rules:
+
+- only structures **published upstream**, each citing the file it reproduces;
+  no in-house architecture (see `docs/SDK.md` §4 for why that line exists);
+- nothing in it may be reachable from a config profile —
+  `tests/test_recipe_application.py` pins profiles to settings only;
+- an AST test in the style of `tests/test_vendor_boundary.py` to keep it that way.
+
 ### Adding a new model backend — three steps
 
 Adding a model should mean filling in a table, not changing the framework. If
@@ -117,10 +162,35 @@ optional framework:
   decision tree treat it like the other anomaly backends. Detection backends
   need no entry.
 
+Also give its presets module a `list_supported_variants()` returning the model
+names it accepts. All six backends expose that one name, which is what lets
+`fdh models` / `fabric_defect_hub.list_models()` enumerate everything without a
+per-backend branch — and what makes step 5 of keyword resolution work, so
+`fdh train <your-variant>` resolves to `<backend>_example.yaml`.
+
 Then run `pytest tests/test_adapter_contract.py tests/test_data_adapter_contract.py`.
 Those two files are parametrised over every registered backend, so a missing
 method, a drifted signature, an undeclared capability or a typo'd vocabulary
 term fails there rather than in someone's training run.
+
+### Publishing a model to the frontend
+
+`catalog.CANONICAL_MODELS` is what the web UI's dropdown reads and where
+`fdh train` publishes a fixed-path checkpoint. Adding an entry means:
+
+- `config` must name a real file under `configs/models/` — it is not just
+  documentation, keyword resolution reads it to answer "which config trains
+  this model" (`fdh train padim`). `tests/test_catalog.py` checks both that
+  the file exists and that every entry resolves by its own name.
+- Give a model its own config when its run length differs from the backend's
+  general-purpose one (`anomalib_stfpm.yaml` exists because
+  `anomalib_example.yaml` runs `max_epochs: 1` for the memory-bank models).
+- Only add the entry once the model has actually been trained and published
+  here. A catalogued model with no checkpoint shows up in the UI as a
+  selectable-but-missing row; models that are runnable but unpublished stay
+  reachable through presets alone.
+- Training a catalogued model **overwrites its published checkpoint** by
+  default. Use `fdh train <model> --no-publish` for smoke runs.
 
 ---
 

@@ -172,6 +172,13 @@ def test_cli_parser_accepts_doctor():
     assert build_parser().parse_args(["doctor"]).command == "doctor"
 
 
+def test_cli_parser_train_publishes_by_default_and_can_be_turned_off():
+    # Training a catalogued model overwrites the checkpoint the web UI serves
+    # for it, so a smoke run needs a way to opt out.
+    assert build_parser().parse_args(["train", "padim"]).no_publish is False
+    assert build_parser().parse_args(["train", "padim", "--no-publish"]).no_publish is True
+
+
 def test_cli_parser_accepts_models():
     args = build_parser().parse_args(["models"])
     assert args.command == "models"

@@ -4,6 +4,7 @@ import pytest
 
 from fabric_defect_hub.core.serialization import sample_to_dict
 from fabric_defect_hub.core.types import Annotations, Prediction, Sample
+from fabric_defect_hub.models.base import ModelCapabilities
 from fabric_defect_hub.web import single_image as workspace
 from fabric_defect_hub.web.single_image import (
     ALL_TEXTURES,
@@ -134,6 +135,11 @@ def test_anomalib_selection_dispatches_a_trusted_artifact_and_map_directory(monk
             captured["output_dir"] = output_dir
             return [Prediction(sample_id=samples[0].id, anomaly_score=0.8)]
 
+        def capabilities(self):
+            return ModelCapabilities(
+                tasks=("anomaly",), prediction_fields=("anomaly_score", "anomaly_map")
+            )
+
     monkeypatch.setattr(workspace, "load_model", lambda backend, name: FakeAnomalibModel())
     monkeypatch.setattr(workspace, "render_prediction", lambda image_path, prediction: "rendered")
     monkeypatch.setattr(workspace, "model_status", lambda label, lang="en": "🟢 **Ready**")
@@ -160,6 +166,11 @@ def test_loaded_detection_uses_the_session_manager_without_creating_an_adapter(m
             captured["model_id"] = model_id
             captured["kwargs"] = kwargs
             return [Prediction(sample_id=samples[0].id, boxes=[])]
+
+        def capabilities(self, model_id):
+            return ModelCapabilities(
+                tasks=("detection",), prediction_fields=("boxes", "labels", "scores")
+            )
 
     monkeypatch.setattr(workspace, "render_prediction", lambda image_path, prediction: "rendered")
 
@@ -299,3 +310,37 @@ def test_prediction_tags_render_defect_label_and_confidence_for_detection_and_an
     assert "Anomalous" in anomaly
     assert "70.1%" in anomaly
     assert "Heatmap available" in anomaly
+
+
+def test_prediction_tags_separate_a_missing_heatmap_from_a_model_that_has_none():
+    """An image-level-only model (GANomaly: the anomaly score is the distance
+    between two latent vectors, so there is no spatial output) must not be
+    reported the same way as a model whose map merely didn't arrive — the
+    first is permanent, the second is fixable by passing an output_dir.
+    """
+
+    base = {"task": "anomaly", "detections": 0, "labels": [], "scores": [], "anomaly_score": 0.6}
+
+    unsupported = render_prediction_tags({**base, "has_anomaly_map": False, "pixel_map_supported": False})
+    not_produced = render_prediction_tags({**base, "has_anomaly_map": False, "pixel_map_supported": True})
+    unknown = render_prediction_tags({**base, "has_anomaly_map": False})
+
+    assert "Image-level score only" in unsupported
+    assert "Heatmap not available" in not_produced
+    # No capabilities passed -> the older, non-committal wording, so a caller
+    # that doesn't know cannot accidentally assert the stronger claim.
+    assert "Heatmap not available" in unknown
+
+
+def test_prediction_summary_reports_pixel_map_support_from_capabilities():
+    from fabric_defect_hub.web.single_image import prediction_summary
+
+    prediction = Prediction(sample_id="x", anomaly_score=0.5)
+    image_level_only = ModelCapabilities(tasks=("anomaly",), prediction_fields=("anomaly_score",))
+    pixel_level = ModelCapabilities(
+        tasks=("anomaly",), prediction_fields=("anomaly_score", "anomaly_map")
+    )
+
+    assert prediction_summary(prediction, image_level_only)["pixel_map_supported"] is False
+    assert prediction_summary(prediction, pixel_level)["pixel_map_supported"] is True
+    assert prediction_summary(prediction)["pixel_map_supported"] is None

@@ -44,7 +44,6 @@ DIMS_DECODER: list[int] = [512, 256, 128, 64]
 DEPTHS_DECODER: list[int] = [3, 4, 6, 3]
 D_STATE = 16
 DROP_PATH_RATE = 0.2
-BASE_SCAN_SIZE = 8  # spatial size of the deepest decoder stage at the published 256px input
 
 # Upstream's published recipe: Hilbert scan, 8 directions -- the paper's
 # ablations report this as its best-performing configuration.

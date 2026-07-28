@@ -58,6 +58,24 @@ pip install -r requirements.txt
 For local or cloud training with every backend, including WinCLIP, Dinomaly,
 and MoECLIP, install `pip install -r requirements-full.txt` instead.
 
+### What a fresh clone gives you — and what it doesn't
+
+The repository ships **code, configs, and contracts. It does not ship weights
+or datasets**, and both are gitignored (`/artifacts/`, `/data/*`). So on a
+fresh clone:
+
+| | State | How to get it |
+| --- | --- | --- |
+| CLI, SDK, web UI | ✅ work immediately | — |
+| `fdh models` / `fdh doctor` / `fdh recipes` | ✅ work immediately | — |
+| Model checkpoints | 🟠 every model reads **"Checkpoint missing"** | `fdh train <model>` publishes to `artifacts/models/published/`; the UI picks it up on refresh |
+| Datasets | 🟠 sampler finds nothing | stage under `data/<Dataset>` (usually a symlink onto external storage) |
+
+`fdh doctor` is the one command that reports exactly which backends are
+installed and which datasets are staged **on this machine**, and why anything
+isn't runnable — start there rather than guessing. Full path from a bare
+machine to trained weights: [`docs/cloud_training_runbook.md`](docs/cloud_training_runbook.md).
+
 ### 2. Python SDK Usage (`import fabric_defect_hub as fdh`)
 ```python
 import fabric_defect_hub as fdh
@@ -95,6 +113,11 @@ fdh train yolov8n
 # TILDA-400 / Fabric Defects sets) without opening the web UI
 fdh evaluate patchcore_textile --weights artifacts/models/published/PatchCore.ckpt --dataset tilda-400
 
+# ...add --output-dir to also get pixel-level metrics (pixel_auroc / pixel_aupro / iap);
+# without it an anomaly model is scored on image-level metrics alone
+fdh evaluate patchcore_textile --weights artifacts/models/published/PatchCore.ckpt \
+    --dataset tilda-400 --output-dir artifacts/anomaly_maps/eval
+
 # List every model this project can run, grouped by backend
 fdh models
 fdh models --backend anomalib
@@ -115,6 +138,7 @@ fdh-ui
 
 Detailed technical specifications and user guides are organized under `docs/`:
 
+- 📋 **[Delivery Status](docs/DELIVERY_STATUS.md)**: one page — what is finished and verified, what is explicitly blocked, and how to check both yourself. Start here for review.
 - 📐 **[Python SDK Guide](docs/SDK.md)**: Modular SDK usage, and why the platform ships no in-house network components.
 - ⚙️ **[Model Configuration](docs/MODEL_CONFIGURATION.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, and validating on a held-out dataset.
 - 🚀 **[SDLP Loading & Testing Strategies](docs/SDLP_STRATEGIES.md)**: Sparse ratio sampling (`sparse_ratio`), 4K Sliding-Window Tiling, TTA, and BN Calibration.

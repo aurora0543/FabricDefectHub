@@ -7,7 +7,6 @@ and model FLOPs parameter count for real-world industrial deployment benchmarkin
 from __future__ import annotations
 
 import math
-from typing import Dict, Any
 
 
 def calculate_lmei(fps: float, vram_mb: float, flops_g: float, params_m: float) -> float:

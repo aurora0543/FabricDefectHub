@@ -31,9 +31,8 @@ from pathlib import Path
 
 from fabric_defect_hub.core.registry import register_dataset
 from fabric_defect_hub.core.types import Annotations, Sample, Task
-from fabric_defect_hub.datasets.base import DatasetAdapter
+from fabric_defect_hub.datasets.base import IMAGE_SUFFIXES, DatasetAdapter
 
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
 
 @register_dataset("raw-fabric")
@@ -109,7 +108,7 @@ class RawFabricDataset(DatasetAdapter):
         if not directory.is_dir():
             return []
         return sorted(
-            path.stem for path in directory.iterdir() if path.suffix.lower() in _IMAGE_SUFFIXES
+            path.stem for path in directory.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES
         )
 
     # ------------------------------------------------------------------ #
@@ -147,7 +146,7 @@ class RawFabricDataset(DatasetAdapter):
     def _build_sample(self, image_id: str, is_defect: bool) -> Sample:
         directory = self._defect_dir() if is_defect else self._normal_dir()
         image_path = next(
-            (path for path in directory.glob(f"{image_id}.*") if path.suffix.lower() in _IMAGE_SUFFIXES),
+            (path for path in directory.glob(f"{image_id}.*") if path.suffix.lower() in IMAGE_SUFFIXES),
             directory / f"{image_id}.png",
         )
 

@@ -78,6 +78,22 @@ class InferenceSessionManager:
                 )
             return self._active.adapter.predict(samples, self._active.artifact, **kwargs)
 
+    def capabilities(self, model_id: str):
+        """What the resident model can produce (`ModelCapabilities`), or None
+        when `model_id` isn't the loaded one.
+
+        Lets a caller answer "is a pixel-level anomaly map even possible for
+        this model" (`caps.fills("anomaly_map")`) without constructing a
+        second adapter — the resident one already knows, and for the
+        image-level-only models (`anomalib.presets.IMAGE_LEVEL_ONLY`) the
+        answer is no.
+        """
+
+        with self._lock:
+            if self._active is None or self._active.model_id != model_id:
+                return None
+            return self._active.adapter.capabilities()
+
     def status(self) -> dict[str, Any]:
         """Return JSON-safe resident-model and process/device memory metrics."""
 

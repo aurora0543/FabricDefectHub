@@ -38,7 +38,7 @@ from typing import Any
 
 from fabric_defect_hub.models.anomalib.presets import (
     default_model_kwargs,
-    list_supported_models,
+    list_supported_variants,
     resolve_model_class_name,
 )
 
@@ -50,7 +50,7 @@ class ModelSpec:
     name: a README/paper alias ('PatchCore', 'RD4AD', 'EfficientAD',
         'SuperSimpleNet', 'PaDiM' — case-insensitive) or the literal
         anomalib class name ('Patchcore', 'ReverseDistillation', ...). See
-        `presets.list_supported_models()` for the full set.
+        `presets.list_supported_variants()` for the full set.
     weights: path to a checkpoint produced by a previous run
         (`register_trained_model`'s output). Only consulted when
         `train.enabled` is false — it is what makes "evaluate an existing
@@ -329,6 +329,3 @@ def _expand_environment_variables(value):
         return [_expand_environment_variables(item) for item in value]
     return os.path.expandvars(value) if isinstance(value, str) else value
 
-
-def supported_models() -> list[str]:
-    return list_supported_models()

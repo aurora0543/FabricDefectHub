@@ -32,6 +32,7 @@ from pathlib import Path
 
 from fabric_defect_hub.core.registry import register_dataset
 from fabric_defect_hub.core.types import Sample
+from fabric_defect_hub.datasets.base import IMAGE_SUFFIXES
 from fabric_defect_hub.datasets.flat_folder import FlatFolderAnomalyDataset
 
 # Matches the mask-file naming convention: "<stem>_processed (<n>)" (before
@@ -39,7 +40,8 @@ from fabric_defect_hub.datasets.flat_folder import FlatFolderAnomalyDataset
 # (both "10_processed (1)" and "15_processed(2)" occur), hence "\s*".
 _PROCESSED_MASK_RE = re.compile(r"^(?P<stem>.+)_processed\s*\(\d+\)$")
 
-_MASK_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
+# Masks are images; the accepted formats are the same set.
+_MASK_SUFFIXES = IMAGE_SUFFIXES
 
 
 @register_dataset("fabric-defects")

@@ -111,6 +111,32 @@ Track A–D 面向"接一个新模型的人"，这一条面向"用这个项目�
   确实需要按后端区分的知识提到契约层：`training.RUN_LENGTH_KEYS`（各后端的 run length 写在哪个 key、单位是 epoch 还是 iteration），由 `test_train_config.py::test_run_length_keys_match_test_speed_overrides` 与 `_apply_test_speed_overrides` 互钉。
   顺带统一：六个后端的 presets 模块现在都有 `list_supported_variants()`，此前是 `list_supported_models` / `list_supported_variants` / 什么都没有三种写法。
 
+- [x] **E4 模型关键词解析：从"只认配置里字面写了的名字"改成三级解析**
+  改之前，已发布目录 20 个模型里只有 10 个能用 `fdh train <名字>` 训练：PaDiM / RD4AD / EfficientAD / SuperSimpleNet / WinCLIP / cascadercnn / detr_resnet50 / unetplusplus / deeplabv3plus 报"找不到"（没有任何配置声明它们），PatchCore 报歧义（三个配置都声明了）。ultralytics 之所以正常，只是因为它碰巧有 `variants:` 块把三个变体都登记了。
+  `resolve_model_config_and_variant` 现在是：路径 → 文件名 → **声明**（恰好命中一个才用，多个则下沉而非报错）→ **目录**（读 `CanonicalModel.config`，不是启发式：这个字段本来就记录着"该已发布模型用哪个配置训"，torchvision 上尤其关键——`unetplusplus_resnet34` 是 `segmentation`，两个 torchvision 配置声明的却是 `detect` 和 `instance_segmentation`，按 task 猜必错）→ **后端支持的变体**（落到 `<backend>_example.yaml`，覆盖 FastFlow/GLASS 这些可运行但未发布的）。规则一句话：**裸模型名 → 该后端的通用配置；专用配置按文件名寻址。**
+  目录条目 STFPM / GANomaly 的 `config` 字段同步改成它们自己的配置文件（此前写的是 `anomalib_example.yaml`，与实际解析结果不符）。
+  后两级会替调用者选一个他没点名的配置，因此 `fdh train` 输出新增 `resolved_config` / `resolved_variant` 两个字段——静默选择加事后不可见才是真风险。
+  `tests/test_catalog.py::test_every_published_model_is_reachable_by_its_own_name` 对目录全量参数化，往目录加模型却没配好配置会在这里红。现在 20/20 可达。
+  连带发现并修掉一个更大的脚坑：`fdh train` 训练目录内模型时**默认发布**，会覆盖 Web UI 正在用的权重，而 CLI 此前没有关闭开关（我自己就用一次 8 张图 1 epoch 的冒烟跑覆盖过一次 `published/PaDiM.ckpt`，已删除）。新增 `--no-publish`。
+
+- [x] **E5 收尾排查：门面/UI/评测三处一致性缺口**
+  E1–E4 落地后按"整条链路"而不是"改过的地方"重新走了一遍，查出并修掉三处：
+  1. **`fdh evaluate` 结构上产不出像素级指标。** `run_evaluate` 没有 `output_dir` 参数，而各 adapter 只在拿到写入目录时才填 `Prediction.anomaly_map`，`AnomalyEvaluator` 又只从这个字段算像素指标——于是无论模型多有像素能力，`fdh evaluate` 永远只返回图像级指标。已贯通 `run_evaluate` → `run_predict` → CLI `--output-dir` → `api.evaluate(output_dir=)`。用真的 FastFlow checkpoint 验证：不给目录 5 个指标，给了之后多出 `pixel_auroc` / `pixel_aupro` / `pixel_f1` / `iap`。
+  2. **UI 分不清"这个模型没有热力图"和"这次没生成热力图"。** GANomaly 属于前者且永远如此。`prediction_summary` 现在可接收 `ModelCapabilities`（`InferenceSessionManager.capabilities()` 新增，直接读常驻 adapter，不重复构造），标签区分 `tag_heatmap_unsupported`（"仅图像级分数"）与原有的 `tag_heatmap_unavailable`。不传 capabilities 时保持原措辞，不让不知情的调用方替模型下更强的结论。
+  3. **`fdh.train("stfpm", config_dir=...)` 会错配。** `config_dir` 落在 `**kwargs` 里只传给了 `run_train`，而解析关键词时用的是默认目录——即"用 A 目录的配置推断后端、用 B 目录的配置训练"。已提为显式参数并两处都传。
+  另外把"解析到了哪个配置"从 `train` 扩到 `predict` / `evaluate`：三个 RunResult 都带 `config_path`，CLI 三个子命令都报 `resolved_config`，不再在 CLI 里重复解析。
+
+- [x] **E6 移除冗余代码 + UI 改为只调用契约层**
+  按"同一个事实被写了几遍"逐条清，而不是按文件清。查出并修掉：
+  1. **`_ANOMALY_MAP_BACKENDS`**：同一个四后端名字集合在 `predict.py` 和 `web/single_image.py` 各存一份，且 `predict.py` 用它回答**三个不相干的问题**（裸图片路径隐含什么 task、config 里哪个键命名模型、要不要传 `output_dir`）——三者对这四个后端答案碰巧一致，不是定义上一致。各自归位到 `ModelCapabilities.supports_task` / `training.BACKEND_MODEL_KEY`（提为 public）/ `ModelCapabilities.fills("anomaly_map")`，两份副本全删。顺带修好一个真错误：GANomaly 是没有像素图的 anomalib 模型，此前按后端名判断会白给它一个输出目录。
+  2. **`_BACKEND_PROBE_MODULE`**：UI 自己维护"每个后端探哪个代理 pip 包"，重复实现了 `core.availability.backend_is_importable`，而且问题更弱——代理包在不等于后端能 import。
+  3. **`models/anomalib/checkpoint.py` 被 UI 直接 import**，且 `if backend != "anomalib"` 让另外五个后端看到"这是原生 Ultralytics 权重"的文案——对其中四个是错的。该模块本身没有任何 anomalib 特有的东西（哈希 + `torch.serialization` 读取声明的 globals），已移到 `core/checkpoint.py`，UI 对**所有**后端提供诊断（实测 YOLO `.pt` 也能完整读出 SHA/大小/globals）。
+  4. **`_input_style_for`**：`backend == "torchvision" and task in (...)` 决定导出模块吃 batched 还是 list 输入——这是 torchvision forward 签名的事实，UI 无从知道。改为契约字段 `ModelCapabilities.export_input_style`（词表校验，六个后端各自声明）。
+  5. **`DATASET_CATALOG` 重述契约层**：`tasks` 和 `dir` 在 `core/dataset_capabilities.py` 已有唯一声明。两份今天恰好一致——这是重复事实最危险的状态。UI 目录收敛为纯呈现信息。
+  6. **`fdh.predict` 被同名模块遮蔽**：`fabric_defect_hub/predict.py` 一旦被 import，就把包上的 `predict` 属性从门面函数改写成模块——而**第一次** `fdh.predict(...)` 调用自己就会触发这次改写，于是同一进程里第二次调用报 `TypeError: 'module' object is not callable`。模块迁到 `inference/runner.py`（与 `inference/session.py` 同族），并加测试遍历所有子模块后断言 `__all__` 里没有任何名字解析成 module。
+  7. 死代码清理：`clear_registries`、`supported_models`、`visa._IMAGE_SUFFIXES`（定义了但调用点内联了自己的元组）、`_ANOMALY_BACKENDS`、`BASE_SCAN_SIZE`、`list_supported_models`（与 `list_supported_variants` 重复）、`_evaluator_for_task`（纯转发包装）、若干未使用 import；`ShotMode` 词表和图片后缀元组各自收敛为单一声明。
+  规则由 `tests/test_web_layering.py` 钉死：`web/*.py` 只许 import `models.base`，代码里不许出现后端名字（注释豁免），`DATASET_CATALOG` 只许放呈现字段。已验证这两条规则确实能抓到人为注入的违规。
+
 - [ ] **E3 新增族系的复现验证**（阻塞：与 C4 同因，需 GPU + 完整训练）
   E1 的八个模型目前只验证到"能构造、能端到端跑通"（STFPM/GANomaly 已在 ZJU-Leaper 上跑通 train → predict → evaluate 全链路，8 张图 1 epoch 的冒烟规模）。**它们都还没有 `recipe_id`，这是事实陈述而非待补的坑**——profile 意味着"设置锚定到该方法的论文"，在复现兑现之前不发这个名分（见 `project_recipe_citation_integrity` 的规则：先锚上游 → 再复现 → 才配拥有名字）。
   待云端执行：按各自论文设置跑满，与论文报告的 MVTec 数值对照，达标后再补 profile 与目录条目。

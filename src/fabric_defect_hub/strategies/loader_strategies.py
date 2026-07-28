@@ -7,13 +7,13 @@ sliding-window dynamic tiling & stitching, Test-Time Augmentation (TTA), and Bat
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from fabric_defect_hub.core.types import Annotations, Prediction, Sample
+from fabric_defect_hub.core.types import Prediction, Sample
 
 
 class SparseSubsampler:

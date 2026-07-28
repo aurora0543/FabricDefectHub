@@ -228,6 +228,10 @@ class TorchvisionAdapter(ModelAdapter):
                 # `engine.run_training` wraps the forward in `torch.autocast`
                 # with a `GradScaler`; resolved to False off CUDA.
                 supports_amp=True,
+                # torchvision's detection models take List[Tensor], not a
+                # batched NCHW tensor -- the one place in this project where
+                # that is true, and the reason the field exists.
+                export_input_style="list",
             )
         if task == "instance_segmentation":
             return ModelCapabilities(
@@ -238,6 +242,8 @@ class TorchvisionAdapter(ModelAdapter):
                 # `engine.run_training` wraps the forward in `torch.autocast`
                 # with a `GradScaler`; resolved to False off CUDA.
                 supports_amp=True,
+                # Mask R-CNN shares the detection models' List[Tensor] input.
+                export_input_style="list",
             )
         return ModelCapabilities(
             tasks=("segmentation",),

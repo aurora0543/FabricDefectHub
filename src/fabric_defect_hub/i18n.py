@@ -40,7 +40,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "task_segmentation": "segmentation",
         "task_instance_segmentation": "instance segmentation",
         "task_anomaly": "anomaly",
-        "checkpoint_diag_native": "ℹ️ **Native Ultralytics artifact** — readiness is checked from its local `.pt` file.",
         "checkpoint_diag_missing": "🟠 **Checkpoint missing** — `{path}` was not found.",
         "checkpoint_diag_trusted_header": "🟢 **Trusted checkpoint diagnostic**",
         "checkpoint_diag_sha": "SHA-256: `{sha}`",
@@ -70,6 +69,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tag_anomaly_score": "anomaly score",
         "tag_heatmap_available": "Heatmap available",
         "tag_heatmap_unavailable": "Heatmap not available",
+        # Distinct from "not available": this model produces an image-level
+        # score only and has no pixel-level output to render at all.
+        "tag_heatmap_unsupported": "Image-level score only",
         "tag_normal": "Normal",
         "tag_anomalous": "Anomalous",
         "inference_hint_start": "Select an image and a ready model to begin.",
@@ -174,7 +176,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "task_segmentation": "分割",
         "task_instance_segmentation": "实例分割",
         "task_anomaly": "异常检测",
-        "checkpoint_diag_native": "ℹ️ **原生 Ultralytics 权重** — 就绪状态直接由本地 `.pt` 文件判断。",
         "checkpoint_diag_missing": "🟠 **权重文件缺失** — 未找到 `{path}`。",
         "checkpoint_diag_trusted_header": "🟢 **可信权重诊断信息**",
         "checkpoint_diag_sha": "SHA-256：`{sha}`",
@@ -204,6 +205,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tag_anomaly_score": "异常分数",
         "tag_heatmap_available": "热力图可用",
         "tag_heatmap_unavailable": "热力图不可用",
+        "tag_heatmap_unsupported": "仅图像级分数",
         "tag_normal": "正常",
         "tag_anomalous": "异常",
         "inference_hint_start": "请先选择图像并加载可用模型。",
