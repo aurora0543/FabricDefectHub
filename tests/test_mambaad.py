@@ -137,6 +137,48 @@ def test_chunked_scan_matches_sequential_gradients():
     assert torch.allclose(grads[0], grads[1], atol=1e-4)
 
 
+def test_chunked_scan_does_not_retain_every_chunks_decay_matrix():
+    """The chunked scan budgets its `(B, G, P, N, Lc, Lc)` decay matrix per
+    chunk, but without recomputation autograd keeps *every* chunk's copy
+    alive until backward — so the retained working set grows with the chunk
+    length, and a detection-sized feature map OOMs a 32GB card on the first
+    iteration (observed on FabricMamba/MambaAD, 30.7GB allocated at step 0).
+    Checkpointing each chunk makes the retained set independent of the chunk
+    length instead.
+
+    Measured by tallying the elements autograd actually saves: with the
+    quadratic per-chunk terms retained this grows roughly linearly in
+    `chunk_size` (12.7K -> 69.1K elements across the sizes below); with
+    recomputation it stays flat.
+    """
+
+    from fabric_defect_hub.models.mambaad.ssm import selective_scan_chunked
+
+    def saved_elements(chunk_size: int, length: int = 64) -> int:
+        total = 0
+
+        def pack(tensor):
+            nonlocal total
+            total += tensor.numel()
+            return tensor
+
+        torch.manual_seed(0)
+        u = torch.randn(1, 8, length, requires_grad=True)
+        delta, A = torch.rand(1, 8, length), -torch.rand(8, 4).exp()
+        B, C = torch.randn(1, 2, 4, length), torch.randn(1, 2, 4, length)
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda t: t):
+            selective_scan_chunked(u, delta, A, B, C, chunk_size=chunk_size).sum().backward()
+        return total
+
+    smallest, largest = saved_elements(4), saved_elements(32)
+    # An 8x chunk-length increase must not inflate the retained set; allow a
+    # little slack for the per-chunk *inputs*, which do vary slightly.
+    assert largest <= smallest * 1.5, (
+        f"retained working set scales with chunk length ({smallest} -> {largest}); "
+        "per-chunk recomputation is not in effect"
+    )
+
+
 def test_grouped_and_ungrouped_bc_agree():
     # SS2D folds all scan directions into one grouped call; a single group
     # must therefore behave identically to the plain ungrouped form.

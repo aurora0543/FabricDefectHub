@@ -38,6 +38,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from fabric_defect_hub.models.mambaad.scan import scan_order
 
@@ -228,22 +229,42 @@ def selective_scan_chunked(
 
     step = chunk_size or _chunk_length(batch, d_inner, d_state, length)
     state = log_a.new_zeros((batch, groups, per_group, d_state))
-    chunk_outputs = []
-    for start in range(0, length, step):
-        stop = min(start + step, length)
-        cumulative = log_a[..., start:stop].cumsum(dim=-1)  # (B, G, P, N, Lc)
-        span = stop - start
+
+    def one_chunk(log_a_c, bu_c, C_c, state_in):
+        """One chunk's contribution plus the state handed to the next."""
+
+        cumulative = log_a_c.cumsum(dim=-1)  # (B, G, P, N, Lc)
+        span = log_a_c.shape[-1]
 
         # decay[..., t, s] = exp(cs[t] - cs[s]), lower-triangular (s <= t).
         differences = cumulative.unsqueeze(-1) - cumulative.unsqueeze(-2)
-        causal = torch.ones(span, span, dtype=torch.bool, device=u.device).tril()
+        causal = torch.ones(span, span, dtype=torch.bool, device=log_a_c.device).tril()
         decay = torch.where(causal, differences.exp(), differences.new_zeros(()))
 
-        within = (decay * bu[..., start:stop].unsqueeze(-2)).sum(dim=-1)
-        states = within + cumulative.exp() * state.unsqueeze(-1)  # (B, G, P, N, Lc)
+        within = (decay * bu_c.unsqueeze(-2)).sum(dim=-1)
+        states = within + cumulative.exp() * state_in.unsqueeze(-1)  # (B, G, P, N, Lc)
+        return torch.einsum("bgpnl,bgnl->bgpl", states, C_c), states[..., -1]
 
-        chunk_outputs.append(torch.einsum("bgpnl,bgnl->bgpl", states, C[..., start:stop]))
-        state = states[..., -1]
+    # The `(B, G, P, N, Lc, Lc)` decay matrix is budgeted *per chunk*
+    # (`_chunk_length`), but autograd would keep every chunk's copy alive
+    # until backward -- turning a ~256MB working set into 256MB x
+    # (length / step), which is tens of GB for a detection-sized feature map
+    # and OOMs a 32GB card on the first iteration. Checkpointing recomputes
+    # each chunk during backward instead, so peak memory is one chunk's
+    # worth regardless of sequence length, at the cost of one extra forward.
+    # Only when building a graph: under `no_grad` nothing is retained
+    # anyway, and recomputation would be pure overhead.
+    use_checkpoint = torch.is_grad_enabled() and length > step
+
+    chunk_outputs = []
+    for start in range(0, length, step):
+        stop = min(start + step, length)
+        args = (log_a[..., start:stop], bu[..., start:stop], C[..., start:stop], state)
+        if use_checkpoint:
+            chunk_y, state = torch.utils.checkpoint.checkpoint(one_chunk, *args, use_reentrant=False)
+        else:
+            chunk_y, state = one_chunk(*args)
+        chunk_outputs.append(chunk_y)
 
     y = torch.cat(chunk_outputs, dim=-1).reshape(batch, d_inner, length)
     if D is not None:
