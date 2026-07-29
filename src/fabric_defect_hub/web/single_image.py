@@ -514,7 +514,7 @@ def load_selected_model(session_manager: Any, model_label: str) -> dict[str, Any
     if not checkpoint.is_file():
         raise FileNotFoundError(
             f"no trained checkpoint at {checkpoint} — train {model_label!r} "
-            f"first (see tools/train_all_models.py), nothing was loaded"
+            f"first (see `fdh train-all`), nothing was loaded"
         )
     return session_manager.load(model_label, spec, artifact_for_model(spec))
 

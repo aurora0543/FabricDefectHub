@@ -48,7 +48,7 @@ train:
     # to claim a number only once it has been. Treat it as the initial point
     # of the tuning window and override with `--set` (see docs/SDK.md).
     max_epochs: 100
-    accelerator: cpu         # omit to let anomalib auto-select (use gpu on a CUDA box)
+    # accelerator unset -> Lightning "auto" (CUDA/MPS/CPU by host).
   num_workers: 0
 
 val:

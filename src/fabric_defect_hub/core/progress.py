@@ -10,7 +10,7 @@ own progress bars, so this module deliberately covers only the loops we own
 
 **Plain lines, not a redrawing bar.** A `tqdm`-style bar needs a TTY and a
 carriage return; the two places this output actually has to survive are a
-pipe (`tools/train_all_models.py` tees every child process into
+pipe (`fdh train-all` tees every model's output into
 `artifacts/training_runs/<id>/logs/<model>.log`) and a notebook cell. Both
 mangle carriage returns and neither gives the child a TTY. One newline-
 terminated, immediately flushed line every few seconds reads correctly in a

@@ -84,33 +84,21 @@ don't have a known blocker on this host, but haven't been confirmed
 reachable either — if a training run hangs or fails on a download, that's
 the first thing to check.
 
-## 4b. Put the run on the GPU (it is not the default)
+## 4b. The GPU is used automatically — no flag needed
 
-The four anomalib configs pin `train.engine_kwargs.accelerator: cpu`. That
-is the honest default on the Apple-Silicon dev machine this project is
-partly written on, and it is wrong on every CUDA host: without an override
-those models train on CPU, slowly, and say nothing about it. The other five
-backends auto-detect (`cuda > mps > cpu`) and need no flag.
+No shipped config pins a device. Anomalib inherits Lightning's `accelerator:
+"auto"`, and the other five backends run their own `cuda > mps > cpu`
+detection, so on a CUDA host every model trains on the GPU with no override.
+`tests/test_zero_argument_training.py` fails the build if a config ever
+reintroduces a pinned device.
 
-One switch covers every backend in a batch run — it writes each backend's
-own device vocabulary (`training.device_override`: Lightning's accelerator
-name, Ultralytics' CUDA index, everyone else's torch device string):
+(This was not always true: the four anomalib configs used to pin
+`accelerator: cpu`, which made a GPU host train on CPU silently and forced
+every caller to pass `--set` to undo it.)
 
-```bash
-python tools/train_all_models.py --accelerator gpu --mode medium
-```
-
-For a single model, the same thing by hand:
-
-```bash
-fdh train stfpm --set train.engine_kwargs.accelerator=gpu   # anomalib
-fdh train yolov8n --set train.device=0                      # ultralytics
-fdh train dinomaly --set train.device=cuda                  # everyone else
-```
-
-Confirm it took: `nvidia-smi` should show the process, and the run's own
-`resolved_config` echo in `fdh train`'s JSON output shows which config was
-actually used.
+Confirm it took: `nvidia-smi` should show the process, and `fdh train`'s
+JSON output echoes `resolved_config`/`resolved_variant` so you can see which
+config actually ran.
 
 ## 5. Smoke test everything first
 
@@ -119,17 +107,20 @@ epoch / 8 images to confirm the whole pipeline — data loading, model
 construction, checkpointing, publishing — works end to end:
 
 ```bash
-python tools/train_all_models.py --accelerator gpu --mode test
+fdh train-all --mode test --no-publish
 ```
 
-Each model is launched in its own Python process, so CUDA memory is released
-before the next model begins. Check the summary at the end; only models whose
-external prerequisites have been staged should be expected to say `OK`.
-If one fails, re-run just that model after fixing the issue:
+`--no-publish` matters here: `--mode test` is an 8-image wiring check, so its
+checkpoints must not land in `artifacts/models/published/`, which is what the
+web UI and the leaderboard read.
+
+Check the summary at the end; only models whose external prerequisites have
+been staged should be expected to say `OK`. If one fails, re-run just that
+model after fixing the issue:
 
 ```bash
-python tools/train_all_models.py --only <model-key> --mode test
-# see every key: python tools/train_all_models.py --list-keys
+fdh train <model> --mode test --no-publish
+# see every model name: fdh models
 ```
 
 For the remaining model-specific setup, set an actual path in the
@@ -141,7 +132,7 @@ IDs that need correction.
 ## 6. Run the real training pass
 
 ```bash
-python tools/train_all_models.py
+fdh train-all
 ```
 
 No `--mode` flag: each model trains with its own config's declared setting
@@ -151,8 +142,8 @@ The mode changes only the sample budget — it does not overwrite an explicit
 `pattern:` list in the config:
 
 ```bash
-python tools/train_all_models.py --mode medium   # 150/50 images per configured pattern (600/200 for patterns 1-4)
-python tools/train_all_models.py --mode full     # every image in the configured pattern subset
+fdh train-all --mode medium   # 150/50 images per configured pattern (600/200 for patterns 1-4)
+fdh train-all --mode full     # every image in the configured pattern subset
 ```
 
 "medium" is the practical choice for the four-pattern fabric recipes; it
@@ -194,10 +185,8 @@ export FDH_PROGRESS_INTERVAL=30   # quieter logs on a long run
 export FDH_PROGRESS=0             # silence it entirely
 ```
 
-If a batch run still looks frozen, check that the child process is
-unbuffered — `tools/train_all_models.py` sets `PYTHONUNBUFFERED=1` for
-exactly this reason, so a run started some other way may need it set by
-hand.
+`fdh train-all` runs each model in-process and tees its output, so progress
+lines appear as they happen with nothing extra to configure.
 
 ## 6c. Notebook front door
 
@@ -217,7 +206,7 @@ atomically updates its state after a model starts or ends, so a shutdown does
 not erase the completed-model record:
 
 ```bash
-python tools/train_all_models.py --run-id zju-full --mode full
+fdh train-all --run-id zju-full --mode full
 ```
 
 After a restart, continue the same queue. Models already marked successful in
@@ -226,7 +215,7 @@ Torchvision model also receives `train.resume=true` and continues from its
 last completed epoch checkpoint when available:
 
 ```bash
-python tools/train_all_models.py --run-id zju-full --resume --mode full
+fdh train-all --run-id zju-full --resume --mode full
 ```
 
 Read an individual model's live/previous output at
@@ -295,8 +284,8 @@ The two newest catalog entries. Both train from fabric alone (no external
 corpus), so nothing extra needs staging:
 
 ```bash
-fdh train stfpm --set train.engine_kwargs.accelerator=gpu
-fdh train ganomaly --set train.engine_kwargs.accelerator=gpu
+fdh train stfpm
+fdh train ganomaly
 ```
 
 Each has its own config (`configs/models/anomalib_stfpm.yaml`,
@@ -327,7 +316,7 @@ DRAEM additionally needs the DTD texture set:
 ```bash
 # stage it like any other dataset
 ln -s /path/to/dtd data/DTD
-fdh train draem --set train.engine_kwargs.accelerator=gpu
+fdh train draem
 ```
 
 Without it the run refuses to start with a message naming this step. That

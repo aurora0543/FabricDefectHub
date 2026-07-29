@@ -93,7 +93,11 @@ train:
   model_kwargs: {}          # e.g. PatchCore: {coreset_sampling_ratio: 0.1, num_neighbors: 9}
   engine_kwargs:
     max_epochs: 1            # PatchCore/PaDiM need no gradient training; 1 epoch is enough to fit
-    accelerator: cpu         # omit to let anomalib auto-select; explicit cpu is safer without CUDA
+    # `accelerator` is deliberately unset: Lightning's own default is "auto",
+    # which picks CUDA/MPS/CPU by what the host actually has — the same
+    # auto-detection every other backend in this project already does. Pinning
+    # it to `cpu` here (as this file used to) made a GPU host train on CPU
+    # silently, and forced every caller to pass `--set` to undo it.
   num_workers: 0              # see config.py: the staged directory is transient symlinks, and worker subprocesses have a shutdown race
 
 # ---- Validation: predict() + AnomalyEvaluator (not a native .validate()) ----

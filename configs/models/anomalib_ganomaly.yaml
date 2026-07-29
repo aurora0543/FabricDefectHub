@@ -55,7 +55,7 @@ train:
     # A starting point, not a tuned or published fabric value — GAN training
     # is the least stable regime in this benchmark, so expect to move this.
     max_epochs: 100
-    accelerator: cpu
+    # accelerator unset -> Lightning "auto" (CUDA/MPS/CPU by host).
   num_workers: 0
 
 val:

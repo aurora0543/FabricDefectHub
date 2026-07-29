@@ -1,7 +1,7 @@
 """`core.progress`: the rate limiter, the off switch, and the line format.
 
 The reason these are worth pinning: the whole point of this module is that
-its output survives a *pipe* (`tools/train_all_models.py` tees every child
+its output survives a *pipe* (`fdh train-all` tees every model's output
 into a log file) and a notebook cell. That rules out a carriage-return bar
 and makes "one newline-terminated line, flushed, not too often" the actual
 contract -- so that is what is asserted here, rather than the text itself.

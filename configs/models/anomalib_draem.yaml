@@ -57,7 +57,7 @@ train:
   engine_kwargs:
     # A starting point, not a tuned or published fabric value.
     max_epochs: 100
-    accelerator: cpu
+    # accelerator unset -> Lightning "auto" (CUDA/MPS/CPU by host).
   num_workers: 0
 
 val:

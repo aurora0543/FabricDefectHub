@@ -407,6 +407,22 @@ def resolve_model_config_and_variant(
     if by_filename.is_file():
         return by_filename, None
 
+    # A relative `config_dir` that doesn't exist almost always means the
+    # caller is not in the project root, not that the model name is wrong --
+    # and every keyword resolver below reads this directory, so without this
+    # check all 22 model names fail with "could not resolve <name>", pointing
+    # at the name instead of at the cwd.
+    if not directory.is_dir():
+        raise FileNotFoundError(
+            f"model-config directory '{directory}' does not exist"
+            + (
+                f" relative to the current directory ({Path.cwd()}). Run `fdh` from the "
+                "project root, or pass --config-dir with an absolute path."
+                if not directory.is_absolute()
+                else "; pass --config-dir with a directory that does."
+            )
+        )
+
     needle = model.strip().lower()
     for resolver in (_resolve_by_declaration, _resolve_by_catalog, _resolve_by_backend_support):
         resolved = resolver(needle, directory)

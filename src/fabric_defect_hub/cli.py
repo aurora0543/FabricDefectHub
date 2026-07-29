@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from typing import Any
 
@@ -288,6 +289,45 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--enable-tta", action="store_true", help="YOLO only: enable native flip/multiscale TTA")
     evaluate_parser.add_argument("--tile-size", type=int, help="YOLO only: square tile size when --enable-tiling is set")
     evaluate_parser.add_argument("--tile-overlap", type=float, help="YOLO only: tile overlap in [0, 1)")
+
+    train_all_parser = subparsers.add_parser(
+        "train-all",
+        help=(
+            "train every catalogued model in one batch, resumably — the same per-model run "
+            "`fdh train` performs, looped, with per-model logs and restartable state"
+        ),
+    )
+    train_all_parser.add_argument(
+        "--only", nargs="+", metavar="MODEL",
+        help="train only these models (catalog keys, e.g. yolov8n PatchCore), instead of all of them",
+    )
+    train_all_parser.add_argument(
+        "--mode", choices=("full", "medium", "few", "test"),
+        help=(
+            "shot mode for every model. Omit to use each config's own sample counts. "
+            "'test' is an 8-image wiring check that does NOT produce usable weights"
+        ),
+    )
+    train_all_parser.add_argument(
+        "--dry-run", action="store_true", help="print the plan without training anything",
+    )
+    train_all_parser.add_argument(
+        "--run-id", help="persistent batch identifier (default: a UTC timestamp)",
+    )
+    train_all_parser.add_argument(
+        "--run-root", default="artifacts/training_runs", help="directory for batch state and per-model logs",
+    )
+    train_all_parser.add_argument(
+        "--resume", action="store_true",
+        help="continue --run-id, skipping models already recorded as succeeded",
+    )
+    train_all_parser.add_argument(
+        "--config-dir", default="configs/models", help="directory model names resolve against",
+    )
+    train_all_parser.add_argument(
+        "--no-publish", action="store_true",
+        help="keep results out of artifacts/models/published/ (use for --mode test runs)",
+    )
     return parser
 
 
@@ -308,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _run_export_latex(args.results_json, args.output)
         elif args.command == "train":
             payload = _run_train(args)
+        elif args.command == "train-all":
+            payload = _run_train_all(args)
         elif args.command == "predict":
             payload = _run_predict(args)
         elif args.command == "evaluate":
@@ -530,6 +572,115 @@ def _run_train(args: argparse.Namespace) -> Any:
         "weight_manifest_path": run.weight_manifest_path,
         "exports": [asdict(artifact) for artifact in result.exports],
     }
+
+
+def _run_train_all(args: argparse.Namespace) -> Any:
+    """Batch counterpart of `_run_train`: the same `run_train` call per
+    model, in-process, with resumable state and one log file each.
+
+    In-process rather than by spawning `fdh train` subprocesses (which is
+    what the removed `tools/train_all_models.py` did) so a batch cannot drift from a
+    single run: identical resolution, identical defaults, one code path.
+    """
+
+    import contextlib
+    import io
+    import time
+
+    from fabric_defect_hub.catalog import CANONICAL_MODELS
+    from fabric_defect_hub.training import DatasetOverrides, run_train
+    from fabric_defect_hub.training_runs import BatchRunTracker, default_run_id
+
+    selected = list(CANONICAL_MODELS)
+    if args.only:
+        wanted = {name.strip().lower() for name in args.only}
+        selected = [model for model in selected if model.key.lower() in wanted]
+        missing = wanted - {model.key.lower() for model in selected}
+        if missing:
+            raise ValueError(
+                f"unknown model(s): {', '.join(sorted(missing))}. See `fdh models`."
+            )
+
+    plan = [
+        {"key": model.key, "backend": model.backend, "variant": model.variant, "config": model.config}
+        for model in selected
+    ]
+    if args.dry_run:
+        return {"plan": plan, "model_count": len(plan)}
+
+    if args.resume and not args.run_id:
+        raise ValueError("--resume requires --run-id")
+
+    tracker = BatchRunTracker(
+        args.run_root, args.run_id or default_run_id(), plan, resume=args.resume
+    )
+    print(f"Batch state: {tracker.directory}", flush=True)
+
+    results = []
+    for model in selected:
+        if not tracker.should_run(model.key):
+            print(f"SKIP {model.key}: already succeeded in this batch", flush=True)
+            results.append({"model": model.key, "status": "skipped"})
+            continue
+
+        print(f"\n{'=' * 70}\n>>> {model.key} ({model.backend} / {model.variant})\n{'=' * 70}", flush=True)
+        tracker.begin(model.key)
+        started = time.monotonic()
+        captured = io.StringIO()
+        try:
+            # Tee rather than swallow: the operator watches the terminal,
+            # the log file is what gets attached to a bug report later.
+            with contextlib.redirect_stdout(_Tee(sys.stdout, captured)):
+                run = run_train(
+                    model.key,
+                    config_dir=args.config_dir,
+                    overrides=DatasetOverrides(mode=args.mode) if args.mode else None,
+                    publish=not args.no_publish,
+                )
+        except Exception as exc:  # one model failing must not abort the batch
+            elapsed = time.monotonic() - started
+            detail = f"{type(exc).__name__}: {exc}"
+            print(f"FAIL {model.key} after {elapsed:.0f}s: {detail}", flush=True)
+            tracker.log_path(model.key).write_text(captured.getvalue() + f"\n{detail}\n")
+            tracker.finish(model.key, succeeded=False, detail=detail)
+            results.append({"model": model.key, "status": "failed", "detail": detail})
+            continue
+
+        elapsed = time.monotonic() - started
+        detail = run.published_path or (run.result.registered_artifact.path if run.result.registered_artifact else "")
+        print(f"OK   {model.key} in {elapsed:.0f}s -> {detail}", flush=True)
+        tracker.log_path(model.key).write_text(captured.getvalue())
+        tracker.finish(model.key, succeeded=True, detail=str(detail))
+        results.append({
+            "model": model.key,
+            "status": "succeeded",
+            "published_path": run.published_path,
+            "metrics": run.result.metrics,
+        })
+
+    succeeded = sum(1 for r in results if r["status"] in ("succeeded", "skipped"))
+    return {
+        "batch_state": str(tracker.directory),
+        "succeeded": succeeded,
+        "total": len(results),
+        "results": results,
+    }
+
+
+class _Tee:
+    """Write to two streams at once (terminal + in-memory log buffer)."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self._streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
 
 
 def _run_predict(args: argparse.Namespace) -> Any:
