@@ -133,6 +133,9 @@ def test_find_model_configs_empty_dir_returns_empty(tmp_path):
     ("raw", "backend"),
     [
         ({"model": {"variant": "yolov8n"}}, "ultralytics"),
+        # Registered non-yolo-prefixed variant: must resolve through the
+        # ultralytics variant registry, not the name-prefix fallback.
+        ({"model": {"variant": "fabricmamba"}}, "ultralytics"),
         ({"model": {"variant": "fasterrcnn_resnet50_fpn"}}, "torchvision"),
         ({"model": {"name": "PatchCore"}}, "anomalib"),
         ({"model": {"name": "dinov2reg_vit_base_14"}}, "dinomaly"),

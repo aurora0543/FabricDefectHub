@@ -31,10 +31,23 @@ from typing import Any
 
 # Friendly variant name -> (pretrained checkpoint file, from-scratch arch file).
 # Ultralytics resolves these names to downloads/bundled yamls on first use.
+#
+# "fabricmamba" is this project's clean-room YOLOv8n derivative (see
+# `models/fabricmamba/`), not an Ultralytics release. Both entries point at
+# the same architecture yaml because no pretrained checkpoint exists for a
+# custom architecture — "pretrained" loading degrades to from-scratch, and
+# `variant_weights` resolves the real file path (plus registers the custom
+# modules) at call time.
+FABRICMAMBA_VARIANT = "fabricmamba"
+
 MODEL_VARIANTS: dict[str, dict[str, str]] = {
     "yolov8n": {"checkpoint": "yolov8n.pt", "architecture": "yolov8n.yaml"},
     "yolov8s": {"checkpoint": "yolov8s.pt", "architecture": "yolov8s.yaml"},
     "yolo11n": {"checkpoint": "yolo11n.pt", "architecture": "yolo11n.yaml"},
+    FABRICMAMBA_VARIANT: {
+        "checkpoint": "fabricmamba_n.yaml",
+        "architecture": "fabricmamba_n.yaml",
+    },
 }
 
 # Common aliases people actually type -> canonical variant key above.
@@ -49,6 +62,9 @@ VARIANT_ALIASES: dict[str, str] = {
     "yolov11n": "yolo11n",
     "v11n": "yolo11n",
     "11n": "yolo11n",
+    "fabricmamba": FABRICMAMBA_VARIANT,
+    "fabric-mamba": FABRICMAMBA_VARIANT,
+    "fabricmamba_n": FABRICMAMBA_VARIANT,
 }
 
 # Fabric-tailored default training hyperparameters shared by all variants.
@@ -91,6 +107,11 @@ VARIANT_TRAIN_OVERRIDES: dict[str, dict[str, Any]] = {
     "yolov8n": {},
     "yolov8s": {"batch": 12},
     "yolo11n": {},
+    # FabricMamba's published recipe (paper section 5.1): SGD, lr0 0.01,
+    # weight decay 5e-4 — already this file's common defaults — and mosaic
+    # switched off for the last ten epochs. The paper's batch of 64 assumes
+    # a 24GB card; the common batch=16 stands until tuned on real hardware.
+    FABRICMAMBA_VARIANT: {"close_mosaic": 10},
 }
 
 
@@ -121,6 +142,13 @@ def variant_weights(name: str, pretrained: bool = True) -> str:
     """
 
     variant = resolve_variant(name)
+    if variant == FABRICMAMBA_VARIANT:
+        # Custom architecture: resolve the packaged yaml's real path and
+        # register the custom modules Ultralytics needs to parse it. There
+        # is no pretrained checkpoint, so both branches load from scratch.
+        from fabric_defect_hub.models.fabricmamba import architecture_yaml
+
+        return architecture_yaml()
     spec = MODEL_VARIANTS[variant]
     return spec["checkpoint"] if pretrained else spec["architecture"]
 

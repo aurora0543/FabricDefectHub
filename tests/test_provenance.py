@@ -30,7 +30,11 @@ def test_git_commit_off_repo_degrades_to_unknown(tmp_path):
 
 def test_vendored_components_lists_every_submodule():
     components = vendored_components(REPO_ROOT)
-    assert set(components) == {"components/dinomaly", "components/moeclip"}
+    assert set(components) == {
+        "components/dinomaly",
+        "components/moeclip",
+        "components/anomalydiffusion",
+    }
     for record in components.values():
         assert re.fullmatch(r"[0-9a-f]{40}", record["commit"])
         assert record["state"] in {"clean", "modified", "uninitialized"}

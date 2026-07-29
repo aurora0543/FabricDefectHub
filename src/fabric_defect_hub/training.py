@@ -307,6 +307,16 @@ def infer_backend(raw: dict[str, Any]) -> str:
             "'backend' key to the config"
         )
     variant = str(model.get("variant", "")).lower()
+    # The registry, not a name pattern, decides what is an ultralytics
+    # variant — "fabricmamba" carries no yolo prefix. The prefix check
+    # stays as a fallback for unregistered size sweeps (e.g. "yolov8x").
+    from fabric_defect_hub.models.ultralytics.presets import resolve_variant
+
+    try:
+        resolve_variant(variant)
+        return "ultralytics"
+    except KeyError:
+        pass
     if variant.startswith("yolo"):
         return "ultralytics"
     if variant.startswith(("fasterrcnn", "maskrcnn", "cascadercnn", "detr", "unet", "deeplab")):
