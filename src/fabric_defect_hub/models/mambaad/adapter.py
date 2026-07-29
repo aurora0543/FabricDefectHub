@@ -74,6 +74,7 @@ from typing import Any
 
 import torch.nn.functional as F
 
+from fabric_defect_hub.core.progress import ProgressReporter
 from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
@@ -380,24 +381,26 @@ class MambaADAdapter(ModelAdapter):
             return base_lr
 
         it = 0
-        while it < total_iters:
-            for images in loader:
-                images = images.to(device)
-                for group in optimizer.param_groups:
-                    group["lr"] = lr_at(it)
+        with ProgressReporter(f"mambaad/{self.encoder_name} train", total=total_iters) as progress:
+            while it < total_iters:
+                for images in loader:
+                    images = images.to(device)
+                    for group in optimizer.param_groups:
+                        group["lr"] = lr_at(it)
 
-                teacher_features, student_features = model(images)
-                loss = self._reconstruction_loss(
-                    teacher_features, student_features, lam=float(kwargs["loss_lambda"])
-                )
+                    teacher_features, student_features = model(images)
+                    loss = self._reconstruction_loss(
+                        teacher_features, student_features, lam=float(kwargs["loss_lambda"])
+                    )
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-                it += 1
-                if it >= total_iters:
-                    break
+                    it += 1
+                    progress.update(loss=loss.detach().item(), lr=optimizer.param_groups[0]["lr"])
+                    if it >= total_iters:
+                        break
 
         work_dir = Path(config.get("work_dir") or tempfile.mkdtemp(prefix="fdh_mambaad_"))
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -465,7 +468,10 @@ class MambaADAdapter(ModelAdapter):
             maps_dir.mkdir(parents=True, exist_ok=True)
 
         predictions = []
-        with torch.no_grad():
+        progress = ProgressReporter(
+            f"mambaad/{self.encoder_name} predict", total=len(samples), unit="img"
+        )
+        with torch.no_grad(), progress:
             for sample in samples:
                 from PIL import Image
 
@@ -487,6 +493,7 @@ class MambaADAdapter(ModelAdapter):
                 predictions.append(
                     Prediction(sample_id=sample.id, anomaly_score=score, anomaly_map=anomaly_map_path)
                 )
+                progress.update(score=score)
         return predictions
 
     def export(

@@ -31,6 +31,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.progress import ProgressReporter
 from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
@@ -628,8 +629,12 @@ class TorchvisionAdapter(ModelAdapter):
 
         predictions: list[Prediction] = []
         self.model.eval()
-        with torch.no_grad():
+        progress = ProgressReporter(
+            f"torchvision/{self.name} predict", total=len(samples), unit="img"
+        )
+        with torch.no_grad(), progress:
             for sample, (image, _target) in zip(samples, dataset):
+                progress.update()
                 if is_seg:
                     logits = self.model(image.unsqueeze(0).to(predict_device))
                     probs = torch.sigmoid(logits)[0]

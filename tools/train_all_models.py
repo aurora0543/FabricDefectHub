@@ -17,6 +17,7 @@ Usage:
     python tools/train_all_models.py --only yolov8n PatchCore
     python tools/train_all_models.py --dry-run         # print the plan, train nothing
     python tools/train_all_models.py --mode test       # 8-image smoke run of every model first
+    python tools/train_all_models.py --accelerator gpu --mode medium   # on a CUDA host
     python tools/train_all_models.py --run-id zju-full --mode full
     python tools/train_all_models.py --run-id zju-full --resume
 
@@ -64,6 +65,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fabric_defect_hub.catalog import CANONICAL_MODELS
+from fabric_defect_hub.training import device_override
 from fabric_defect_hub.training_runs import BatchRunTracker, default_run_id
 
 
@@ -77,6 +79,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--mode", choices=("full", "medium", "few", "test"), default=None,
         help="shot mode override passed to every model (default: each config's own setting)",
+    )
+    parser.add_argument(
+        "--accelerator", choices=("auto", "cpu", "gpu"), default=None,
+        help=(
+            "device every model trains on. Pass 'gpu' on a CUDA host: the four anomalib "
+            "configs pin `accelerator: cpu` (a safe default for the Apple-Silicon dev "
+            "machine, and wrong everywhere else), so without this they train on CPU on a "
+            "GPU box without complaining. The other backends already auto-detect CUDA; "
+            "this only makes it explicit."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="print the training plan without running anything")
     parser.add_argument("--run-id", help="persistent run identifier (default: a UTC timestamp)")
@@ -110,6 +122,11 @@ def main(argv: list[str] | None = None) -> int:
     child_env = os.environ.copy()
     source_root = str(project_root / "src")
     child_env["PYTHONPATH"] = source_root + os.pathsep + child_env.get("PYTHONPATH", "")
+    # Without this the child's stdout is a pipe, so Python block-buffers it
+    # (~8KB) and progress lines only surface long after the work they
+    # describe -- which is what made a running model look frozen both in
+    # the terminal and in `tail -f` of its log.
+    child_env["PYTHONUNBUFFERED"] = "1"
 
     run_id = args.run_id or default_run_id()
     tracker = BatchRunTracker(
@@ -138,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.mode:
             command.extend(("--mode", args.mode))
+        if args.accelerator:
+            command.extend(_device_overrides(model.backend, args.accelerator))
         if args.resume and model.backend == "torchvision":
             command.extend(("--set", "train.resume=true"))
         tracker.begin(model.key)
@@ -167,6 +186,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{'OK  ' if ok else 'FAIL'} {key:26s} {detail}")
 
     return 0 if all(ok for _, ok, _ in results) else 1
+
+
+def _device_overrides(backend: str, accelerator: str) -> tuple[str, ...]:
+    """`--set` tokens putting `backend` on `accelerator`.
+
+    The per-backend knowledge itself lives in `training.device_override`,
+    next to `RUN_LENGTH_KEYS` and for the same reason — the notebook front
+    door needs the same table, and two copies of it would drift.
+    """
+
+    return tuple(
+        token
+        for key, value in device_override(backend, accelerator).items()
+        for token in ("--set", f"{key}={value}")
+    )
 
 
 def _extension_for(backend: str) -> str:

@@ -38,6 +38,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.progress import ProgressReporter
 from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
@@ -363,7 +364,13 @@ class MoECLIPAdapter(ModelAdapter):
         work_dir.mkdir(parents=True, exist_ok=True)
         history_path = work_dir / "history.csv"
         step = 0
-        with history_path.open("w", newline="") as history_file:
+        # `len(loader)` is the batch count per epoch, so this is the exact
+        # step budget -- MoECLIP's loop is epoch-driven, unlike the
+        # iteration-driven Dinomaly/MambaAD ones.
+        progress = ProgressReporter(
+            f"moeclip/{self.model_name} train", total=epochs * len(loader)
+        )
+        with history_path.open("w", newline="") as history_file, progress:
             writer = csv.writer(history_file)
             writer.writerow(["epoch", "iteration", "train_loss", "lr"])
             for epoch in range(epochs):
@@ -395,8 +402,11 @@ class MoECLIPAdapter(ModelAdapter):
                     optimizer.step()
                     scheduler.step()
                     step += 1
-                    writer.writerow([epoch + 1, step, f"{loss.detach().item():.8f}", f"{optimizer.param_groups[0]['lr']:.10f}"])
+                    loss_value = loss.detach().item()
+                    current_lr = optimizer.param_groups[0]["lr"]
+                    writer.writerow([epoch + 1, step, f"{loss_value:.8f}", f"{current_lr:.10f}"])
                     history_file.flush()
+                    progress.update(epoch=f"{epoch + 1}/{epochs}", loss=loss_value, lr=current_lr)
 
         ckpt_path = work_dir / f"moeclip_{self.model_name}.pth"
         # Same payload upstream's `save_checkpoint` writes (minus the
@@ -483,7 +493,10 @@ class MoECLIPAdapter(ModelAdapter):
             maps_dir.mkdir(parents=True, exist_ok=True)
 
         predictions: list[Prediction] = []
-        with torch.no_grad():
+        progress = ProgressReporter(
+            f"moeclip/{self.model_name} predict", total=len(samples), unit="img"
+        )
+        with torch.no_grad(), progress:
             embeddings = self._text_embeddings(model, class_names, device)
             for index, sample in enumerate(samples):
                 item = dataset[index]
@@ -529,6 +542,7 @@ class MoECLIPAdapter(ModelAdapter):
                         anomaly_map=anomaly_map_path,
                     )
                 )
+                progress.update(score=score)
         return predictions
 
     def export(

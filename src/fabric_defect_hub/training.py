@@ -215,6 +215,46 @@ RUN_LENGTH_KEYS: dict[str, tuple[str, str]] = {
 }
 
 
+# The same idea for "which device does this run use", which the six
+# backends also spell three different ways: anomalib's is a Lightning
+# accelerator *name* inside `engine_kwargs`, Ultralytics wants a CUDA
+# *index*, and the other four take a torch device string. Only anomalib
+# needs an entry for "auto" -- every other backend's `train.device: null`
+# already means "cuda > mps > cpu", so writing anything there could only
+# make it wrong.
+#
+# This matters more than it looks: the four anomalib configs pin
+# `accelerator: cpu` (the honest default on the Apple-Silicon dev machine),
+# so on a CUDA host they train on CPU, slowly and silently, unless
+# something overrides them.
+_DEVICE_KEYS: dict[str, tuple[str, dict[str, str]]] = {
+    "anomalib": ("train.engine_kwargs.accelerator", {"gpu": "gpu", "cpu": "cpu", "auto": "auto"}),
+    "ultralytics": ("train.device", {"gpu": "0", "cpu": "cpu"}),
+    "torchvision": ("train.device", {"gpu": "cuda", "cpu": "cpu"}),
+    "dinomaly": ("train.device", {"gpu": "cuda", "cpu": "cpu"}),
+    "moeclip": ("train.device", {"gpu": "cuda", "cpu": "cpu"}),
+    "mambaad": ("train.device", {"gpu": "cuda", "cpu": "cpu"}),
+}
+
+
+def device_override(backend: str, accelerator: str) -> dict[str, Any]:
+    """`{dotted key: value}` that puts `backend` on `accelerator`.
+
+    `accelerator` is 'gpu', 'cpu' or 'auto'. Returns `{}` when the backend's
+    own default already means that ('auto' everywhere except anomalib) --
+    layer the result into `set_overrides` / pass it as `--set`.
+    """
+
+    if backend not in _DEVICE_KEYS:
+        raise ValueError(f"unknown backend {backend!r}; expected one of {sorted(_DEVICE_KEYS)}")
+    key, values = _DEVICE_KEYS[backend]
+    if accelerator not in values:
+        if accelerator == "auto":
+            return {}
+        raise ValueError(f"unknown accelerator {accelerator!r}; expected 'gpu', 'cpu' or 'auto'")
+    return {key: values[accelerator]}
+
+
 def infer_backend(raw: dict[str, Any]) -> str:
     """Keyword-based backend detection over a parsed model-config mapping.
 

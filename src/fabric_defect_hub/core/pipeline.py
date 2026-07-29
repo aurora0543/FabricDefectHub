@@ -28,6 +28,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from fabric_defect_hub.core.progress import note
 from fabric_defect_hub.core.types import Sample
 from fabric_defect_hub.models.base import Artifact, ExportedArtifact, ModelAdapter
 
@@ -113,15 +114,29 @@ class BasePipeline(ABC):
         config = self.config
         config.validate()
 
+        # Stage announcements, written once here rather than in six
+        # backends. They are the only progress signal that covers every
+        # backend uniformly: Lightning (anomalib) and Ultralytics print
+        # their own within-stage bars, the four loops this project owns
+        # report through `core.progress`, but nothing else says which
+        # *stage* a silent run is sitting in -- staging a dataset
+        # directory and computing AUPRO are both long and both mute.
         adapter = self.build_adapter()
         result = RunResult(config=config)
+        # Every registered adapter declares `backend`, but a label for a log
+        # line is not worth being able to break a run over -- hence the
+        # fallback rather than a direct attribute read.
+        label = getattr(adapter, "backend", type(adapter).__name__)
+        note(f"{label}: preparing data")
         self.prepare()
 
         if config.train.enabled:
+            note(f"{label}: training")
             result.trained_artifact = adapter.train(self.build_train_config())
             result.registered_artifact = adapter.register_trained_model(
                 result.trained_artifact, registry_dir=config.checkpoint.registry_dir
             )
+            note(f"{label}: trained -> {result.registered_artifact.path}")
         else:
             result.trained_artifact = self.load_existing_artifact(adapter)
 
@@ -139,10 +154,20 @@ class BasePipeline(ABC):
             )
 
         if config.val.enabled:
+            note(f"{label}: evaluating")
             result.metrics = self.evaluate(adapter, artifact)
+            if result.metrics:
+                note(
+                    f"{label}: metrics | "
+                    + " ".join(
+                        f"{k} {v:.4f}" if isinstance(v, float) else f"{k} {v}"
+                        for k, v in sorted(result.metrics.items())
+                    )
+                )
 
         if config.export.enabled and config.export.formats:
             for fmt in config.export.formats:
+                note(f"{label}: exporting {fmt}")
                 result.exports.append(
                     adapter.export(artifact, fmt, config=self.export_config(fmt))
                 )

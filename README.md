@@ -145,7 +145,8 @@ Detailed technical specifications and user guides are organized under `docs/`:
 - 📊 **[Benchmark Protocols & LaTeX Generator](docs/BENCHMARK_AND_LATEX.md)**: PRO-Score, LMEI Edge Index calculation, and automated LaTeX table rendering.
 - 🌳 **[Extending FabricDefectHub](docs/EXTENDING.md)**: the dataset/backend availability decision tree (`fdh doctor`), the `--set` tuning window, and how to add a new dataset, backend, or config profile.
 - 🔁 **[Reproduction Card: PatchCore on MVTec-AD](docs/REPRODUCTION_PATCHCORE.md)**: the paper-anchored numbers each `patchcore` run is checked against.
-- ☁️ **[Cloud Training Runbook](docs/cloud_training_runbook.md)**: end-to-end steps for a fresh cloud box — env setup, dataset staging, smoke test, real training, weight provenance.
+- ☁️ **[Cloud Training Runbook](docs/cloud_training_runbook.md)**: end-to-end steps for a fresh cloud box — env setup, dataset staging, putting the run on the GPU, smoke test, real training, watching progress, weight provenance.
+- 📓 **[Training notebook](notebooks/train_on_gpu.ipynb)**: the same `fdh.load_config`/`train`/`evaluate` path, one stage per cell, for interactive single-model work on a GPU box.
 
 ---
 

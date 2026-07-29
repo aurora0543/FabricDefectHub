@@ -20,6 +20,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from fabric_defect_hub.core.progress import ProgressReporter, note
+
 
 @dataclass
 class EpochLog:
@@ -76,6 +78,7 @@ def train_one_epoch(
     scaler=None,
     log_fn: Callable[[str], None] | None = None,
     task: str = "detect",
+    progress: ProgressReporter | None = None,
 ) -> tuple[float, dict[str, float]]:
     """One training epoch. Returns (mean total loss, mean per-component losses).
 
@@ -133,6 +136,8 @@ def train_one_epoch(
             loss_sums[k] = loss_sums.get(k, 0.0) + float(v.detach())
         total_loss_sum += loss_value
         num_batches += 1
+        if progress is not None:
+            progress.update(loss=loss_value, lr=optimizer.param_groups[0]["lr"])
 
     if num_batches == 0:
         return float("nan"), {}
@@ -303,16 +308,28 @@ def run_training(
 
     for epoch in range(start_epoch, epochs):
         warmup_scheduler = _build_warmup_scheduler(optimizer, warmup_iters) if epoch == 0 else None
-        train_loss, components = train_one_epoch(
-            model, optimizer, train_loader, device, epoch,
-            warmup_scheduler=warmup_scheduler, grad_clip_norm=grad_clip_norm,
-            amp=effective_amp, scaler=scaler,
-            task=task,
-        )
+        # One reporter per epoch rather than one for the whole run: the
+        # epoch number is the thing a watcher actually wants in the line,
+        # and `len(train_loader)` is only meaningful per epoch anyway.
+        with ProgressReporter(
+            f"torchvision train epoch {epoch + 1}/{epochs}",
+            total=len(train_loader),
+            unit="batch",
+        ) as progress:
+            train_loss, components = train_one_epoch(
+                model, optimizer, train_loader, device, epoch,
+                warmup_scheduler=warmup_scheduler, grad_clip_norm=grad_clip_norm,
+                amp=effective_amp, scaler=scaler,
+                task=task, log_fn=note, progress=progress,
+            )
         if scheduler is not None and epoch > 0:
             scheduler.step()
 
-        val_metrics = evaluate(model, val_loader, device, with_masks=with_masks, task=task) if val_loader is not None else {}
+        if val_loader is not None:
+            note(f"torchvision epoch {epoch + 1}/{epochs}: validating ({len(val_loader)} batches)")
+            val_metrics = evaluate(model, val_loader, device, with_masks=with_masks, task=task)
+        else:
+            val_metrics = {}
         current_lr = optimizer.param_groups[0]["lr"]
         log = EpochLog(epoch=epoch, train_loss=train_loss, train_loss_components=components, lr=current_lr, val_metrics=val_metrics)
         logs.append(log)
@@ -328,7 +345,13 @@ def run_training(
         if on_epoch_end is not None:
             on_epoch_end(log, optimizer, scheduler, best_map, improved)
 
+        summary = f"torchvision epoch {epoch + 1}/{epochs}: train_loss {train_loss:.4f} | lr {current_lr:.6f}"
+        if val_metrics:
+            summary += " | " + " ".join(f"{k} {v:.4f}" for k, v in sorted(val_metrics.items()))
+        note(summary)
+
         if patience > 0 and epochs_without_improvement >= patience:
+            note(f"torchvision: early stop after {epochs_without_improvement} epoch(s) without improvement")
             break
 
     return logs, best_map

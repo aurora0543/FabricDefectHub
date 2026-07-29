@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from fabric_defect_hub.core.progress import ProgressReporter
 from fabric_defect_hub.core.provenance import describe_training
 from fabric_defect_hub.core.registry import register_model
 from fabric_defect_hub.core.train_config import TrainConfig, resolve_train_config
@@ -235,7 +236,8 @@ class DinomalyAdapter(ModelAdapter):
             p_final = kwargs["hm_percent_final"]
             hm_warmup = kwargs["hm_percent_warmup_iters"]
             model.train()
-            with history_path.open("w", newline="") as history_file:
+            progress = ProgressReporter(f"dinomaly/{self.encoder_name} train", total=total_iters)
+            with history_path.open("w", newline="") as history_file, progress:
                 writer = csv.writer(history_file)
                 writer.writerow(["iteration", "train_loss", "lr"])
                 while it < total_iters:
@@ -252,8 +254,11 @@ class DinomalyAdapter(ModelAdapter):
                         lr_scheduler.step()
 
                         it += 1
-                        writer.writerow([it, f"{loss.detach().item():.8f}", f"{optimizer.param_groups[0]['lr']:.10f}"])
+                        loss_value = loss.detach().item()
+                        current_lr = optimizer.param_groups[0]["lr"]
+                        writer.writerow([it, f"{loss_value:.8f}", f"{current_lr:.10f}"])
                         history_file.flush()
+                        progress.update(loss=loss_value, lr=current_lr)
                         if it >= total_iters:
                             break
 
@@ -353,7 +358,10 @@ class DinomalyAdapter(ModelAdapter):
             maps_dir.mkdir(parents=True, exist_ok=True)
 
         predictions = []
-        with torch.no_grad():
+        progress = ProgressReporter(
+            f"dinomaly/{self.encoder_name} predict", total=len(samples), unit="img"
+        )
+        with torch.no_grad(), progress:
             for sample in samples:
                 img = Image.open(sample.image_path).convert("RGB")
                 img = data_transform(img).unsqueeze(0).to(device)
@@ -379,6 +387,7 @@ class DinomalyAdapter(ModelAdapter):
                         anomaly_map=anomaly_map_path,
                     )
                 )
+                progress.update(score=score)
         return predictions
 
     def export(

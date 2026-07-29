@@ -84,6 +84,34 @@ don't have a known blocker on this host, but haven't been confirmed
 reachable either — if a training run hangs or fails on a download, that's
 the first thing to check.
 
+## 4b. Put the run on the GPU (it is not the default)
+
+The four anomalib configs pin `train.engine_kwargs.accelerator: cpu`. That
+is the honest default on the Apple-Silicon dev machine this project is
+partly written on, and it is wrong on every CUDA host: without an override
+those models train on CPU, slowly, and say nothing about it. The other five
+backends auto-detect (`cuda > mps > cpu`) and need no flag.
+
+One switch covers every backend in a batch run — it writes each backend's
+own device vocabulary (`training.device_override`: Lightning's accelerator
+name, Ultralytics' CUDA index, everyone else's torch device string):
+
+```bash
+python tools/train_all_models.py --accelerator gpu --mode medium
+```
+
+For a single model, the same thing by hand:
+
+```bash
+fdh train stfpm --set train.engine_kwargs.accelerator=gpu   # anomalib
+fdh train yolov8n --set train.device=0                      # ultralytics
+fdh train dinomaly --set train.device=cuda                  # everyone else
+```
+
+Confirm it took: `nvidia-smi` should show the process, and the run's own
+`resolved_config` echo in `fdh train`'s JSON output shows which config was
+actually used.
+
 ## 5. Smoke test everything first
 
 Before committing to a full training pass, run every model for 1
@@ -91,7 +119,7 @@ epoch / 8 images to confirm the whole pipeline — data loading, model
 construction, checkpointing, publishing — works end to end:
 
 ```bash
-python tools/train_all_models.py --mode test
+python tools/train_all_models.py --accelerator gpu --mode test
 ```
 
 Each model is launched in its own Python process, so CUDA memory is released
@@ -139,6 +167,48 @@ This can be significantly slower, especially for Anomalib's PatchCore
 The script continues past a failing model instead of aborting the whole
 batch, and prints a final `OK`/`FAIL` summary — safe to re-run to retry
 only what failed.
+
+## 6b. Watching a run
+
+Every stage announces itself (`core.pipeline`), and the four training loops
+this project owns — torchvision, Dinomaly, MoECLIP, MambaAD — report
+progress from inside the loop (`core.progress`). Anomalib brings Lightning's
+own bar and Ultralytics its own table, so those are left alone:
+
+```
+[fdh] mambaad: preparing data
+[fdh] mambaad: training
+[fdh] mambaad/resnet34 train: 320/1000 it (32.0%) | 3.41 it/s | elapsed 1:34 | eta 3:19 | loss 0.4123 | lr 0.0050
+[fdh] mambaad: trained -> artifacts/models/mambaad_resnet34.pth
+[fdh] mambaad: evaluating
+[fdh] mambaad: metrics | image_auroc 0.9512 pixel_aupro 0.8730 ...
+```
+
+Plain newline-terminated lines rather than a redrawing bar, on purpose:
+they have to survive a pipe (the batch runner tees every child into
+`logs/<model>.log`) and a notebook cell, neither of which renders a
+carriage return. One line every five seconds by default:
+
+```bash
+export FDH_PROGRESS_INTERVAL=30   # quieter logs on a long run
+export FDH_PROGRESS=0             # silence it entirely
+```
+
+If a batch run still looks frozen, check that the child process is
+unbuffered — `tools/train_all_models.py` sets `PYTHONUNBUFFERED=1` for
+exactly this reason, so a run started some other way may need it set by
+hand.
+
+## 6c. Notebook front door
+
+`notebooks/train_on_gpu.ipynb` drives the same `fdh.load_config` /
+`fdh.train` / `fdh.evaluate` path the CLI uses (no parallel implementation),
+one stage per cell: environment + CUDA check, `fdh doctor` plus a
+staged/dangling/missing table for every `data/` symlink, the parameter cell,
+an 8-image smoke run with `publish=False`, the real run, inline SVG training
+curves, and a cross-dataset evaluation. Useful when tuning one model
+interactively; for the full 20-model pass use the batch runner below, which
+survives a dropped kernel and gives each model its own process.
 
 ## 7. Interrupt-safe runs and curves
 
