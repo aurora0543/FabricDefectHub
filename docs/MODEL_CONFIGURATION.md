@@ -103,7 +103,7 @@ Profile **只能提供设置**，不能改 loss、不能改结构、不能改增
 `core/base_recipe.py`，由 `tests/test_recipe_application.py` 钉死）。否则结果表里
 标着 "YOLOv8" 的那一行就不是原版 YOLOv8，横向对比不成立。
 
-每个后端只会吸收 profile 里"训练器安全"的那部分参数（`recipes.recipe_trainer_overrides(...)`）：`lr0`/`momentum` 这类真实训练器参数会传进去，而模型构造参数（如 `backbone`）和命名不同的 loss 权重（`box_loss_weight`，Ultralytics 里叫 `box`）不会泄漏进 `train(**kwargs)`。调用方显式传的值总是优先于 profile。六个 profile 目前都已核对为各自后端的真实参数名（`tests/test_recipe_reconciliation.py` 会钉死每个 profile 对应后端的已验证默认值，防止再退化回发明出来的参数）；尚未做完的是真正跑一遍论文数据集复现、填上结果表（见 `docs/REPRODUCTION_PATCHCORE.md`）——设置是对的，GPU 跑分还没跑完。
+每个后端只会吸收 profile 里"训练器安全"的那部分参数（`recipes.recipe_trainer_overrides(...)`）：`lr0`/`momentum` 这类真实训练器参数会传进去，而模型构造参数（如 `backbone`）和命名不同的 loss 权重（`box_loss_weight`，Ultralytics 里叫 `box`）不会泄漏进 `train(**kwargs)`。调用方显式传的值总是优先于 profile。六个 profile 目前都已核对为各自后端的真实参数名（`tests/test_recipe_reconciliation.py` 会钉死每个 profile 对应后端的已验证默认值，防止再退化回发明出来的参数）。
 
 ## 只验证、不训练（`model.weights`）
 

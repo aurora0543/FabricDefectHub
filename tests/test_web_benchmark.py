@@ -175,6 +175,26 @@ def test_run_benchmark_with_profiling_adds_overhead_metrics_and_scores(monkeypat
     assert row[columns.index("composite_score")] != ""
 
 
+def test_run_benchmark_keeps_accuracy_when_profiling_export_is_unsupported(monkeypatch, tmp_path):
+    _install_fake_catalog(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        _FakeWebBenchModel,
+        "capabilities",
+        lambda self: ModelCapabilities(
+            tasks=("anomaly",), prediction_fields=("anomaly_score",), export_targets=("onnx",),
+        ),
+    )
+
+    *_, (columns, rows, status, _) = web_benchmark.run_benchmark(
+        "Fake Dataset", "All textures", "Full-shot", [MODEL_LABEL],
+        include_profiling=True, run_log_path=None,
+    )
+
+    assert rows[0][columns.index("model")] == MODEL_LABEL
+    assert "image_auroc" in columns
+    assert "profiling skipped" in status
+
+
 def test_run_benchmark_with_profiling_adds_flops_and_lmei(monkeypatch, tmp_path):
     pytest.importorskip("thop")
     _install_fake_catalog(monkeypatch, tmp_path)

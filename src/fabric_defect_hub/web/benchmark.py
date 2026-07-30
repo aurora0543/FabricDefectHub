@@ -1,70 +1,10 @@
-"""Backend glue for the Benchmark tab: pick a dataset shot regime
-(full-shot = every test sample, few-shot = ~350 samples, matching
-`single_image.SHOT_FULL`/`SHOT_FEW`) and one or more trained models, then
-run each one through `loader.run_experiment` with the task-appropriate
-`Evaluator` (`AnomalyEvaluator` for image AUROC/F1, `DetectionEvaluator` for
-mAP/precision/recall, `SegmentationEvaluator` for mIoU/Dice/pixel-F1) to
-build a leaderboard.
-
-Every selected model is cycled through the same mount -> test -> unmount ->
-next-model pipeline (`run_benchmark`'s loop): one model is loaded, evaluated,
-then explicitly released (`_release_model`) before the next one is
-instantiated, so a full run of all `CANONICAL_MODELS` — several hundred MB to
-~1GB of weights each — never holds more than one resident model in memory at
-a time. `run_benchmark` is a generator that yields after every model so the
-UI can render results as they land instead of blocking until the whole
-leaderboard is done.
-
-No heatmaps or bounding boxes are rendered here — anomaly-map-producing
-adapters (anomalib, Dinomaly) are called without `output_dir`, so only
-image-level metrics are computed and nothing is written to disk; this tab
-only ever needs numbers, not images.
-
-Two opt-in additions on top of the accuracy-only leaderboard above:
-
-- `include_profiling=True` runs each model through a `PyTorchProfiler` pass
-  too (export to TorchScript, then measure FPS/latency/memory the same way
-  `benchmark.py`'s YAML `profile:` block does for the CLI path) so the
-  leaderboard also carries overhead metrics, not just accuracy. Off by
-  default because it roughly doubles per-model time (export + N warmup/
-  measured forward passes) — the UI's own warmup/measured-run counts are
-  intentionally lower than the CLI default (`ProfileConfig`'s 10/100) to
-  stay responsive for an interactive click. When it's on, `_flops_and_lmei`
-  also instruments the adapter's live model (`ModelAdapter.raw_module()` --
-  a frozen TorchScript export can't accept the hooks FLOPs counting needs)
-  for FLOPs (`profiling.flops.compute_model_flops`), parameter count, and
-  the combined LMEI edge-deployment score (`evaluation.lmei_profiler
-  .calculate_lmei`) — best-effort, so a missing `thop` install just
-  forfeits those three
-  columns rather than the whole row.
-- `include_resolution_sweep=True` exports once, then profiles that same
-  export at a handful of input resolutions (`RESOLUTION_SWEEP_SIZES`) to
-  fit a throughput-vs-resolution decay slope (`profiling.scaling
-  .throughput_resolution_slope`) — a cheaper add-on than re-running
-  `include_profiling` per resolution, since only the profiling forward
-  pass (not accuracy evaluation) varies by input size.
-- `cross_domain_dataset_label`, if given, evaluates the same loaded model
-  against a second ("target") dataset — no slicing, whole dataset — right
-  after its primary ("source") evaluation, and reports the accuracy drop
-  via `evaluation.cross_domain.cross_domain_degradation` on whichever
-  metric each task treats as primary (`_PRIMARY_ACCURACY_METRIC`). Rows
-  whose task the target dataset can't supply, or whose source accuracy is
-  zero, simply omit the degradation column rather than failing the row.
-- Every run always appends to `run_log_path` (default `runs/leaderboard_log.jsonl`)
-  via `reporting.append_run_log`, so leaderboard runs triggered from the UI
-  leave the same durable trace `fdh benchmark` runs already did — this is
-  what the "Run History" tab reads back.
-
-`score_preset`/`custom_technical_weight` blend the accumulated rows'
-technical (accuracy) and overhead (cost) metrics into one ranked
-`composite_score` via `scoring.score_rows` — recomputed after every model
-finishes so the ranking updates live as the leaderboard fills in.
-"""
+"""Backend glue for the Benchmark tab: load, evaluate, and profile models."""
 
 from __future__ import annotations
 
 import gc
 import time
+from pathlib import Path
 from typing import Any, Iterator
 
 from fabric_defect_hub.core.registry import get_profiler_cls
@@ -152,12 +92,47 @@ def _profile_setup(model: Any, device: str):
     benchmark tab, which is not in a position to know it.
     """
 
+    capabilities = model.capabilities()
+    export_target = next(
+        (target for target in ("exported_program", "torchscript") if target in capabilities.export_targets),
+        None,
+    )
+    if export_target is None:
+        return None
+
     profiler = get_profiler_cls("pytorch")()
     config = ProfileConfig(
         device=device, engine="pytorch", precision="fp32", input_size=(640, 640),
-        input_style=model.capabilities().export_input_style, warmup_runs=5, measured_runs=20,
+        input_style=capabilities.export_input_style, warmup_runs=5, measured_runs=20,
     )
-    return profiler, config, "torchscript"
+    return profiler, config, export_target
+
+
+def _profile_model(model: Any, artifact: Any, device: str) -> dict[str, float]:
+    """Export and profile one model without letting optional overhead data
+    invalidate its already-computed accuracy result.
+
+    Some backends intentionally do not provide a PyTorch-loadable export
+    (Anomalib's ``torch`` package, for example); others may have model or
+    runtime-specific export limitations.  The benchmark's accuracy row is
+    still valid in either case, so callers handle failures as a skipped
+    optional metric rather than a failed model.
+    """
+
+    setup = _profile_setup(model, device)
+    if setup is None:
+        raise RuntimeError(
+            "no PyTorchProfiler-compatible export target; supported targets are "
+            "'exported_program' and 'torchscript'"
+        )
+    profiler, config, export_target = setup
+    exported = model.export(artifact, target=export_target, config={"input_size": config.input_size})
+    export_path = Path(exported.path)
+    if not export_path.is_file():
+        raise FileNotFoundError(f"exported model does not exist: {export_path}")
+    metrics = profiler.profile(exported, config)
+    metrics["model_size_mb"] = export_path.stat().st_size / (1024 * 1024)
+    return metrics
 
 
 def _resolution_sweep(model: Any, artifact: Any, device: str) -> dict[str, float]:
@@ -362,9 +337,6 @@ def run_benchmark(
             dataset = load_dataset(spec["name"], task=dataset_task, **base_dataset_kwargs)
             model = load_model(model_spec["backend"], model_spec["name"])
             evaluator = evaluator_for_task(dataset_task)
-            profiler = profile_config = export_target = None
-            if include_profiling:
-                profiler, profile_config, export_target = _profile_setup(model, device)
             started = time.perf_counter()
             result = run_experiment(
                 experiment_id=f"benchmark-{_slug(model_label)}",
@@ -376,9 +348,6 @@ def run_benchmark(
                 runtime=RuntimeInfo(device=device, engine="python", precision="fp32", input_size=(640, 640)),
                 evaluator=evaluator,
                 artifact=artifact_for_model(model_spec),
-                profiler=profiler,
-                profile_config=profile_config,
-                export_target=export_target,
                 run_log_path=run_log_path,
             )
             if sample_count is None:
@@ -388,6 +357,13 @@ def run_benchmark(
                 "runtime_s": round(time.perf_counter() - started, 1),
                 **result.metrics,
             }
+            if include_profiling:
+                try:
+                    profile_started = time.perf_counter()
+                    row.update(_profile_model(model, artifact_for_model(model_spec), device))
+                    row["runtime_s"] = round(row["runtime_s"] + time.perf_counter() - profile_started, 1)
+                except Exception as exc:
+                    errors.append(f"{model_label}: profiling skipped ({type(exc).__name__}: {exc})")
             # Every opt-in addition below is best-effort: a failure in one
             # (e.g. thop missing for FLOPs, a target dataset erroring mid-
             # probe) only forfeits that addition's columns, never the base

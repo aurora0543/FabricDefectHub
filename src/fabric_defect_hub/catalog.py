@@ -1,23 +1,4 @@
-"""Single source of truth connecting `fdh train` output to the frontend.
-
-`fdh train` registers each run under a run-specific filename (see
-`training.apply_model_overrides` — `<variant>_<checkpoint-name>.pt`), which
-is right for experimentation (nothing clobbers a previous run) but wrong
-for the frontend: `web/single_image.py`'s `MODEL_CATALOG` needs one *stable*
-path per model to load. `publish_artifact` bridges the two: after a
-registered run for a canonical model finishes, it is copied to a fixed
-"published" location that the frontend always reads from.
-
-CANONICAL_MODELS is intentionally NOT "every variant this backend can run"
-(torchvision alone has 15 registered variants, see
-`models/torchvision/presets.MODEL_VARIANTS`) — it is the specific set of
-models this project trains and exposes to the frontend: 3 Ultralytics
-variants, 6 torchvision model families (one representative backbone each —
-Faster R-CNN, Mask R-CNN, Cascade R-CNN, DETR, UNet++, DeepLabV3+ — not
-every VGG16/ShuffleNet backbone swap of each), all 6 Anomalib models
-(including zero-shot WinCLIP), and the vendored Dinomaly and MoECLIP
-research models.
-"""
+"""Canonical model catalog connecting trained artifacts to the frontend."""
 
 from __future__ import annotations
 
@@ -31,13 +12,13 @@ PUBLISHED_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "published"
 
 @dataclass(frozen=True)
 class CanonicalModel:
-    key: str  # stable id, also the published filename stem
-    backend: str  # "ultralytics" | "torchvision" | "anomalib" | "dinomaly" | "moeclip" | "mambaad"
-    variant: str  # model.variant (ultralytics/torchvision) or model.name (anomalib/dinomaly/moeclip/mambaad)
-    task: str  # "detection" | "instance_segmentation" | "segmentation" | "anomaly"
-    config: str  # config filename under configs/models/ used to train + publish this model
-    label: str  # frontend dropdown label
-    source: str  # human-facing provenance string for the frontend status line
+    key: str  # stable model identifier
+    backend: str  # backend engine name
+    variant: str  # model variant / architecture name
+    task: str  # task type (detection, segmentation, anomaly, etc.)
+    config: str  # relative path to config YAML
+    label: str  # display label in UI
+    source: str  # human-facing provenance string
 
 
 CANONICAL_MODELS: list[CanonicalModel] = [
@@ -48,21 +29,21 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "ultralytics_example.yaml", "YOLOv8s · Fabric trained", "local trained artifact"),
     CanonicalModel("yolo11n", "ultralytics", "yolo11n", "detection",
                     "ultralytics_example.yaml", "YOLO11n · Fabric trained", "local trained artifact"),
-    # -- torchvision: detection (boxes; needs ZJU-Leaper-style box data) --
+    # -- torchvision: detection -------------------------------------------
     CanonicalModel("fasterrcnn_resnet50_fpn", "torchvision", "fasterrcnn_resnet50_fpn", "detection",
                     "torchvision_example.yaml", "Faster R-CNN · Fabric trained", "local trained artifact"),
     CanonicalModel("cascadercnn_resnet50_fpn", "torchvision", "cascadercnn_resnet50_fpn", "detection",
                     "torchvision_example.yaml", "Cascade R-CNN · Fabric trained", "local trained artifact"),
     CanonicalModel("detr_resnet50", "torchvision", "detr_resnet50", "detection",
                     "torchvision_example.yaml", "DETR · Fabric trained", "local trained artifact"),
-    # -- torchvision: segmentation (masks; works on all 3 datasets) ------
+    # -- torchvision: segmentation ----------------------------------------
     CanonicalModel("maskrcnn_resnet50_fpn", "torchvision", "maskrcnn_resnet50_fpn", "instance_segmentation",
                     "torchvision_maskrcnn_segmentation.yaml", "Mask R-CNN · Fabric trained", "local trained artifact"),
     CanonicalModel("unetplusplus_resnet34", "torchvision", "unetplusplus_resnet34", "segmentation",
                     "torchvision_maskrcnn_segmentation.yaml", "UNet++ · Fabric trained", "local trained artifact"),
     CanonicalModel("deeplabv3plus_resnet50", "torchvision", "deeplabv3plus_resnet50", "segmentation",
                     "torchvision_maskrcnn_segmentation.yaml", "DeepLabV3+ · Fabric trained", "local trained artifact"),
-    # -- Anomalib: anomaly (all 5 registered models) ----------------------
+    # -- Anomalib: anomaly ------------------------------------------------
     CanonicalModel("PatchCore", "anomalib", "PatchCore", "anomaly",
                     "anomalib_example.yaml", "PatchCore · Normal Lab trained", "Normal Lab"),
     CanonicalModel("PaDiM", "anomalib", "PaDiM", "anomaly",
@@ -73,43 +54,17 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "anomalib_example.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("SuperSimpleNet", "anomalib", "SuperSimpleNet", "anomaly",
                     "anomalib_example.yaml", "SuperSimpleNet · Normal Lab trained", "Normal Lab"),
-    # Two further anomalib families, added so the leaderboard covers more
-    # than memory-bank/distillation approaches. Both are listed here (rather
-    # than left reachable only through `presets.MODEL_ALIASES`) because both
-    # train from fabric data alone -- no external texture source, no
-    # `imagenet_dir` -- so they can be published from a plain
-    # `fdh train` on any machine that has ZJU-Leaper staged.
-    #
-    # The other new presets (DRAEM, DSR, GLASS, FastFlow, UniNet,
-    # AnomalyDINO) stay out of this catalog on purpose: this list drives the
-    # frontend dropdown and the fixed published-weight paths, so an entry
-    # with no trained checkpoint shows up as a selectable-but-missing model
-    # (`web/single_image.py::model_status`). They are added here once they
-    # have actually been trained and published.
     CanonicalModel("STFPM", "anomalib", "STFPM", "anomaly",
                     "anomalib_stfpm.yaml", "STFPM · Normal Lab trained", "Normal Lab"),
-    # The benchmark's only adversarial entry. Image-level scores only -- its
-    # `capabilities()` drops `anomaly_map` (see `presets.IMAGE_LEVEL_ONLY`),
-    # so its row has image AUROC but no pixel AUROC/AUPRO.
     CanonicalModel("GANomaly", "anomalib", "GANomaly", "anomaly",
                     "anomalib_ganomaly.yaml", "GANomaly · Normal Lab trained", "Normal Lab"),
-    # -- WinCLIP: CLIP-based, zero-shot by default (no fabric training data) --
+    # -- Zero-shot & Research models --------------------------------------
     CanonicalModel("WinCLIP", "anomalib", "WinClip", "anomaly",
                     "anomalib_example.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),
-    # -- Dinomaly: anomaly (vendored research model, see components/README.md) --
     CanonicalModel("Dinomaly", "dinomaly", "dinov2reg_vit_base_14", "anomaly",
                     "dinomaly_example.yaml", "Dinomaly · Normal Lab trained", "Normal Lab"),
-    # -- MoECLIP: anomaly (vendored research model, see components/README.md).
-    # The only entry here trained on a *non-fabric* corpus, deliberately: it
-    # is a zero-shot detector, trained on VisA's labelled defects + masks
-    # and applied to fabric it has never seen (see
-    # training.ZERO_SHOT_TRAINABLE_DATASETS). Its fabric scores are transfer
-    # results, which is what the `source` string has to say on the
-    # leaderboard so they aren't read as in-domain ones.
     CanonicalModel("MoECLIP", "moeclip", "ViT-L-14-336", "anomaly",
                     "moeclip_example.yaml", "MoECLIP · Zero-shot", "Zero-shot CLIP (VisA-trained)"),
-    # -- MambaAD: anomaly (clean-room reimplementation, see components/README.md
-    # and models/mambaad/adapter.py -- no components/mambaad submodule) --
     CanonicalModel("MambaAD", "mambaad", "resnet34", "anomaly",
                     "mambaad_example.yaml", "MambaAD · Normal Lab trained", "Normal Lab"),
 ]
@@ -122,14 +77,7 @@ _EXTENSION = {
 
 
 def find_canonical_model(backend: str, variant: str) -> CanonicalModel | None:
-    """Match a resolved (backend, variant/name) pair — case-insensitively
-    for anomalib, whose names are conventionally case-varied aliases of the
-    same model (PatchCore/Patchcore) — against `CANONICAL_MODELS`. Returns
-    `None` for any run that isn't one of this project's published models
-    (a one-off variant sweep, an ad-hoc backbone swap, ...); such runs are
-    still fully usable via `fdh predict`, they just don't get published to
-    the frontend's fixed slot.
-    """
+    """Find a CanonicalModel by backend and variant name."""
 
     needle = variant.strip().lower()
     for model in CANONICAL_MODELS:
@@ -139,14 +87,7 @@ def find_canonical_model(backend: str, variant: str) -> CanonicalModel | None:
 
 
 def find_canonical_model_by_key(key: str) -> CanonicalModel:
-    """Look a catalog entry up by its stable key (`"PatchCore"`, `"yolov8n"`),
-    case-insensitively — the lookup `api.from_pretrained` is built on.
-
-    Raises `KeyError` listing the valid keys, rather than returning None:
-    every caller of this has already committed to a specific model, so an
-    unknown key is a typo to report, not a case to branch on (unlike
-    `find_canonical_model`, whose callers are asking "is this one of ours?").
-    """
+    """Find a CanonicalModel by stable key name."""
 
     match = _BY_KEY.get(key) or next(
         (model for model in CANONICAL_MODELS if model.key.lower() == key.strip().lower()), None
@@ -157,24 +98,12 @@ def find_canonical_model_by_key(key: str) -> CanonicalModel:
 
 
 def published_path(model: CanonicalModel) -> Path:
+    """Return the destination path for published model weights."""
     return PUBLISHED_MODEL_ROOT / f"{model.key}{_EXTENSION[model.backend]}"
 
 
 def metadata_for(model: CanonicalModel) -> dict:
-    """`Artifact.metadata` for a published model, in the shape every
-    backend's `load_trained_model`/`predict` expects (see
-    `web/single_image.py:artifact_for_model`). Anomalib needs `trusted` +
-    `model_class` (the literal anomalib class name, e.g. "Patchcore" for
-    the "PatchCore" alias); Dinomaly needs `encoder_name`/`target_layers`/
-    `image_size`/`crop_size` (the architecture it was built with -- see
-    `DinomalyAdapter._build_model`); MoECLIP needs its backbone + MoE knobs
-    (`img_size`, `moe_layers`, `moe_num_experts`, ... — see
-    `MoECLIPAdapter._build_model`); MambaAD needs its decoder knobs
-    (`dims_decoder`, `depths_decoder`, `scan_type`, `num_direction`, ... —
-    see `MambaADAdapter._build_model`) — all resolved here rather than
-    hand-typed onto each `CanonicalModel` entry, so a presets.py rename
-    can't silently drift out of sync with this catalog.
-    """
+    """Return runtime metadata dictionary for a published model."""
 
     if model.backend == "anomalib":
         from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
@@ -229,11 +158,7 @@ def metadata_for(model: CanonicalModel) -> dict:
 
 
 def publish_artifact(backend: str, variant: str, registered_artifact_path: str) -> Path | None:
-    """Copy a freshly-registered training artifact to its fixed, frontend-
-    facing location (see module docstring). Returns the published path, or
-    `None` if (backend, variant) isn't one of `CANONICAL_MODELS` — i.e.
-    nothing to publish, not an error.
-    """
+    """Copy a newly registered model checkpoint to the published model root."""
 
     model = find_canonical_model(backend, variant)
     if model is None:

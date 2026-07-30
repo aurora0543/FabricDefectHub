@@ -1,13 +1,4 @@
-"""The single entry point the rest of the project (CLI, frontend backend,
-notebooks) is meant to call: resolve a dataset + model by name, run the
-train/predict/evaluate/profile lifecycle, and return a unified
-`ExperimentResult`.
-
-This is the "basic core" referenced in the README's Phase 1 goal:
-`YOLOv8n + one dataset + PC inference + result JSON`. Concrete dataset and
-model backends register themselves with `fabric_defect_hub.core.registry`;
-this module only knows the registry, never a specific framework.
-"""
+"""Unified dataset and model resolution loader."""
 
 from __future__ import annotations
 

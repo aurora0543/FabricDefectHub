@@ -102,7 +102,9 @@ def _reset_peak_memory(device) -> None:
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     elif device.type == "mps":
-        torch.mps.reset_peak_memory_stats()
+        reset_peak = getattr(torch.mps, "reset_peak_memory_stats", None)
+        if callable(reset_peak):
+            reset_peak()
 
 
 def _peak_memory_bytes(device) -> int:

@@ -272,7 +272,7 @@ This is the stable location the frontend's `MODEL_CATALOG`
 (`web/single_image.py`) reads from — re-running training for any one
 model overwrites just that model's file here, nothing else.
 
-## 10. Outstanding GPU work (INTERFACE_TASKS.md C4 / E3)
+## 10. Outstanding GPU work
 
 Three things are blocked on this box specifically and nowhere else. Verified
 locally only to "constructs and runs end to end at smoke scale" — no accuracy
@@ -298,14 +298,13 @@ GANomaly reports **image-level metrics only** (`image_auroc`, no
 distance between two latent vectors and has no spatial output — see
 `models/anomalib/presets.py::IMAGE_LEVEL_ONLY`.
 
-### 10b. Reproduce the eight new anomalib families against their papers (E3)
+### 10b. Reproduce the eight new anomalib families against their papers
 
 `fdh models --backend anomalib` now lists 14 models; eight were added without
 a reproduction, and therefore deliberately carry **no `recipe_id`** (a profile
 in this project means "settings anchored to that method's paper"). Earning one
-means running the model at its published settings, comparing against the
-paper's reported MVTec numbers, and recording the result the way
-`docs/REPRODUCTION_PATCHCORE.md` does.
+means running the model at its published settings and comparing against the
+paper's reported MVTec numbers.
 
 Runnable with nothing extra staged: `fdh train fastflow`, `dsr`, `uninet`,
 `glass`, `anomalydino` (each resolves to `anomalib_example.yaml`, so pass

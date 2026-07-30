@@ -381,7 +381,9 @@ def create_app():
                             )
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
                             bench_texture = gr.Dropdown(
-                                texture_choices(default_dataset), value="All textures",
+                                texture_choices(default_dataset),
+                                value=["Pattern 1-4 (Train patterns)"] if default_dataset == "ZJU-Leaper" else ["All textures"],
+                                multiselect=True,
                                 label=tr(lang0, "benchmark_texture_label"),
                             )
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
@@ -426,13 +428,6 @@ def create_app():
                             )
                     bench_status = gr.Markdown(tr(lang0, "benchmark_placeholder"), elem_classes="fdh-status")
 
-                    # Charts sit above the leaderboard table, and their
-                    # selectors sit above both in one shared filter row --
-                    # never inside an individual chart card, so it stays
-                    # obvious what each control scopes. `bench_rows_state`
-                    # holds the last run's scored rows so changing a
-                    # selector redraws from memory instead of re-running
-                    # every model's inference.
                     bench_rows_state = gr.State([])
                     with gr.Row():
                         with gr.Column(scale=3, elem_classes="fdh-control-card"):
@@ -441,12 +436,12 @@ def create_app():
                             radar_axes = gr.CheckboxGroup(choices=[], label=tr(lang0, "radar_axes_label"))
                         with gr.Column(scale=4, elem_classes="fdh-control-card"):
                             radar_models = gr.CheckboxGroup(
-                                choices=[], label=tr(lang0, "radar_models_label", count=MAX_RADAR_MODELS)
+                                choices=[], label=tr(lang0, "radar_models_label")
                             )
                     with gr.Row(equal_height=True):
-                        with gr.Column(scale=6, elem_classes="fdh-card"):
+                        with gr.Column(scale=6, elem_classes="fdh-card fdh-scroll-chart"):
                             bench_bar_chart = gr.BarPlot(
-                                x="model", label=tr(lang0, "chart_bar_label"), sort="-y", height=320,
+                                x="model", label=tr(lang0, "chart_bar_label"), sort="-y", height=320, x_label_angle=-45,
                             )
                         with gr.Column(scale=6, elem_classes="fdh-card"):
                             bench_radar = gr.HTML(
@@ -455,8 +450,10 @@ def create_app():
                     bench_results = gr.Dataframe(label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True)
 
                     def bench_dataset_change_handler(dataset_label, lang):
+                        choices = texture_choices(dataset_label)
+                        default_val = ["Pattern 1-4 (Train patterns)"] if dataset_label == "ZJU-Leaper" else ["All textures"]
                         return (
-                            gr.Dropdown(choices=texture_choices(dataset_label), value="All textures"),
+                            gr.Dropdown(choices=choices, value=default_val, multiselect=True),
                             gr.CheckboxGroup(choices=compatible_models(dataset_label), value=[]),
                         )
 
@@ -465,12 +462,6 @@ def create_app():
                         include_profiling, include_resolution_sweep, cross_domain_choice,
                         score_preset, custom_weight, lang,
                     ):
-                        """Stream the leaderboard, and re-derive the charts
-                        (and their selectors' choices) on every model that
-                        finishes -- the available metrics only become known
-                        as results land, so the selectors can't be populated
-                        up front."""
-
                         cross_domain_label = (
                             None if cross_domain_choice in (None, tr(lang, "benchmark_cross_domain_none"))
                             else cross_domain_choice
@@ -483,28 +474,29 @@ def create_app():
                             score_preset=score_preset,
                             custom_technical_weight=custom_weight,
                         ):
-                            table = gr.Dataframe(headers=columns, value=rows) if columns else gr.Dataframe(value=[])
                             metric = default_bar_metric(columns)
                             axes = default_radar_axes(scored)
                             models = default_radar_models(scored)
                             yield (
-                                table,
+                                gr.update(headers=columns, value=rows) if columns else gr.update(value=[]),
                                 status,
                                 scored,
-                                gr.Dropdown(choices=metric_choices(columns), value=metric),
-                                gr.CheckboxGroup(choices=radar_axis_choices(scored), value=axes),
-                                gr.CheckboxGroup(choices=model_choices(scored), value=models),
-                                gr.BarPlot(
+                                gr.update(choices=metric_choices(columns), value=metric),
+                                gr.update(choices=radar_axis_choices(scored), value=axes),
+                                gr.update(choices=model_choices(scored), value=models),
+                                gr.update(
                                     value=bar_frame(scored, metric), x="model",
                                     y=metric or "model", y_lim=bar_y_limits(scored, metric),
+                                    x_label_angle=-45,
                                 ),
                                 render_radar_svg(scored, axes, models, lang),
                             )
 
                     def bar_redraw_handler(scored, metric):
-                        return gr.BarPlot(
+                        return gr.update(
                             value=bar_frame(scored, metric), x="model",
                             y=metric or "model", y_lim=bar_y_limits(scored, metric),
+                            x_label_angle=-45,
                         )
 
                     def radar_redraw_handler(scored, axes, models, lang):

@@ -21,13 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ANOMALY_MAP_ROOT = PROJECT_ROOT / "artifacts" / "runtime" / "anomaly_maps"
 _SSD_VOLUME_PARENT = Path("anomaly-detection-challenges") / "datasets"
 
-# Generated from `catalog.CANONICAL_MODELS` — the same list `fdh train`
-# publishes to (see `catalog.publish_artifact`, called from
-# `training.run_train`) — so training a canonical model and refreshing this
-# page is the entire "get it into the UI" workflow; no manual catalog edits.
-# `checkpoint` points at each model's fixed *published* path, not the
-# run-specific path `fdh train` registers under (see catalog.py's docstring
-# for why those differ).
+# Generated from `catalog.CANONICAL_MODELS`
 MODEL_CATALOG = {
     model.label: {
         "backend": model.backend,
@@ -285,6 +279,9 @@ def _visa_categories(root: str) -> list[str]:
     )
 
 
+TRAIN_PATTERNS_PRESET = "Pattern 1-4 (Train patterns)"
+
+
 def texture_choices(dataset_label: str) -> list[str]:
     """Discover available texture/category slices from the registered
     dataset root. Datasets without a subdivision (`slice_kwarg` is None)
@@ -300,12 +297,12 @@ def texture_choices(dataset_label: str) -> list[str]:
     if spec["name"] == "zju-leaper":
         patterns = Path(root) / "ImageSets" / "Patterns" if root else None
         if patterns is None or not patterns.is_dir():
-            return choices
+            return choices + [TRAIN_PATTERNS_PRESET]
         pattern_ids = sorted(
             (path.stem.removeprefix("pattern") for path in patterns.glob("pattern*.json")),
             key=lambda value: int(value) if value.isdigit() else value,
         )
-        return choices + [f"Pattern {pattern_id}" for pattern_id in pattern_ids]
+        return choices + [TRAIN_PATTERNS_PRESET] + [f"Pattern {pattern_id}" for pattern_id in pattern_ids]
 
     if spec["name"] in ("mvtec-ad", "mvtec-loco"):
         return choices + _mvtec_ad_categories(root)
@@ -316,15 +313,34 @@ def texture_choices(dataset_label: str) -> list[str]:
     return choices
 
 
-def slice_value(dataset_label: str, texture_label: str) -> str | None:
+def slice_value(dataset_label: str, texture_label: str | list[str] | tuple[str, ...] | None) -> str | list[str] | None:
     """Resolve the "Texture / pattern" dropdown's selection into the value
     passed to the selected dataset's `slice_kwarg` (e.g. "pattern7" for
-    ZJU-Leaper, "bottle" for MVTec AD)."""
+    ZJU-Leaper, "bottle" for MVTec AD). Accepts single strings or lists/tuples
+    for multi-pattern filtering."""
 
-    if texture_label == ALL_TEXTURES:
+    if not texture_label or texture_label == ALL_TEXTURES:
         return None
+
+    if isinstance(texture_label, (list, tuple)):
+        if ALL_TEXTURES in texture_label:
+            return None
+        resolved = []
+        for item in texture_label:
+            val = slice_value(dataset_label, item)
+            if val is None:
+                return None
+            if isinstance(val, list):
+                resolved.extend(val)
+            else:
+                resolved.append(val)
+        dedup = list(dict.fromkeys(resolved))
+        return dedup if len(dedup) > 1 else (dedup[0] if dedup else None)
+
     spec = DATASET_CATALOG[dataset_label]
     if spec["name"] == "zju-leaper":
+        if texture_label == TRAIN_PATTERNS_PRESET:
+            return ["pattern1", "pattern2", "pattern3", "pattern4"]
         if texture_label.lower().startswith("pattern "):
             return f"pattern{texture_label.split()[-1]}"
         raise ValueError(f"Unknown texture selection {texture_label!r}.")

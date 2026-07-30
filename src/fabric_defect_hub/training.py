@@ -1,30 +1,4 @@
-"""The single `train` entry point: pick a model config, let the backend be
-detected from keywords in that config (or state it explicitly), optionally
-point at a different dataset, and optionally override the shot mode
-(full-shot / medium-shot / few-shot / an 8-image test-shot smoke run) —
-then hand the fully-resolved config to that backend's own
-`run_from_config`.
-
-For ZJU-Leaper, the shot mode changes how many samples are selected, not
-which explicitly configured fabric patterns are selected: "few" keeps the
-config's count, "medium" applies a per-pattern cap, and "full" takes every
-image from that same pattern subset. A config without a pattern restriction
-continues to mean the full 19-pattern benchmark.
-
-This sits one layer above `models/{ultralytics,torchvision,anomalib}
-/pipeline.py`: those already execute a fully-declarative single-backend
-YAML config end to end. What was missing was one door in front of all
-three that (a) tells them apart by keyword instead of requiring the caller
-to already know the backend, and (b) lets the train/val sample-selection
-dicts embedded in that YAML be overridden from the command line without
-hand-editing the file — while still respecting each backend's own rules
-about what a "training split" is allowed to contain (see
-`apply_dataset_overrides`'s docstring on Anomalib's one-class training).
-
-Every override defaults to `None` ("leave the model config's own value
-alone"), so `fdh train configs/models/ultralytics_example.yaml` with no
-extra flags behaves exactly like `fdh run` on that same file.
-"""
+"""Training resolution, dataset override, and execution entry points."""
 
 from __future__ import annotations
 

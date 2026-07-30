@@ -191,7 +191,7 @@ file. It takes `ModelInfo`/`RuntimeInfo` explicitly â€” which is precisely why Â
 exists for the common case.
 
 The loading strategies (`sparse_ratio`, `tiling`, `tta_mode`, BatchNorm
-calibration) are documented in [`SDLP_STRATEGIES.md`](SDLP_STRATEGIES.md).
+calibration) are documented in [`MODEL_CONFIGURATION.md`](MODEL_CONFIGURATION.md).
 
 ---
 
