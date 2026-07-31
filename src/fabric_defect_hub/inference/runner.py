@@ -75,6 +75,15 @@ class PredictInput:
     pattern: str | int | None = None
     category: str | None = None
     seed: int = 0
+    # Which ground truth to attach when loading the dataset — distinct from
+    # `run_evaluate`'s `task`, which picks the *evaluator*. A dataset that
+    # serves several tasks (ZJU-Leaper: anomaly, segmentation, detection)
+    # attaches only one of them, and its default is not necessarily the one
+    # the model needs: loading ZJU-Leaper's default `anomaly` samples and
+    # then scoring a YOLO run against them yields boxes with no box ground
+    # truth to match, i.e. no metrics at all. Ignored when the dataset does
+    # not declare the task in `core.dataset_capabilities`.
+    task: str | None = None
 
 
 @dataclass
@@ -98,10 +107,24 @@ class EvaluateRunResult:
     config_path: str | None = None
 
 
-def _build_adapter(backend: str, variant: str):
+def build_adapter(backend: str, variant: str):
+    """Construct a backend's `ModelAdapter` by name.
+
+    Public because `_ADAPTER_MODULES` is the project's one backend->module
+    table and a second caller (`metric_sweep`, which needs `capabilities()`
+    and `export()`) must not carry its own copy. Note this deliberately does
+    *not* go through `core.registry.get_model_cls`: that registry is
+    populated by `@register_model` at import time, so it is empty until
+    something has already imported the backend — which is exactly the
+    ordering bug that made an unattended sweep silently skip every model.
+    """
+
     module_name, cls_name = _ADAPTER_MODULES[backend]
     cls = getattr(importlib.import_module(module_name), cls_name)
     return cls(name=variant)
+
+
+_build_adapter = build_adapter
 
 
 def _resolve_weights_artifact(backend: str, weights: str) -> Artifact | str:
@@ -159,9 +182,27 @@ def _load_samples(source: PredictInput, capabilities: ModelCapabilities) -> list
         kwargs["pattern"] = source.pattern
     if source.category is not None:
         kwargs["category"] = source.category
+    if source.task is not None and _dataset_serves(source.dataset, source.task):
+        kwargs["task"] = source.task
 
     dataset = load_dataset(source.dataset, root=root, split=source.split, **kwargs)
     return dataset.load_samples()
+
+
+def _dataset_serves(dataset: str, task: str) -> bool:
+    """Whether `dataset` declares ground truth for `task`.
+
+    Asking `core.dataset_capabilities` rather than passing `task` blindly:
+    not every `DatasetAdapter` takes a `task` kwarg, and a dataset that has
+    no boxes cannot be made to produce them by being asked.
+    """
+
+    from fabric_defect_hub.core.dataset_capabilities import capabilities_for
+
+    try:
+        return task in capabilities_for(dataset).tasks
+    except KeyError:
+        return False
 
 
 def run_predict(

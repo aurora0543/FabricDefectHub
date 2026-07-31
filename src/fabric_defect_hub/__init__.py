@@ -30,14 +30,18 @@ for both paths.
 
 from fabric_defect_hub import recipes
 from fabric_defect_hub.api import (
+    BenchmarkResult,
     PretrainedWeights,
     RunConfig,
     evaluate,
     from_pretrained,
     list_datasets,
+    list_metric_tables,
     list_models,
     list_pretrained,
     load_config,
+    load_results,
+    measure,
     predict,
     train,
 )
@@ -73,6 +77,13 @@ __all__ = [
     "list_pretrained",
     "RunConfig",
     "PretrainedWeights",
+    # -- measurement (metric_sweep + metrics_taxonomy) -----------------
+    # `measure`, not `benchmark`: `fabric_defect_hub.benchmark` is a module,
+    # and a same-named facade function would be shadowed on import.
+    "measure",
+    "load_results",
+    "list_metric_tables",
+    "BenchmarkResult",
     # -- composing a run by hand --------------------------------------
     "run_experiment",
     "recipes",

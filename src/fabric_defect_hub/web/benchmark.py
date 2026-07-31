@@ -93,16 +93,25 @@ def _profile_setup(model: Any, device: str):
     """
 
     capabilities = model.capabilities()
+    # The profiler follows the artifact, rather than the export being forced
+    # to suit one profiler. Restricting this to torchscript/exported_program
+    # meant every anomalib model (PatchCore, PaDiM, RD4AD, ...) reported
+    # "no PyTorchProfiler-compatible export target" and silently lost its
+    # whole overhead row — anomalib exports ONNX. Same rule as
+    # `metric_sweep._profiler_for`, deliberately spelled the same way.
+    engine_for_target = {
+        "exported_program": "pytorch", "torchscript": "pytorch", "onnx": "onnxruntime",
+    }
     export_target = next(
-        (target for target in ("exported_program", "torchscript") if target in capabilities.export_targets),
-        None,
+        (target for target in engine_for_target if target in capabilities.export_targets), None
     )
     if export_target is None:
         return None
 
-    profiler = get_profiler_cls("pytorch")()
+    engine = engine_for_target[export_target]
+    profiler = get_profiler_cls(engine)()
     config = ProfileConfig(
-        device=device, engine="pytorch", precision="fp32", input_size=(640, 640),
+        device=device, engine=engine, precision="fp32", input_size=(640, 640),
         input_style=capabilities.export_input_style, warmup_runs=5, measured_runs=20,
     )
     return profiler, config, export_target
@@ -126,7 +135,14 @@ def _profile_model(model: Any, artifact: Any, device: str) -> dict[str, float]:
             "'exported_program' and 'torchscript'"
         )
     profiler, config, export_target = setup
-    exported = model.export(artifact, target=export_target, config={"input_size": config.input_size})
+    # No export config: the dict is forwarded verbatim into the backend's own
+    # exporter, and each backend has its own vocabulary — Ultralytics rejects
+    # any key YOLO does not define ("'input_size' is not a valid YOLO
+    # argument"), which made profiling fail for every YOLO model while the
+    # error surfaced only as a status-line footnote. `config.input_size`
+    # shapes the *profiler's* dummy input; the export keeps its defaults,
+    # which are what `metric_sweep._try_export` profiles successfully.
+    exported = model.export(artifact, target=export_target)
     export_path = Path(exported.path)
     if not export_path.is_file():
         raise FileNotFoundError(f"exported model does not exist: {export_path}")
@@ -143,23 +159,26 @@ def _resolution_sweep(model: Any, artifact: Any, device: str) -> dict[str, float
     accuracy evaluation too).
     """
 
-    from fabric_defect_hub.profiling.scaling import throughput_resolution_slope
+    from fabric_defect_hub.profiling.sweeps import resolution_scaling
 
     profiler = get_profiler_cls("pytorch")()
     input_style = model.capabilities().export_input_style
     exported = model.export(artifact, target="torchscript")
-    resolutions: list[float] = []
-    throughputs: list[float] = []
-    for size in RESOLUTION_SWEEP_SIZES:
-        config = ProfileConfig(
-            device=device, engine="pytorch", precision="fp32", input_size=(size, size),
-            input_style=input_style, warmup_runs=2, measured_runs=5,
+    config = ProfileConfig(
+        device=device, engine="pytorch", precision="fp32",
+        input_style=input_style, warmup_runs=2, measured_runs=5,
+    )
+    # `resolution_scaling` (the same driver `fdh.measure` uses) drops sizes
+    # the export cannot run instead of dying on the first one — an
+    # Ultralytics TorchScript bakes in its imgsz, so this loop used to raise
+    # at the first non-native size and forfeit the whole sweep.
+    metrics = resolution_scaling(profiler, exported, config, sides=RESOLUTION_SWEEP_SIZES)
+    if not metrics:
+        raise RuntimeError(
+            "fewer than two resolutions were measurable — the export is fixed-shape, "
+            "so a decay slope cannot be fitted for this model"
         )
-        metrics = profiler.profile(exported, config)
-        resolutions.append(float(size))
-        throughputs.append(float(metrics["fps"]))
-    slope = throughput_resolution_slope(resolutions, throughputs)
-    return {"resolution_slope_beta": slope["beta"], "resolution_slope_alpha": slope["alpha"]}
+    return metrics
 
 
 def _flops_and_lmei(
@@ -419,7 +438,7 @@ def _render(
 ) -> tuple[list[str], list[list[Any]], str, list[dict[str, Any]]]:
     """Returns `(columns, table, status, scored)`. `table` is the
     positional, display-formatted form the `gr.Dataframe` wants; `scored` is
-    the same rows as metric-name-keyed dicts, which is what `web/charts.py`
+    the same rows as metric-name-keyed dicts, which is what `web/tables.py`
     needs (a chart looks metrics up by name, it can't use column offsets).
     Both come from one `score_rows` call so the charts and the table can
     never show different numbers."""

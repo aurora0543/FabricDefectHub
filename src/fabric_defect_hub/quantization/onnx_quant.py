@@ -133,6 +133,57 @@ def quantize_onnx(
     )
 
 
+def quantize_and_register(
+    artifact: ExportedArtifact,
+    level: QuantizationLevel,
+    *,
+    backend: str,
+    variant: str | None,
+    project_root: str | Path | None = None,
+    calibration_samples: list[Sample] | None = None,
+    input_size: tuple[int, int] = (640, 640),
+) -> ExportedArtifact:
+    """`quantize_onnx` into the project's quantized-model root, and record the
+    result in `weight_manifest.jsonl`.
+
+    This is the entry point anything automated should use. `quantize_onnx`
+    stays the primitive — it takes an explicit `output_path` and writes
+    nothing else, which is what makes it testable — but a quantized file
+    written to an arbitrary path is exactly the artifact that later cannot be
+    attributed to a run. Here the destination comes from
+    `catalog.quantized_path` and the provenance row is written alongside it,
+    so `ΔRecall_small` computed against this file can name the fp32
+    checkpoint it is being compared to.
+    """
+
+    from fabric_defect_hub.catalog import PROJECT_ROOT, quantized_path
+    from fabric_defect_hub.weight_registry import record_quantized_weight
+
+    root = Path(project_root) if project_root else PROJECT_ROOT
+    destination = quantized_path(backend, variant or backend, level)
+    if project_root is not None:
+        destination = (
+            Path(project_root) / destination.relative_to(PROJECT_ROOT)
+            if destination.is_relative_to(PROJECT_ROOT)
+            else destination
+        )
+
+    quantized = quantize_onnx(
+        artifact, level, destination,
+        calibration_samples=calibration_samples, input_size=input_size,
+    )
+    record_quantized_weight(
+        project_root=root,
+        backend=backend,
+        variant=variant,
+        level=level,
+        source_path=artifact.path,
+        quantized_artifact=quantized,
+        calibration_sample_count=len(calibration_samples) if calibration_samples else None,
+    )
+    return quantized
+
+
 def _quantize_fp16(source_path: Path, output: Path) -> None:
     import onnx
     from onnxconverter_common import float16

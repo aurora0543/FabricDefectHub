@@ -54,6 +54,11 @@ def record_weight(
     primary = published or registered_path
     record = {
         "schema_version": 1,
+        # Distinguishes a trained checkpoint from a derived artifact such as a
+        # quantized export (`record_quantized_weight`). Absent on records
+        # written before derived artifacts existed; readers should treat a
+        # missing `kind` as "trained".
+        "kind": "trained",
         "record_id": record_id,
         "recorded_at": timestamp,
         "batch_run_id": run_id,
@@ -77,6 +82,72 @@ def record_weight(
         "metrics": _json_safe(metrics or {}),
         "artifact_metadata": _json_safe(registered_artifact.metadata),
         # Same block `reporting.append_run_log` attaches to evaluation rows.
+        "provenance": collect_provenance(),
+    }
+    manifest_path = models_root / MANIFEST_FILENAME
+    with manifest_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return manifest_path
+
+
+def record_quantized_weight(
+    *,
+    project_root: str | Path,
+    backend: str,
+    variant: str | None,
+    level: str,
+    source_path: str | Path,
+    quantized_artifact: Any,
+    calibration_sample_count: int | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> Path:
+    """Persist one record for a quantized export, in the same manifest as the
+    trained weights it derives from.
+
+    Without this, a quantized model was untraceable: `quantize_onnx` wrote to
+    whatever path its caller passed and nothing recorded which fp32
+    checkpoint, which commit, or which calibration set produced it — so an
+    INT8 accuracy number could never be attributed to a specific run. The
+    record carries `source_path`, which is the registered fp32 checkpoint, so
+    the two rows join on it.
+
+    `calibration_sample_count` is recorded rather than the sample list: for
+    `int8-static` the size of the calibration set is the single most common
+    explanation for an unexpectedly bad quantized model, and a run log that
+    omits it cannot distinguish "INT8 hurts this architecture" from
+    "calibrated on eight images".
+    """
+
+    root = Path(project_root)
+    models_root = root / "artifacts" / "models"
+    models_root.mkdir(parents=True, exist_ok=True)
+
+    quantized_path = Path(quantized_artifact.path)
+    record = {
+        "schema_version": 1,
+        "kind": "quantized",
+        "record_id": f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}_{_slug(f'{variant or backend}-{level}')}_{uuid4().hex[:8]}",
+        "recorded_at": _timestamp(),
+        "batch_run_id": os.environ.get("FDH_BATCH_RUN_ID"),
+        "model_key": os.environ.get("FDH_BATCH_MODEL_KEY"),
+        "backend": backend,
+        "variant": variant,
+        "quantization": {
+            "level": level,
+            "source_path": str(Path(source_path).resolve()),
+            "calibration_sample_count": calibration_sample_count,
+        },
+        "artifact": {
+            "primary_path": str(quantized_path),
+            "primary_location": "quantized",
+            "registered_path": str(quantized_path),
+            "published_path": None,
+            "size_bytes": quantized_path.stat().st_size if quantized_path.is_file() else None,
+        },
+        "metrics": _json_safe(metrics or {}),
+        "artifact_metadata": _json_safe(getattr(quantized_artifact, "metadata", {}) or {}),
         "provenance": collect_provenance(),
     }
     manifest_path = models_root / MANIFEST_FILENAME

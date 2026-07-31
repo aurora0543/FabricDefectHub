@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from fabric_defect_hub.models.base import Artifact
 
@@ -172,11 +172,19 @@ def from_pretrained(key: str) -> PretrainedWeights:
     the weights themselves are produced by `fdh train`, not shipped in git.
     """
 
-    from fabric_defect_hub.catalog import find_canonical_model_by_key, metadata_for, published_path
+    from fabric_defect_hub.catalog import (
+        describe_published, find_canonical_model_by_key, metadata_for,
+        published_is_usable, published_path, published_status,
+    )
 
     model = find_canonical_model_by_key(key)
     path = published_path(model)
-    if not path.is_file():
+    if not published_is_usable(path):
+        if published_status(path) == "broken_link":
+            # A different problem from "never trained", and telling the two
+            # apart is the difference between copying one directory and
+            # spending GPU-hours retraining something already on disk.
+            raise FileNotFoundError(f"published weights for {key!r} are unreachable: {describe_published(path)}")
         raise FileNotFoundError(
             f"no published weights for {key!r} at {path}. Train and publish it first "
             f"(`fdh train {model.config}` with variant {model.variant!r}), or pick another "
@@ -198,12 +206,12 @@ def list_pretrained(*, available_only: bool = False) -> list[str]:
     those whose weights are actually present on this machine.
     """
 
-    from fabric_defect_hub.catalog import CANONICAL_MODELS, published_path
+    from fabric_defect_hub.catalog import CANONICAL_MODELS, published_is_usable, published_path
 
     return [
         model.key
         for model in CANONICAL_MODELS
-        if not available_only or published_path(model).is_file()
+        if not available_only or published_is_usable(published_path(model))
     ]
 
 
@@ -358,6 +366,202 @@ def evaluate(
         output_dir=output_dir,
         **kwargs,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Layer 4 -- measurement
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class BenchmarkResult:
+    """A finished measurement run: the raw rows, plus the tables they group into.
+
+    Returned by `benchmark()` and by `load_results()`, so a script that just
+    measured and a page reading yesterday's JSONL hold the same object and
+    render the same tables. That equivalence is the point — the Gradio app is
+    a *reader* of this, never a second implementation of it.
+    """
+
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    header: dict[str, Any] = field(default_factory=dict)
+    output_path: str | None = None
+
+    def tables(self, *, include_unimplemented: bool = True) -> list[Any]:
+        """Every declared table, in taxonomy order (`MetricTable` objects)."""
+
+        from fabric_defect_hub.metrics_taxonomy import build_tables
+
+        return build_tables(self.rows, include_unimplemented=include_unimplemented)
+
+    def by_category(self) -> dict[str, list[Any]]:
+        """`{"technical": [...], "overhead": [...]}` — the two-part split."""
+
+        from fabric_defect_hub.metrics_taxonomy import tables_by_category
+
+        return tables_by_category(self.tables())
+
+    def table(self, name: str) -> Any:
+        """One table by name, e.g. `"pixel_level"` or `"compute"`."""
+
+        for candidate in self.tables():
+            if candidate.name == name:
+                return candidate
+        from fabric_defect_hub.metrics_taxonomy import TABLES
+
+        raise KeyError(f"unknown table {name!r}; expected one of {list(TABLES)}")
+
+    def unrecognised_metrics(self) -> list[str]:
+        """Measured keys with no home in the taxonomy — a metric that is
+        computed and then shown nowhere is a silent hole, so it is reported."""
+
+        from fabric_defect_hub.metrics_taxonomy import unrecognised
+
+        return unrecognised(
+            key for row in self.rows for key in (row.get("metrics") or {})
+        )
+
+    def summary(self) -> dict[str, Any]:
+        from fabric_defect_hub.metric_sweep import summarize
+
+        return summarize(self.rows)
+
+    def to_json(self, path: str | Path) -> Path:
+        """Write the grouped tables as one JSON document.
+
+        Distinct from the sweep's JSONL, which is the append-only measurement
+        log: this is the *presentation* shape (two categories, named tables,
+        formatted cells) that a report or a page consumes.
+        """
+
+        import json
+
+        payload = {
+            "header": self.header,
+            "categories": {
+                category: [
+                    {
+                        "name": table.name,
+                        "status": table.status,
+                        "note": table.note,
+                        "header": table.header(),
+                        "rows": table.as_matrix(),
+                    }
+                    for table in tables
+                ]
+                for category, tables in self.by_category().items()
+            },
+            "unrecognised_metrics": self.unrecognised_metrics(),
+        }
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+        return destination
+
+
+def measure(
+    dataset: str,
+    *,
+    project_root: str | Path | None = None,
+    output_path: str | Path | None = None,
+    groups: Sequence[str] | None = None,
+    models: Sequence[str] | None = None,
+    dataset_root: str | None = None,
+    split: str = "test",
+    num_samples: int | None = 100,
+    pattern: str | int | None = None,
+    category: str | None = None,
+    seed: int = 0,
+    device: str = "cpu",
+    anomaly_map_dir: str | Path | None = None,
+    cross_domain_patterns: Sequence[str] = (),
+    cross_domain_k: int = 3,
+    cross_domain_mode: str = "worst",
+    frame_budget_ms: float = 33.0,
+    max_streams_to_try: int = 8,
+    measured_runs: int = 50,
+    warmup_runs: int = 5,
+    on_row: Any = None,
+) -> BenchmarkResult:
+    """Measure every implemented metric over every model that has weights.
+
+    The fourth verb beside `train` / `predict` / `evaluate`, and named
+    `measure` rather than `benchmark` for a concrete reason: a top-level
+    module `fabric_defect_hub.benchmark` already exists (the config-driven
+    runner behind `fdh benchmark <config.yaml>`), and Python binds a
+    submodule as an attribute of its package on import — so a facade function
+    called `benchmark` would be silently replaced by the module the first
+    time anything imported it. `test_api_facade` catches exactly that.
+
+    The library entry point the project is meant to be driven by:
+
+        import fabric_defect_hub as fdh
+
+        result = fdh.measure("zju-leaper", num_samples=200)
+        result.to_json("report.json")
+        for table in result.by_category()["technical"]:
+            print(table.name, table.header(), table.as_matrix())
+
+    Nothing raises per model: a backend that is not installed, weights that
+    vanished, or an export that fails become rows with a status and a reason,
+    so an unattended run after a training batch finishes with results for
+    everything that could be measured.
+
+    `on_row` is called with each `SweepRow` as it completes — how a progress
+    bar or a live table updates without this layer knowing about any UI.
+    """
+
+    from fabric_defect_hub.metric_sweep import METRIC_GROUPS, SweepRequest, read_sweep, run_sweep
+
+    root = Path(project_root) if project_root else Path.cwd()
+    destination = Path(output_path) if output_path else root / "artifacts" / "runtime" / "benchmark.jsonl"
+    request = SweepRequest(
+        project_root=root,
+        dataset=dataset,
+        output_path=destination,
+        groups=tuple(groups) if groups else METRIC_GROUPS,
+        models=tuple(models) if models else None,
+        dataset_root=dataset_root,
+        split=split,
+        num_samples=num_samples,
+        pattern=str(pattern) if pattern is not None else None,
+        category=category,
+        seed=seed,
+        device=device,
+        anomaly_map_dir=Path(anomaly_map_dir) if anomaly_map_dir else None,
+        cross_domain_patterns=tuple(str(p) for p in cross_domain_patterns),
+        cross_domain_k=cross_domain_k,
+        cross_domain_mode=cross_domain_mode,
+        frame_budget_ms=frame_budget_ms,
+        max_streams_to_try=max_streams_to_try,
+        measured_runs=measured_runs,
+        warmup_runs=warmup_runs,
+    )
+    run_sweep(request, on_row=on_row)
+    header, rows = read_sweep(destination)
+    return BenchmarkResult(rows=rows, header=header, output_path=str(destination))
+
+
+def load_results(path: str | Path) -> BenchmarkResult:
+    """Re-open a sweep JSONL as a `BenchmarkResult`.
+
+    What lets a page render tables without re-measuring, and what makes
+    "yesterday's run" and "the run I just did" the same object.
+    """
+
+    from fabric_defect_hub.metric_sweep import read_sweep
+
+    header, rows = read_sweep(path)
+    return BenchmarkResult(rows=rows, header=header, output_path=str(path))
+
+
+def list_metric_tables() -> dict[str, list[str]]:
+    """The declared table names per category, without measuring anything —
+    so a front end can lay out its sections before any run exists."""
+
+    from fabric_defect_hub.metrics_taxonomy import OVERHEAD_TABLES, TECHNICAL_TABLES
+
+    return {"technical": list(TECHNICAL_TABLES), "overhead": list(OVERHEAD_TABLES)}
 
 
 def _as_predict_input(

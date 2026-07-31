@@ -84,6 +84,7 @@ def test_the_scan_actually_covers_the_project():
     assert all(p.is_file() for p in VENDOR_MODULES), "vendor modules moved; update this test"
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("path", _project_sources(), ids=lambda p: str(p.relative_to(SRC_ROOT)))
 def test_upstream_modules_are_named_only_inside_vendor_modules(path):
     if path in VENDOR_MODULES:
@@ -99,6 +100,7 @@ def test_upstream_modules_are_named_only_inside_vendor_modules(path):
     )
 
 
+@pytest.mark.architecture
 def test_vendor_modules_do_not_import_upstream_at_module_scope():
     """Even inside `vendor.py`, upstream names must be resolved through
     `VendoredRepo` at call time — a module-scope `import utils` would run at

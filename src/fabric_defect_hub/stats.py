@@ -50,6 +50,54 @@ def least_squares_slope(x: Sequence[float], y: Sequence[float]) -> tuple[float, 
     return beta, alpha
 
 
+def bootstrap_ci(
+    values: Sequence,
+    statistic: Callable[[Sequence], float],
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int | None = 0,
+) -> dict[str, float]:
+    """Percentile-bootstrap CI for `statistic(values)` over a *single*
+    population, resampled with replacement `n_resamples` times.
+
+    The one-group counterpart of `bootstrap_group_ci` below. Cross-domain
+    pattern sweeps need this shape: the population is the set of held-out
+    patterns, and the statistic is the top-k mean degradation over them, so
+    the interval answers "how much would this number move if the benchmark
+    happened to ship a different set of fabrics" -- a question no
+    two-group comparison poses.
+
+    Resamples where `statistic` raises or returns a non-finite value are
+    dropped rather than poisoning the interval (same policy as
+    `bootstrap_group_ci`); at least two survivors are needed for a bound.
+    """
+
+    if len(values) < 2:
+        raise ValueError("bootstrap_ci needs at least two points.")
+
+    estimate = statistic(values)
+    rng = random.Random(seed)
+    population = list(values)
+    resampled: list[float] = []
+    for _ in range(n_resamples):
+        draw = [population[rng.randrange(len(population))] for _ in range(len(population))]
+        try:
+            value = statistic(draw)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if math.isfinite(value):
+            resampled.append(value)
+
+    if len(resampled) < 2:
+        return {"estimate": estimate, "ci_low": float("nan"), "ci_high": float("nan")}
+
+    resampled.sort()
+    tail = (1.0 - confidence) / 2.0
+    low = resampled[min(len(resampled) - 1, int(tail * len(resampled)))]
+    high = resampled[min(len(resampled) - 1, int((1.0 - tail) * len(resampled)))]
+    return {"estimate": estimate, "ci_low": low, "ci_high": high}
+
+
 def bootstrap_group_ci(
     group_a: Sequence,
     group_b: Sequence,

@@ -93,7 +93,7 @@ def normalize_metrics(
     for `rows[i]`, omitting metrics that row doesn't carry.
 
     This is the shared basis for both `score_rows` (which averages these
-    per group) and the radar chart in `web/charts.py` (which plots them as
+    per group). Normalised values were also once plotted as
     polygon radii). Putting mixed-unit metrics -- an AUROC in [0, 1] beside
     a latency in milliseconds beside a memory figure in MiB -- on one
     comparable scale is exactly the same problem in both places, so it has

@@ -18,6 +18,7 @@ from fabric_defect_hub.quantization.onnx_quant import (
     QuantizationLevel,
     SampleCalibrationDataReader,
     load_and_preprocess_image,
+    quantize_and_register,
     quantize_onnx,
 )
 from fabric_defect_hub.quantization.tensorrt_calibration import build_int8_calibrator
@@ -26,6 +27,7 @@ __all__ = [
     "QuantizationLevel",
     "SampleCalibrationDataReader",
     "load_and_preprocess_image",
+    "quantize_and_register",
     "quantize_onnx",
     "build_int8_calibrator",
 ]

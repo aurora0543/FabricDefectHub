@@ -5,18 +5,8 @@ from __future__ import annotations
 from fabric_defect_hub.i18n import DEFAULT_LANGUAGE, LANGUAGES, tr
 from fabric_defect_hub.inference.session import InferenceSessionManager, format_session_status
 from fabric_defect_hub.reporting import flatten_run_log_rows, latest_run_per_model, read_run_log
-from fabric_defect_hub.web.charts import (
-    MAX_RADAR_MODELS,
-    bar_frame,
-    bar_y_limits,
-    default_bar_metric,
-    default_radar_axes,
-    default_radar_models,
-    metric_choices,
-    model_choices,
-    radar_axis_choices,
-    render_radar_svg,
-)
+from fabric_defect_hub.metrics_taxonomy import UNIMPLEMENTED
+from fabric_defect_hub.web.tables import empty_sections, render_sections, status_line
 from fabric_defect_hub.web.benchmark import (
     DEFAULT_RUN_LOG_PATH,
     compatible_models,
@@ -84,7 +74,7 @@ body.dark .fdh-links { color: #9fb0c8; }
 body.dark .fdh-tagpanel-empty { color: #bdcbe0; }
 body.dark .fdh-card, body.dark .fdh-control-card, body.dark .fdh-dataset-card { border: 1px solid #293b54; background: #101c2d; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 body.dark .fdh-card label, body.dark .fdh-card .wrap, body.dark .fdh-card .prose, body.dark .fdh-control-card label, body.dark .fdh-control-card .wrap, body.dark .fdh-dataset-card label { color: #dce7f5 !important; }
-body.dark .fdh-card input, body.dark .fdh-card textarea, body.dark .fdh-card button.secondary, body.dark .fdh-control-card input, body.dark .fdh-control-card button.secondary, body.dark .fdh-dataset-card input, body.dark .fdh-dataset-card button.secondary { background: #0a1524 !important; color: #e5edf8 !important; border-color: #30445f !important; }
+body.dark .fdh-card input:not([type="checkbox"]):not([type="radio"]), body.dark .fdh-card textarea, body.dark .fdh-card button.secondary, body.dark .fdh-control-card input:not([type="checkbox"]):not([type="radio"]), body.dark .fdh-control-card button.secondary, body.dark .fdh-dataset-card input:not([type="checkbox"]):not([type="radio"]), body.dark .fdh-dataset-card button.secondary { background: #0a1524 !important; color: #e5edf8 !important; border-color: #30445f !important; }
 body.dark .fdh-card label.selected, body.dark .fdh-control-card label.selected, body.dark .fdh-dataset-card label.selected { background: #ea6e18 !important; border-color: #fb923c !important; color: #fff !important; }
 body.dark .fdh-card button.secondary:hover, body.dark .fdh-control-card button.secondary:hover, body.dark .fdh-dataset-card button.secondary:hover { background: #16283f !important; border-color: #3d5776 !important; }
 body.dark .fdh-card button.secondary:active, body.dark .fdh-control-card button.secondary:active, body.dark .fdh-dataset-card button.secondary:active { background: #1d3552 !important; border-color: #fb923c !important; }
@@ -95,62 +85,38 @@ body:not(.dark) .fdh-links { color: #64748b; }
 body:not(.dark) .fdh-tagpanel-empty { color: #52627a; }
 body:not(.dark) .fdh-card, body:not(.dark) .fdh-control-card, body:not(.dark) .fdh-dataset-card { border: 1px solid #d7e0ec; background: #ffffff; box-shadow: 0 6px 18px rgba(15,23,42,.07); }
 body:not(.dark) .fdh-card label, body:not(.dark) .fdh-card .wrap, body:not(.dark) .fdh-card .prose, body:not(.dark) .fdh-control-card label, body:not(.dark) .fdh-control-card .wrap, body:not(.dark) .fdh-dataset-card label { color: #172033 !important; }
-body:not(.dark) .fdh-card input, body:not(.dark) .fdh-card textarea, body:not(.dark) .fdh-card button.secondary, body:not(.dark) .fdh-control-card input, body:not(.dark) .fdh-control-card button.secondary, body:not(.dark) .fdh-dataset-card input, body:not(.dark) .fdh-dataset-card button.secondary { background: #ffffff !important; color: #172033 !important; border-color: #cbd5e1 !important; }
+body:not(.dark) .fdh-card input:not([type="checkbox"]):not([type="radio"]), body:not(.dark) .fdh-card textarea, body:not(.dark) .fdh-card button.secondary, body:not(.dark) .fdh-control-card input:not([type="checkbox"]):not([type="radio"]), body:not(.dark) .fdh-control-card button.secondary, body:not(.dark) .fdh-dataset-card input:not([type="checkbox"]):not([type="radio"]), body:not(.dark) .fdh-dataset-card button.secondary { background: #ffffff !important; color: #172033 !important; border-color: #cbd5e1 !important; }
 body:not(.dark) .fdh-card label.selected, body:not(.dark) .fdh-control-card label.selected, body:not(.dark) .fdh-dataset-card label.selected { background: #ea6e18 !important; border-color: #ea6e18 !important; color: #fff !important; }
 body:not(.dark) .fdh-card button.secondary:hover, body:not(.dark) .fdh-control-card button.secondary:hover, body:not(.dark) .fdh-dataset-card button.secondary:hover { background: #f4f7fb !important; border-color: #94a3b8 !important; }
 body:not(.dark) .fdh-card button.secondary:active, body:not(.dark) .fdh-control-card button.secondary:active, body:not(.dark) .fdh-dataset-card button.secondary:active { background: #e9edf3 !important; border-color: #ea6e18 !important; }
 body:not(.dark) .fdh-status { background: #f8fafc; border: 1px solid #cbd5e1; color: #24344d; }
 body:not(.dark) .fdh-caption, body:not(.dark) .fdh-placeholder { color: #52627a; }
 
-/* -- Radar chart (web/charts.py emits the SVG; every color lives here so
-   the chart follows the light/dark theme instead of baking in one theme's
-   hexes). The three series slots are the categorical palette's first three
-   hues, which are the only ones that clear colorblind separation when every
-   pair can overlap -- as radar polygons can. Both modes were validated with
-   the dataviz skill's validator against this app's own card surfaces
-   (light #ffffff, dark #101c2d), --pairs all: all checks pass; the one
-   sub-3:1 contrast warning (light aqua) is relieved by the always-present
-   legend labels and the leaderboard table directly below, so identity never
-   rests on hue alone. Marks follow the shared specs: 2px strokes, ~12%
-   fills, hairline recessive grid, >=8px dots with a 2px surface ring. */
-.fdh-radar-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 6px 0 2px; }
-.fdh-radar { width: 100%; max-width: 480px; height: auto; }
-.fdh-radar-grid { fill: none; stroke-width: 1; }
-.fdh-radar-axis-label { font-size: 10px; font-family: inherit; }
-.fdh-radar-series { stroke-width: 2; stroke-linejoin: round; }
-.fdh-radar-dot { stroke-width: 2; }
-.fdh-radar-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 12px; }
-.fdh-radar-key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.fdh-radar-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-.fdh-radar-note { padding: 40px 16px; text-align: center; font-size: 13px; }
-body.dark .fdh-radar-grid { stroke: #2c3d52; }
-body.dark .fdh-radar-axis-label { fill: #a9bad0; }
-body.dark .fdh-radar-dot { stroke: #101c2d; }
-body.dark .fdh-radar-legend { color: #dce7f5; }
-body.dark .fdh-radar-note { color: #bdcbe0; }
-body.dark .fdh-radar-series-1 { stroke: #d95926; fill: rgba(217, 89, 38, .12); }
-body.dark .fdh-radar-series-2 { stroke: #3987e5; fill: rgba(57, 135, 229, .12); }
-body.dark .fdh-radar-series-3 { stroke: #199e70; fill: rgba(25, 158, 112, .12); }
-body.dark .fdh-radar-dot-1 { fill: #d95926; }
-body.dark .fdh-radar-dot-2 { fill: #3987e5; }
-body.dark .fdh-radar-dot-3 { fill: #199e70; }
-body.dark .fdh-radar-swatch-1 { background: #d95926; }
-body.dark .fdh-radar-swatch-2 { background: #3987e5; }
-body.dark .fdh-radar-swatch-3 { background: #199e70; }
-body:not(.dark) .fdh-radar-grid { stroke: #dde4ee; }
-body:not(.dark) .fdh-radar-axis-label { fill: #52627a; }
-body:not(.dark) .fdh-radar-dot { stroke: #ffffff; }
-body:not(.dark) .fdh-radar-legend { color: #24344d; }
-body:not(.dark) .fdh-radar-note { color: #52627a; }
-body:not(.dark) .fdh-radar-series-1 { stroke: #eb6834; fill: rgba(235, 104, 52, .12); }
-body:not(.dark) .fdh-radar-series-2 { stroke: #2a78d6; fill: rgba(42, 120, 214, .12); }
-body:not(.dark) .fdh-radar-series-3 { stroke: #1baf7a; fill: rgba(27, 175, 122, .12); }
-body:not(.dark) .fdh-radar-dot-1 { fill: #eb6834; }
-body:not(.dark) .fdh-radar-dot-2 { fill: #2a78d6; }
-body:not(.dark) .fdh-radar-dot-3 { fill: #1baf7a; }
-body:not(.dark) .fdh-radar-swatch-1 { background: #eb6834; }
-body:not(.dark) .fdh-radar-swatch-2 { background: #2a78d6; }
-body:not(.dark) .fdh-radar-swatch-3 { background: #1baf7a; }
+/* -- Checkboxes and radios ------------------------------------------------
+   These were invisible when ticked: the `.fdh-card input` rules above set a
+   flat background with `!important`, which also matched `input[type=checkbox]`
+   and painted over the checked-state fill the browser draws — so clicking
+   "Include profiling" changed nothing you could see. The rules above now
+   exclude checkbox/radio; these give the control a size and a checked colour
+   in both themes so the state is unmistakable rather than merely present. */
+.fdh-card input[type="checkbox"], .fdh-card input[type="radio"],
+.fdh-control-card input[type="checkbox"], .fdh-control-card input[type="radio"],
+.fdh-dataset-card input[type="checkbox"], .fdh-dataset-card input[type="radio"] {
+  appearance: auto; -webkit-appearance: auto;
+  width: 18px; height: 18px; min-width: 18px; flex: 0 0 18px;
+  accent-color: var(--color-accent); cursor: pointer; margin-right: 8px;
+}
+.fdh-control-card label:has(input[type="checkbox"]) { display: inline-flex; align-items: center; cursor: pointer; }
+/* A ring on the checked control, so the state survives any theme in which
+   `accent-color` alone is too low-contrast to notice at a glance. */
+.fdh-card input[type="checkbox"]:checked, .fdh-control-card input[type="checkbox"]:checked,
+.fdh-dataset-card input[type="checkbox"]:checked {
+  outline: 2px solid var(--color-accent); outline-offset: 1px; border-radius: 3px;
+}
+.fdh-card input[type="checkbox"]:focus-visible, .fdh-control-card input[type="checkbox"]:focus-visible {
+  outline: 3px solid var(--color-accent); outline-offset: 2px;
+}
+
 """
 
 
@@ -165,23 +131,49 @@ def _lang_choices() -> list[tuple[str, str]]:
     return [(display, code) for code, display in LANGUAGES.items()]
 
 
-def _history_chart_data(rows: list[dict], metric: str | None):
-    """A `model -> metric` `pandas.DataFrame` for `gr.BarPlot`, one bar per
-    model (its most recent logged run, via `reporting.latest_run_per_model`)
-    -- `None` when there's no metric to chart yet."""
+def _tables_from_leaderboard(
+    scored: list[dict], columns: list[str], profiling_requested: bool = False
+) -> dict[str, dict]:
+    """Regroup benchmark rows into the taxonomy's tables.
 
-    if not metric:
-        return None
-    import pandas as pd
+    The leaderboard produces one wide row per model; the page shows several
+    narrow tables. The reshaping goes through `api.BenchmarkResult` — the
+    same object `fdh.benchmark(...)` hands a script — precisely so the UI
+    cannot become a second opinion about which table a metric belongs in.
+    A metric with no `MetricSpec` is dropped here and reported by
+    `tables.status_line`, rather than being quietly rendered somewhere.
+    """
 
-    data = [
-        {"model": row.get("model", {}).get("name", ""), metric: row.get("metrics", {}).get(metric)}
-        for row in latest_run_per_model(rows)
+    from fabric_defect_hub.api import BenchmarkResult
+
+    rows = [
+        {"model": row.get("model", ""), "status": "ok", "metrics": {
+            key: value for key, value in row.items() if key != "model"
+        }}
+        for row in (scored or [])
     ]
-    data = [record for record in data if record[metric] is not None]
-    if not data:
-        return None
-    return pd.DataFrame(data)
+    result = BenchmarkResult(rows=rows)
+    rendered = {
+        table["name"]: table
+        for section in render_sections(result)
+        for table in section["tables"]
+    }
+    tables = {
+        name: {"headers": spec["headers"], "rows": spec["rows"], "note": spec["note"]}
+        for name, spec in rendered.items()
+    }
+    # The default hint for compute/memory says "tick Include profiling" —
+    # actively wrong once the box *was* ticked and the pass failed. In that
+    # case the real explanation is in the status line's "profiling skipped
+    # (...)" entry, so point there instead of at the checkbox.
+    if profiling_requested:
+        for name in ("compute", "memory"):
+            if not tables[name]["rows"]:
+                tables[name]["note"] = (
+                    "Profiling was requested but produced no metrics for these models — "
+                    "see the status message above for the reason it was skipped."
+                )
+    return tables
 
 
 def create_app():
@@ -429,25 +421,47 @@ def create_app():
                     bench_status = gr.Markdown(tr(lang0, "benchmark_placeholder"), elem_classes="fdh-status")
 
                     bench_rows_state = gr.State([])
-                    with gr.Row():
-                        with gr.Column(scale=3, elem_classes="fdh-control-card"):
-                            chart_metric = gr.Dropdown(choices=[], label=tr(lang0, "chart_metric_label"))
-                        with gr.Column(scale=5, elem_classes="fdh-control-card"):
-                            radar_axes = gr.CheckboxGroup(choices=[], label=tr(lang0, "radar_axes_label"))
-                        with gr.Column(scale=4, elem_classes="fdh-control-card"):
-                            radar_models = gr.CheckboxGroup(
-                                choices=[], label=tr(lang0, "radar_models_label")
-                            )
-                    with gr.Row(equal_height=True):
-                        with gr.Column(scale=6, elem_classes="fdh-card fdh-scroll-chart"):
-                            bench_bar_chart = gr.BarPlot(
-                                x="model", label=tr(lang0, "chart_bar_label"), sort="-y", height=320, x_label_angle=-45,
-                            )
-                        with gr.Column(scale=6, elem_classes="fdh-card"):
-                            bench_radar = gr.HTML(
-                                render_radar_svg([], [], [], lang0), label=tr(lang0, "chart_radar_label")
-                            )
-                    bench_results = gr.Dataframe(label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True)
+                    # Tables only — no bar chart, no radar. The taxonomy
+                    # (`metrics_taxonomy`) decides which tables exist and
+                    # which metric goes in which one; this loop only lays
+                    # them out, so a metric can never appear here under a
+                    # heading the report disagrees with.
+                    bench_tables: dict[str, Any] = {}
+                    bench_notes: dict[str, Any] = {}
+                    for section in empty_sections():
+                        gr.Markdown(f"### {section['title']}")
+                        for spec in section["tables"]:
+                            with gr.Column(elem_classes="fdh-card"):
+                                gr.Markdown(f"**{spec['title']}**")
+                                if spec["name"] in UNIMPLEMENTED:
+                                    gr.Markdown(
+                                        f"_{UNIMPLEMENTED[spec['name']]}_",
+                                        elem_classes="fdh-status",
+                                    )
+                                    continue
+                                # An empty table with no explanation reads as
+                                # a broken page: "YOLO has no pixel metrics"
+                                # and "you did not tick profiling" both look
+                                # like nothing happened.
+                                bench_notes[spec["name"]] = gr.Markdown(
+                                    f"_{spec['note']}_" if spec.get("note") else "",
+                                    elem_classes="fdh-status",
+                                    visible=bool(spec.get("note")),
+                                )
+                                # Always visible. Toggling `visible` in the
+                                # same `gr.update` that changes `headers` and
+                                # `value` desynced the streamed re-render —
+                                # the Memory table stayed one row behind and
+                                # dropped a model. Emptiness is conveyed by
+                                # the note above instead, which is the only
+                                # component whose visibility changes.
+                                bench_tables[spec["name"]] = gr.Dataframe(
+                                    headers=spec["headers"], value=[],
+                                    interactive=False, wrap=True,
+                                )
+                    bench_results = gr.Dataframe(
+                        label=tr(lang0, "leaderboard_label"), interactive=False, wrap=True, visible=False,
+                    )
 
                     def bench_dataset_change_handler(dataset_label, lang):
                         choices = texture_choices(dataset_label)
@@ -462,6 +476,10 @@ def create_app():
                         include_profiling, include_resolution_sweep, cross_domain_choice,
                         score_preset, custom_weight, lang,
                     ):
+                        # `run_benchmark` always yields at least once (it
+                        # yields an error row when no model is selected), but
+                        # seeding this keeps the final build below total.
+                        last: tuple = ([], "", [])
                         cross_domain_label = (
                             None if cross_domain_choice in (None, tr(lang, "benchmark_cross_domain_none"))
                             else cross_domain_choice
@@ -474,33 +492,50 @@ def create_app():
                             score_preset=score_preset,
                             custom_technical_weight=custom_weight,
                         ):
-                            metric = default_bar_metric(columns)
-                            axes = default_radar_axes(scored)
-                            models = default_radar_models(scored)
+                            # Progress streams; the tables do not. Re-sending
+                            # a Dataframe's headers *and* value on every
+                            # model dropped rows in Gradio -- the Memory
+                            # table stayed a model behind while Compute,
+                            # updated identically, did not. Rather than
+                            # depend on that behaviour, the tables are built
+                            # once from the completed run below; the status
+                            # line is what tells the user it is still going.
+                            last = (rows, status, scored)
                             yield (
-                                gr.update(headers=columns, value=rows) if columns else gr.update(value=[]),
-                                status,
-                                scored,
-                                gr.update(choices=metric_choices(columns), value=metric),
-                                gr.update(choices=radar_axis_choices(scored), value=axes),
-                                gr.update(choices=model_choices(scored), value=models),
-                                gr.update(
-                                    value=bar_frame(scored, metric), x="model",
-                                    y=metric or "model", y_lim=bar_y_limits(scored, metric),
-                                    x_label_angle=-45,
-                                ),
-                                render_radar_svg(scored, axes, models, lang),
+                                gr.update(value=rows or []), status, scored,
+                                *[gr.skip() for _ in bench_tables],
+                                *[gr.skip() for _ in bench_notes],
                             )
 
-                    def bar_redraw_handler(scored, metric):
-                        return gr.update(
-                            value=bar_frame(scored, metric), x="model",
-                            y=metric or "model", y_lim=bar_y_limits(scored, metric),
-                            x_label_angle=-45,
+                        rows, status, scored = last
+                        # The leaderboard rows are regrouped through the
+                        # taxonomy rather than rendered as one wide table:
+                        # `BenchmarkResult` is the same object a script gets
+                        # from `fdh.measure(...)`, so the page and a JSON
+                        # report are two views of one result, not two
+                        # implementations.
+                        grouped = _tables_from_leaderboard(
+                            scored or rows, columns, profiling_requested=include_profiling
                         )
-
-                    def radar_redraw_handler(scored, axes, models, lang):
-                        return render_radar_svg(scored, axes or [], models or [], lang)
+                        yield (
+                            gr.update(value=rows or []),
+                            status,
+                            scored,
+                            *[
+                                gr.update(
+                                    headers=grouped[name]["headers"],
+                                    value=grouped[name]["rows"],
+                                )
+                                for name in bench_tables
+                            ],
+                            *[
+                                gr.update(
+                                    value=f"_{grouped[name]['note']}_" if grouped[name]["note"] else "",
+                                    visible=bool(grouped[name]["note"]),
+                                )
+                                for name in bench_notes
+                            ],
+                        )
 
                     bench_dataset.change(
                         bench_dataset_change_handler,
@@ -521,21 +556,9 @@ def create_app():
                         ],
                         outputs=[
                             bench_results, bench_status, bench_rows_state,
-                            chart_metric, radar_axes, radar_models,
-                            bench_bar_chart, bench_radar,
+                            *bench_tables.values(), *bench_notes.values(),
                         ],
                     )
-                    chart_metric.change(
-                        bar_redraw_handler,
-                        inputs=[bench_rows_state, chart_metric],
-                        outputs=bench_bar_chart,
-                    )
-                    for radar_selector in (radar_axes, radar_models):
-                        radar_selector.change(
-                            radar_redraw_handler,
-                            inputs=[bench_rows_state, radar_axes, radar_models, lang_state],
-                            outputs=bench_radar,
-                        )
 
                 with gr.Tab(tr(lang0, "tab_run_history"), id="run-history") as tab_history:
                     history_header = gr.Markdown(tr(lang0, "history_header"))
@@ -554,18 +577,17 @@ def create_app():
                     history_table = gr.Dataframe(
                         label=tr(lang0, "history_table_label"), interactive=False, wrap=True
                     )
-                    history_chart = gr.BarPlot(label=tr(lang0, "history_chart_label"))
 
                     def history_refresh_handler(path, metric, lang):
                         try:
                             rows = read_run_log(path)
                         except (OSError, ValueError) as exc:
                             return (
-                                gr.Dataframe(value=[]), gr.Dropdown(choices=[]), None,
+                                gr.Dataframe(value=[]), gr.Dropdown(choices=[]),
                                 tr(lang, "history_load_error", error=exc),
                             )
                         if not rows:
-                            return gr.Dataframe(value=[]), gr.Dropdown(choices=[]), None, tr(lang, "history_no_runs")
+                            return gr.Dataframe(value=[]), gr.Dropdown(choices=[]), tr(lang, "history_no_runs")
 
                         columns, table = flatten_run_log_rows(rows)
                         excluded = {"timestamp_utc", "model", "backend", "task", "dataset", "device"}
@@ -576,23 +598,13 @@ def create_app():
                         return (
                             gr.Dataframe(headers=columns, value=table),
                             gr.Dropdown(choices=metric_choices, value=selected_metric),
-                            _history_chart_data(rows, selected_metric),
                             tr(lang, "history_table_label"),
                         )
-
-                    def history_metric_change_handler(path, metric, lang):
-                        rows = read_run_log(path)
-                        return _history_chart_data(rows, metric)
 
                     history_refresh_button.click(
                         history_refresh_handler,
                         inputs=[history_path, history_metric, lang_state],
-                        outputs=[history_table, history_metric, history_chart, history_status],
-                    )
-                    history_metric.change(
-                        history_metric_change_handler,
-                        inputs=[history_path, history_metric, lang_state],
-                        outputs=history_chart,
+                        outputs=[history_table, history_metric, history_status],
                     )
 
         # -- Language toggle: rebuilds every static label/header/button/
@@ -647,11 +659,6 @@ def create_app():
                 gr.Dropdown(choices=score_preset_choices(lang), label=tr(lang, "benchmark_score_preset_label")),
                 gr.Slider(label=tr(lang, "benchmark_custom_weight_label")),
                 tr(lang, "benchmark_placeholder"),
-                gr.Dropdown(label=tr(lang, "chart_metric_label")),
-                gr.CheckboxGroup(label=tr(lang, "radar_axes_label")),
-                gr.CheckboxGroup(label=tr(lang, "radar_models_label", count=MAX_RADAR_MODELS)),
-                gr.BarPlot(label=tr(lang, "chart_bar_label")),
-                gr.HTML(label=tr(lang, "chart_radar_label")),
                 gr.Dataframe(label=tr(lang, "leaderboard_label")),
                 tr(lang, "history_header"),
                 gr.Textbox(label=tr(lang, "history_path_label")),
@@ -659,7 +666,6 @@ def create_app():
                 tr(lang, "btn_history_refresh"),
                 tr(lang, "history_no_runs"),
                 gr.Dataframe(label=tr(lang, "history_table_label")),
-                gr.BarPlot(label=tr(lang, "history_chart_label")),
             )
 
         lang_choice.change(
@@ -675,21 +681,46 @@ def create_app():
                 load_button, dataset_status,
                 bench_header, bench_dataset, bench_texture, bench_shot_mode, bench_models,
                 bench_run_button, bench_profiling, bench_score_preset, bench_custom_weight,
-                bench_status, chart_metric, radar_axes, radar_models,
-                bench_bar_chart, bench_radar, bench_results,
+                bench_status, bench_results,
                 history_header, history_path, history_metric, history_refresh_button,
-                history_status, history_table, history_chart,
+                history_status, history_table,
             ],
         )
     return app
 
 
+def _port_holder(port: int) -> str:
+    """`"PID 1234 (python fdh-ui)"` for whatever is listening on `port`,
+    or `""` if that cannot be determined. Diagnostic only — never raises."""
+
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except Exception:
+        return ""
+    pid = command = ""
+    for line in out.splitlines():
+        if line.startswith("p"):
+            pid = line[1:]
+        elif line.startswith("c"):
+            command = line[1:]
+    return f"PID {pid} ({command})" if pid else ""
+
+
 def launch(**kwargs):
+    import os
+
     kwargs.setdefault("css", CSS)
     # The cloud host this project is deployed to only has port 6008 open;
     # standardize on it everywhere so `fdh-ui` works unmodified there.
+    # `GRADIO_SERVER_PORT` still wins for local use — hard-coding the port
+    # unconditionally also disabled the documented env-var escape hatch.
     kwargs.setdefault("server_name", "0.0.0.0")
-    kwargs.setdefault("server_port", 6008)
+    kwargs.setdefault("server_port", int(os.environ.get("GRADIO_SERVER_PORT", "6008")))
     # Gradio 6 only caches files below the workspace or system temp directory
     # unless an external location is explicitly trusted. Every catalog
     # dataset typically lives on external storage reached through a
@@ -707,4 +738,20 @@ def launch(**kwargs):
         kwargs.setdefault("theme", gr.themes.Base(primary_hue="orange", neutral_hue="slate"))
     except ImportError:
         pass
-    return create_app().launch(**kwargs)
+    try:
+        return create_app().launch(**kwargs)
+    except OSError as exc:
+        # Without this, a leftover `fdh-ui` (a backgrounded run, or one
+        # orphaned by a closed terminal) holding the port makes every new
+        # launch die instantly with a bare "Cannot find empty port" — which
+        # reads as "the app is broken", not "the app is already running".
+        port = kwargs["server_port"]
+        holder = _port_holder(port)
+        raise SystemExit(
+            f"fdh-ui: port {port} is already in use"
+            + (f" by {holder}" if holder else "")
+            + " — an earlier fdh-ui is probably still running.\n"
+            f"  Reuse it:   open http://127.0.0.1:{port} in the browser\n"
+            + (f"  Or stop it: kill {holder.split()[1]}\n" if holder else "")
+            + f"  Or move:    GRADIO_SERVER_PORT=7860 fdh-ui"
+        ) from exc

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PUBLISHED_MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models" / "published"
+MODEL_ROOT = PROJECT_ROOT / "artifacts" / "models"
+PUBLISHED_MODEL_ROOT = MODEL_ROOT / "published"
+QUANTIZED_MODEL_ROOT = MODEL_ROOT / "quantized"
 
 
 @dataclass(frozen=True)
@@ -98,8 +102,92 @@ def find_canonical_model_by_key(key: str) -> CanonicalModel:
 
 
 def published_path(model: CanonicalModel) -> Path:
-    """Return the destination path for published model weights."""
+    """Return the destination path for published model weights.
+
+    The name is the canonical key plus the backend's extension — no run
+    number, no `best`/`last` suffix, no timestamp. Whatever the training run
+    called the file, the published slot always spells it the way the rest of
+    the project refers to the model.
+    """
     return PUBLISHED_MODEL_ROOT / f"{model.key}{_EXTENSION[model.backend]}"
+
+
+def published_status(path: Path) -> str:
+    """What state a published slot is in: one of `PUBLISHED_STATES`.
+
+    `published/` is deliberately allowed to hold **either** a real file or a
+    symlink into `artifacts/models/`. `publish_artifact` writes symlinks (one
+    copy of the bytes, and `ls -l` shows which run each model came from), but
+    a tree copied down from the training box arrives as real files, and that
+    has to keep working without a migration step.
+
+    The state worth naming separately is `broken_link`: a symlink whose
+    target did not come along — the normal outcome of copying `published/`
+    without `artifacts/models/`. Every reader used to answer this with a bare
+    `path.is_file()`, which is False for a dangling link and so reported the
+    model as simply "not published", sending the reader off to retrain
+    something they already have. It is a different problem with a different
+    fix, so it gets a different answer.
+    """
+
+    if path.is_symlink():
+        # `is_file()` follows the link, so this order matters: a broken link
+        # is a symlink that resolves to nothing.
+        return "symlink" if path.exists() else "broken_link"
+    if path.is_file():
+        return "file"
+    return "missing"
+
+
+PUBLISHED_STATES = ("file", "symlink", "broken_link", "missing")
+
+
+def published_is_usable(path: Path) -> bool:
+    """Whether a published slot can actually be loaded — a real file or a
+    symlink that still resolves. The check every reader wants."""
+
+    return published_status(path) in {"file", "symlink"}
+
+
+def describe_published(path: Path) -> str:
+    """One line a caller can put in an error message or a UI cell."""
+
+    state = published_status(path)
+    if state == "file":
+        return f"{path} (regular file)"
+    if state == "symlink":
+        return f"{path} -> {os.readlink(path)}"
+    if state == "broken_link":
+        return (
+            f"{path} is a symlink to {os.readlink(path)!r}, which does not exist. "
+            "If this tree was copied from the training machine, copy "
+            "artifacts/models/ across too (the link points inside it), or replace "
+            "the link with the weight file itself."
+        )
+    return f"{path} (nothing published)"
+
+
+def quantized_path(backend: str, variant: str, level: str) -> Path:
+    """Where a quantized export of `(backend, variant)` at `level` lives.
+
+    Quantized artifacts used to have no home at all: `quantize_onnx` wrote
+    wherever its caller pointed it, so the result never reached
+    `weight_manifest.jsonl` and nothing could later say which fp32 weights,
+    which commit, or which calibration set produced it. Giving the layout a
+    single owner here is what lets `weight_registry.record_quantized_weight`
+    attach the same provenance block the fp32 weights get.
+
+    One file per level rather than per run: a quantized export is a
+    derivative of an fp32 checkpoint, so the fp32 record is what carries run
+    identity, and keeping every historical INT8 blob would multiply the
+    storage problem this layout exists to contain.
+    """
+
+    return QUANTIZED_MODEL_ROOT / backend / _slugify(variant) / f"{_slugify(level)}.onnx"
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.") or "model"
 
 
 def metadata_for(model: CanonicalModel) -> dict:
@@ -158,12 +246,51 @@ def metadata_for(model: CanonicalModel) -> dict:
 
 
 def publish_artifact(backend: str, variant: str, registered_artifact_path: str) -> Path | None:
-    """Copy a newly registered model checkpoint to the published model root."""
+    """Point the published slot for `(backend, variant)` at a registered
+    checkpoint, via a *relative* symlink.
+
+    This used to be `shutil.copy2`, which meant every published model existed
+    twice on disk — 2.1 GB of GANomaly weights in `artifacts/models/` and
+    another 2.1 GB under `published/`. A symlink keeps the same two names and
+    the same clean published spelling while storing the bytes once, and it
+    makes the relationship inspectable: `ls -l published/` now tells you
+    exactly which run each published model came from, which a copy could
+    never do.
+
+    The link is relative (`../<name>`) so the whole `artifacts/` tree stays
+    movable — an absolute link would break the moment the directory is synced
+    to a different machine or a different checkout path, which is the normal
+    case here (training happens on a cloud box, inspection happens locally).
+
+    The registered artifact is the single source of truth and must live under
+    `artifacts/models/`; nothing is copied into `published/` ever again, so
+    deleting a registered checkpoint now visibly breaks its published link
+    rather than silently leaving a stale duplicate behind. `retention.py`
+    treats symlink targets as protected for exactly this reason.
+    """
 
     model = find_canonical_model(backend, variant)
     if model is None:
         return None
+    source = Path(registered_artifact_path).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"cannot publish missing weights: {source}")
+
     destination = published_path(model)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(registered_artifact_path, destination)
+    _relink(source, destination)
     return destination
+
+
+def _relink(source: Path, destination: Path) -> None:
+    """Replace `destination` with a relative symlink to `source`.
+
+    `os.symlink` refuses to overwrite, and the published slot is overwritten
+    on every re-publish, so the old entry has to go first — including when it
+    is a leftover *copy* from before this project used symlinks.
+    """
+
+    target = os.path.relpath(source, destination.parent)
+    if destination.is_symlink() or destination.exists():
+        destination.unlink()
+    destination.symlink_to(target)

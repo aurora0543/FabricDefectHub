@@ -58,10 +58,19 @@ def compute_model_flops(
     import torch
 
     height, width = input_size
+    # The model's own device wins over the `device` argument whenever it has
+    # one. A caller passing the *session's* device (e.g. "mps") for a module
+    # still resident on CPU produced `Input type (MPSFloatType) and weight
+    # type (torch.FloatTensor) should be the same` — a mismatch the caller
+    # cannot see, since it never chose where the adapter put its weights.
+    # `device` remains the fallback for a purely functional module, which is
+    # the case the parameter was introduced for.
+    target = next((parameter.device for parameter in model.parameters()), None) or device
+
     if input_style == "list":
-        dummy: Any = [torch.rand(3, height, width, device=device) for _ in range(batch_size)]
+        dummy: Any = [torch.rand(3, height, width, device=target) for _ in range(batch_size)]
     elif input_style == "batched":
-        dummy = torch.rand(batch_size, 3, height, width, device=device)
+        dummy = torch.rand(batch_size, 3, height, width, device=target)
     else:
         raise ValueError(f"unknown input_style {input_style!r}; expected 'batched' or 'list'.")
 

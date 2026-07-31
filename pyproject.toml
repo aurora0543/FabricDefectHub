@@ -91,6 +91,12 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not architecture'"
 markers = [
   "slow: requires real framework dependencies, models, and dataset access",
+  # Style/layering checks that read the source with `ast` rather than running
+  # it. Failing one means the code still works but was written in a way that
+  # re-couples a layer to a specific backend -- a review call, not a defect.
+  # Deselected by default; run on demand with `pytest -m architecture`.
+  "architecture: source-level layering audit, not runtime correctness",
 ]

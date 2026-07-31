@@ -285,6 +285,31 @@ def build_parser() -> argparse.ArgumentParser:
             "without it an anomaly model is scored on image-level metrics alone"
         ),
     )
+    evaluate_parser.add_argument(
+        "--cross-domain-patterns",
+        help=(
+            "ZJU-Leaper pattern-level cross-domain sweep: comma-separated held-out patterns to "
+            "evaluate the same weights against (e.g. '5,6,7,8'), after scoring the source "
+            "patterns given by --pattern. Reports each pattern's relative accuracy drop plus a "
+            "top-k mean with a bootstrap CI over the patterns"
+        ),
+    )
+    evaluate_parser.add_argument(
+        "--cross-domain-k", type=int, default=3,
+        help="how many held-out patterns the reported mean degradation averages over (default 3)",
+    )
+    evaluate_parser.add_argument(
+        "--cross-domain-mode", choices=("worst", "best"), default="worst",
+        help=(
+            "which k patterns to average: 'worst' (default) takes the largest drops — a "
+            "robustness claim; 'best' takes the smallest. The two report opposite things, so "
+            "the chosen mode is echoed back in the output"
+        ),
+    )
+    evaluate_parser.add_argument(
+        "--cross-domain-metric",
+        help="metric key the degradation is computed over; defaults to the task's headline metric",
+    )
     evaluate_parser.add_argument("--enable-tiling", action="store_true", help="YOLO only: sliding-window prediction with global NMS")
     evaluate_parser.add_argument("--enable-tta", action="store_true", help="YOLO only: enable native flip/multiscale TTA")
     evaluate_parser.add_argument("--tile-size", type=int, help="YOLO only: square tile size when --enable-tiling is set")
@@ -749,13 +774,89 @@ def _run_evaluate(args: argparse.Namespace) -> Any:
         tile_size=args.tile_size,
         tile_overlap=args.tile_overlap,
     )
-    return {
+    payload: dict[str, Any] = {
         "backend": run.backend,
         "resolved_config": run.config_path,
         "variant": run.variant,
         "sample_count": run.sample_count,
         "metrics": run.metrics,
     }
+    if getattr(args, "cross_domain_patterns", None):
+        payload["cross_domain"] = _run_cross_domain_sweep(args, run, source)
+    return payload
+
+
+def _run_cross_domain_sweep(args: argparse.Namespace, source_run: Any, source: Any) -> dict[str, Any]:
+    """Re-evaluate the same weights on each held-out pattern and reduce the
+    per-pattern drops to one reportable number.
+
+    The metric key is resolved once from the source run and reused for every
+    pattern: a degradation between two different metrics is not a
+    degradation. Patterns that cannot be scored on this machine come back as
+    `None` and are listed as skipped rather than counted as a 0% drop.
+    """
+
+    from dataclasses import replace
+
+    from fabric_defect_hub.evaluation.cross_domain import (
+        pattern_sweep_degradation,
+        resolve_headline_metric,
+    )
+    from fabric_defect_hub.inference.runner import run_evaluate
+
+    patterns = [p.strip() for p in args.cross_domain_patterns.split(",") if p.strip()]
+    task = args.task or source_run.metrics.get("task") or _sweep_task(source_run.metrics)
+    metric_key = resolve_headline_metric(task, source_run.metrics, args.cross_domain_metric)
+
+    def _evaluate_pattern(pattern: str) -> float | None:
+        try:
+            run = run_evaluate(
+                args.model,
+                weights=args.weights,
+                source=replace(source, pattern=pattern),
+                backend=args.backend,
+                variant=args.variant,
+                config_dir=args.config_dir,
+                task=args.task,
+                output_dir=args.output_dir,
+                enable_tiling=args.enable_tiling,
+                enable_tta=args.enable_tta,
+                tile_size=args.tile_size,
+                tile_overlap=args.tile_overlap,
+            )
+        except (FileNotFoundError, ValueError):
+            # Pattern not staged on this machine, or it yielded no scorable
+            # samples. Skipping keeps a partially-staged benchmark honest.
+            return None
+        value = run.metrics.get(metric_key)
+        return None if value is None else float(value)
+
+    result = pattern_sweep_degradation(
+        acc_src=float(source_run.metrics[metric_key]),
+        target_patterns=patterns,
+        evaluate_pattern=_evaluate_pattern,
+        k=args.cross_domain_k,
+        mode=args.cross_domain_mode,
+    )
+    result["metric"] = metric_key
+    result["source_patterns"] = args.pattern
+    return result
+
+
+def _sweep_task(metrics: dict[str, float]) -> str:
+    """Infer the task from which metric keys the source run produced, for
+    the case where `--task` was left to the dataset samples themselves.
+    """
+
+    if "map50" in metrics or "map_50" in metrics or "map" in metrics:
+        return "detection"
+    if "pixel_auroc" in metrics or "image_auroc" in metrics:
+        return "anomaly"
+    if "miou" in metrics or "dice" in metrics:
+        return "segmentation"
+    raise ValueError(
+        f"cannot infer the task from metrics {sorted(metrics)}; pass --task explicitly"
+    )
 
 
 def _infer_backend(raw: object) -> str:

@@ -34,17 +34,26 @@ class DetectionEvaluator(Evaluator):
 
     task = "detection"
 
-    def __init__(self, class_names: list[str] | None = None, pr_score_threshold: float = 0.5):
+    def __init__(
+        self,
+        class_names: list[str] | None = None,
+        pr_score_threshold: float = 0.5,
+        small_defect_max_px: float = 10.0,
+    ):
         """`class_names` fixes the label set (and iteration order) used to
         build the box_format id mapping; if omitted it's inferred from the
         union of ground-truth and predicted labels seen in `evaluate()`.
         `pr_score_threshold` is the confidence cutoff used only for the
         fixed-threshold precision/recall/F1 summary (mAP itself sweeps all
         thresholds internally and ignores this).
+        `small_defect_max_px` is the shorter-side cutoff separating `recall_
+        small` from `recall_normal`; 10 px is the fabric convention here
+        (broken warp / skipped pick defects sit around that scale).
         """
 
         self.class_names = class_names
         self.pr_score_threshold = pr_score_threshold
+        self.small_defect_max_px = small_defect_max_px
 
     def evaluate(self, samples: list[Sample], predictions: list[Prediction]) -> dict[str, float]:
         from torchmetrics.detection import MeanAveragePrecision
@@ -69,6 +78,19 @@ class DetectionEvaluator(Evaluator):
                     metrics[key] = v
 
         metrics.update(_precision_recall_f1(pairs, class_map, self.pr_score_threshold))
+        # Size-bucketed recall ships with every detection score rather than
+        # waiting for a quantization comparison to ask for it: `recall_small`
+        # on its own already answers "does this model see tiny defects at
+        # all", and having it on both the fp32 and the quantized row is what
+        # makes `quantization_recall_decay` a subtraction the caller can do
+        # afterwards instead of a second evaluation pass.
+        metrics.update(
+            recall_by_size(
+                samples, predictions,
+                small_max_px=self.small_defect_max_px,
+                score_threshold=self.pr_score_threshold,
+            )
+        )
         return metrics
 
     def _build_class_map(self, pairs) -> dict[str, int]:

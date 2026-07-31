@@ -143,6 +143,7 @@ def test_export_input_style_is_vocabulary_checked():
         )
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("backend", INSTALLED_BACKENDS)
 def test_declared_export_targets_are_honest(backend):
     """A backend whose `export()` unconditionally raises `NotImplementedError`

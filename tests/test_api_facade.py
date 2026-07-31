@@ -39,6 +39,12 @@ DELEGATION_TARGETS = {
     "fabric_defect_hub.catalog",
     "fabric_defect_hub.core.registry",
     "fabric_defect_hub.models.base",
+    # Measurement + its grouping. `benchmark()` is a facade over the sweep
+    # exactly as `train()` is over `run_train`, and the taxonomy is what
+    # keeps the UI's tables from being a second opinion on where a metric
+    # belongs.
+    "fabric_defect_hub.metric_sweep",
+    "fabric_defect_hub.metrics_taxonomy",
 }
 
 _SOURCE = Path(inspect.getfile(api)).read_text()
@@ -63,6 +69,7 @@ def test_the_facade_exposes_the_documented_entry_points():
     } <= exposed
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("function", _public_functions(), ids=lambda node: node.name)
 def test_no_public_facade_function_branches_on_a_backend(function: ast.FunctionDef):
     """No backend name may appear inside a facade function at all.
@@ -84,6 +91,7 @@ def test_no_public_facade_function_branches_on_a_backend(function: ast.FunctionD
     )
 
 
+@pytest.mark.architecture
 def test_backend_names_appear_only_in_the_module_level_lookup_table():
     """The one permitted place: `_PRESET_MODULES`, which maps backend ->
     preset module. That is a table the facade reads, not behaviour it
@@ -110,6 +118,7 @@ def test_backend_names_appear_only_in_the_module_level_lookup_table():
     pytest.fail("_PRESET_MODULES table not found in api.py")
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("function", _public_functions(), ids=lambda node: node.name)
 def test_every_public_facade_function_delegates(function: ast.FunctionDef):
     """Each public function must import from a contract-layer module.

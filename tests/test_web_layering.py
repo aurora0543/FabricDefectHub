@@ -68,6 +68,7 @@ def _docstring_nodes(tree: ast.Module) -> set[int]:
     return found
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("path", WEB_MODULES, ids=lambda p: p.name)
 def test_web_module_does_not_import_a_specific_backend(path: Path):
     """`web/*` may import the model contract, never a backend's package."""
@@ -87,6 +88,7 @@ def test_web_module_does_not_import_a_specific_backend(path: Path):
     )
 
 
+@pytest.mark.architecture
 @pytest.mark.parametrize("path", WEB_MODULES, ids=lambda p: p.name)
 def test_web_module_has_no_backend_names_in_its_code(path: Path):
     """No backend name may appear as a *value* in the web package.
@@ -116,6 +118,7 @@ def test_web_module_has_no_backend_names_in_its_code(path: Path):
     )
 
 
+@pytest.mark.architecture
 def test_dataset_catalog_holds_presentation_only():
     """`DATASET_CATALOG` maps a display label to how the *page* should behave
     — nothing about what a dataset is.
