@@ -7,35 +7,40 @@
 
 **FabricDefectHub (UTAD-Framework)** is a unified, modular Python SDK and benchmarking framework for industrial textile anomaly detection and defect segmentation. 
 
-It integrates 20 published model architectures behind one interface, per-model config profiles anchored to each method's paper, strategy-driven data loading, and LaTeX table generation.
+It integrates **20 canonical model entries across 6 backend adapters** behind one interface: 3 Ultralytics detectors, 6 torchvision detection/segmentation models, 8 Anomalib anomaly models, and Dinomaly, MoECLIP, and MambaAD. Each model has a stable catalog key and published-weight slot; the catalog is the source of truth for the Web UI and batch benchmark. The project also registers **9 dataset adapters** (8 source datasets plus the `fabric-train` aggregate) for strategy-driven data loading and LaTeX table generation.
 
 ---
 
 ## 🏛️ System Architecture & Model Matrix
 
-The benchmark consolidates **20 published models** across supervised detectors and unsupervised anomaly segmenters. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
+The benchmark consolidates **20 canonical models** across supervised detection, segmentation, and anomaly detection. This is the published catalog used by the Web UI and `fdh train-all`, not the larger set of experimental variants accepted by individual backends. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
 
-| # | Model Architecture | Paradigm | Config profile (`recipe_id`) | Backbone / Notes |
+| # | Model Architecture | Backend | Paradigm | Config profile (`recipe_id`) |
 | :-: | --- | --- | --- | --- |
-| 1 | **YOLOv8n / YOLOv8s** | Supervised (CNN) | `yolov8` | Ultralytics detector; Ultralytics' documented training defaults |
-| 2 | **YOLO11n** | Supervised (CNN) | `yolov8` | Ultralytics YOLO11 detector |
-| 3 | **Faster / Cascade R-CNN** | Supervised (R-CNN) | — *(torchvision baseline)* | FPN multi-scale features |
-| 4 | **DETR** | Supervised (ViT) | — *(torchvision baseline)* | Query init & Hungarian matching |
-| 5 | **Mask R-CNN / UNet++** | Supervised (FCN) | — *(torchvision baseline)* | Pixel mask supervision |
-| 6 | **DeepLabV3+** | Supervised (FCN) | — *(torchvision baseline)* | ASPP dense context |
-| 7 | **PatchCore** | Feature Embedding | `patchcore` | WideResNet-50 memory bank + 10% coreset (paper settings) |
-| 8 | **PaDiM / SuperSimpleNet** | Feature Embedding | `patchcore` | Feature-embedding baselines |
-| 9 | **RD4AD** | Teacher-Student | `rd4ad` | WideResNet-50 reverse distillation (paper settings) |
-| 10 | **EfficientAD** | Teacher-Student | `rd4ad` | Teacher-student distillation |
-| 11 | **STFPM** | Teacher-Student | — *(see note)* | Feature-pyramid matching, student trained from scratch |
-| 12 | **GANomaly** | Adversarial (GAN) | — *(see note)* | Enc-dec-enc generator + discriminator; image-level scores only |
-| 13 | **MambaAD** | State Space (SSM) | `mambaad` | State-space decoder; upstream defaults |
-| 14 | **Dinomaly** | DINOv2 Enc-Dec | `dinomaly` | DINOv2 encoder-decoder (ViTill); upstream defaults |
-| 15 | **MoECLIP / WinCLIP** | Vision-Language | `moeclip` | CLIP + LoRA mixture-of-experts; upstream defaults |
+| 1 | **YOLOv8n** | Ultralytics | Supervised detection | `yolov8` |
+| 2 | **YOLOv8s** | Ultralytics | Supervised detection | `yolov8` |
+| 3 | **YOLO11n** | Ultralytics | Supervised detection | `yolov8` |
+| 4 | **Faster R-CNN** | torchvision | Supervised detection | — *(baseline)* |
+| 5 | **Cascade R-CNN** | torchvision | Supervised detection | — *(baseline)* |
+| 6 | **DETR** | torchvision | Supervised detection | — *(baseline)* |
+| 7 | **Mask R-CNN** | torchvision | Instance segmentation | — *(baseline)* |
+| 8 | **UNet++** | torchvision | Semantic segmentation | — *(baseline)* |
+| 9 | **DeepLabV3+** | torchvision | Semantic segmentation | — *(baseline)* |
+| 10 | **PatchCore** | Anomalib | Feature embedding | `patchcore` |
+| 11 | **PaDiM** | Anomalib | Feature embedding | `patchcore` |
+| 12 | **RD4AD** | Anomalib | Teacher-student | `rd4ad` |
+| 13 | **EfficientAD** | Anomalib | Teacher-student | `rd4ad` |
+| 14 | **SuperSimpleNet** | Anomalib | Feature embedding | `patchcore` |
+| 15 | **STFPM** | Anomalib | Teacher-student | — *(constructor defaults)* |
+| 16 | **GANomaly** | Anomalib | Adversarial (GAN) | — *(constructor defaults)* |
+| 17 | **WinCLIP** | Anomalib | Vision-language / zero-shot | `moeclip` |
+| 18 | **Dinomaly** | Dinomaly | DINOv2 encoder-decoder | `dinomaly` |
+| 19 | **MoECLIP** | MoECLIP | Vision-language / zero-shot | `moeclip` |
+| 20 | **MambaAD** | MambaAD | State-space (SSM) | `mambaad` |
 
-Coverage: the six `recipe_id`s supply run settings for the anomaly/detection methods (rows 1–2, 7–10, 13–15). The torchvision detectors/segmenters (rows 3–6) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
+Coverage: the six `recipe_id`s supply run settings for the YOLO, PatchCore/PaDiM/SuperSimpleNet, RD4AD/EfficientAD, MambaAD, Dinomaly, and CLIP-family entries. The six torchvision detectors/segmenters (rows 4–9) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
 
-Rows 11–12 (STFPM, GANomaly) carry no profile either, and that is a statement of fact rather than a gap to fill later: a `recipe_id` here means "these settings are anchored to that method's paper", and neither has been reproduced against its paper in this project yet. Both run on the constructor defaults declared in `models/anomalib/presets.py`, with each preset's comment saying explicitly which values are upstream's own and which (if any) were adjusted for fabric. A profile gets added when a reproduction earns it — see [`docs/MODEL_CONFIGURATION.md`](docs/MODEL_CONFIGURATION.md) for details.
+Rows 15–16 (STFPM, GANomaly) carry no profile either, and that is a statement of fact rather than a gap to fill later: a `recipe_id` here means "these settings are anchored to that method's paper", and neither has been reproduced against its paper in this project yet. Both run on the constructor defaults declared in `models/anomalib/presets.py`, with each preset's comment saying explicitly which values are upstream's own and which (if any) were adjusted for fabric. A profile gets added when a reproduction earns it — see [`docs/MODEL_CONFIGURATION.md`](docs/MODEL_CONFIGURATION.md) for details.
 
 Beyond the published catalog above, the anomalib backend also reaches
 **DRAEM**, **DSR**, **GLASS**, **FastFlow**, **UniNet** and **AnomalyDINO**
@@ -43,6 +48,26 @@ through `models/anomalib/presets.py` — reconstruction, normalizing-flow and
 zero-shot-DINOv2 families that are runnable today (`fdh train draem`) but not
 yet trained and published here, so they are deliberately kept out of the
 catalog and the UI dropdown. `fdh.list_models("anomalib")` prints the full set.
+
+---
+
+## 🗂️ Dataset Catalog
+
+FabricDefectHub currently registers **9 dataset adapters**: **8 source datasets** and the **`fabric-train` aggregate**. They are converted by `DatasetAdapter` into the shared `Sample` contract; each backend then consumes only the annotations it needs (boxes for detection, masks for segmentation, or normal/abnormal labels and maps for anomaly detection).
+
+| Dataset key | Dataset | Scope | Supported tasks | Intended role |
+| --- | --- | --- | --- | --- |
+| `zju-leaper` | ZJU-Leaper | Fabric, 19 patterns | Detection, segmentation, anomaly | Primary in-domain training and evaluation source; supports normal-only and defect-inclusive selections |
+| `raw-fabric` | RAW_FABRID | Fabric | Segmentation, anomaly | In-domain anomaly training source with MVTec-style normal/defect/mask folders |
+| `tilda-400` | TILDA-400 | Fabric | Anomaly | In-domain anomaly training and held-out evaluation |
+| `fabric-defects` | Fabric Defects Dataset | Fabric | Segmentation, anomaly | In-domain anomaly training and mask-bearing evaluation |
+| `tianchi` | Tianchi Guangdong Fabric Defect Challenge | Fabric | Detection, anomaly | Detection training plus normal-image anomaly training |
+| `fabric-train` | Fabric training aggregate | Composite | Detection, segmentation, anomaly | Union of the in-domain fabric sources for one-class anomaly training; not an independent raw dataset |
+| `mvtec-ad` | MVTec AD | Cross-domain objects/textures | Segmentation, anomaly | Auxiliary zero-shot training source and external evaluation |
+| `mvtec-loco` | MVTec LOCO AD | Cross-domain logical anomalies | Segmentation, anomaly | Auxiliary zero-shot training source and external evaluation |
+| `visa` | VisA | Cross-domain industrial objects | Segmentation, anomaly | MoECLIP auxiliary training source and external evaluation |
+
+The five in-domain fabric sources are `zju-leaper`, `raw-fabric`, `tilda-400`, `fabric-defects`, and `tianchi`. `fabric-train` combines their compatible samples. `mvtec-ad`, `mvtec-loco`, and `visa` are deliberately kept separate from ordinary fabric anomaly training; they provide cross-domain or zero-shot protocols instead. Dataset bytes are not committed to the repository: stage each source under its `data/<Dataset>` path (or a symlink) and use `fdh doctor` to verify what is available on the current machine.
 
 ---
 
