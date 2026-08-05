@@ -1,110 +1,59 @@
 # components/
 
-Research repos that ship a model but not an installable package — no PyPI
-release, no stable API, just scripts and `nn.Module`s. These don't belong
-in `anomalib`'s adapter tree because they aren't in `anomalib`'s model zoo
-and never will be — they're the author's own code, kept here.
+用于存放**非安装包形式**（无 PyPI、无稳定 API、仅含脚本与 `nn.Module`）的第三方研究代码库。此类代码不符合 `anomalib` 模型库标准，需作为独立的第三方依赖引入。
 
-Each one is a **git submodule pointing at our own fork** of the upstream
-repo (e.g. `components/dinomaly` -> `aurora0543/Dinomaly`, forked from
-[guojiajeremy/Dinomaly](https://github.com/guojiajeremy/Dinomaly)) — not
-upstream directly, and not a plain copy. `git submodule status` shows the
-exact commit pinned. After cloning this project, run:
+每一个目录都是指向**我们自己 Fork 仓库的 Git Submodule**（例如 `components/dinomaly` $\rightarrow$ `aurora0543/Dinomaly`）。
 
-```
+克隆本项目后，请运行以下命令初始化：
+
+```bash
 git submodule update --init --recursive
 ```
 
-to actually populate `components/*` (a fresh clone leaves these
-directories empty until then).
+#### 添加新的依赖库：
 
-**Why a fork instead of upstream directly:** these repos are written as
-one-off scripts, not libraries, and sometimes hardcode paths that assume
-they're being run from their own repo root (e.g. Dinomaly's
-`models/vit_encoder.py` used to hardcode `"backbones/weights"` as a
-*relative* path — every process that imported it dumped ~400MB of
-DINOv2 weights whereever that process's cwd happened to be, which was
-this project's own root, not the submodule). A fork gives us a legitimate
-place to patch exactly that kind of thing (see `aurora0543/Dinomaly`'s
-own commit history) without violating "never edit vendored source in
-`components/`" — the fork *is* the vendored source at that point, edited
-deliberately and diffably against its own upstream.
-
-To add another one:
-
-```
-gh repo fork <upstream-owner>/<repo> --clone=false   # creates <you>/<repo>
+```bash
+gh repo fork <upstream-owner>/<repo> --clone=false
 git submodule add https://github.com/<you>/<repo>.git components/<name>
+
 ```
 
-Rules for anything placed here:
+---
 
-- **Never edit files directly under `components/<name>` from this repo's
-  working tree, and never commit there without deliberately intending to
-  patch the fork.** Any fix belongs in a commit on the fork itself (`cd
-  components/<name> && git commit && git push origin <branch>`, then bump
-  the pointer in the parent repo — see below) — not an incidental side
-  effect of running the model, and not done from the adapter's side.
-  `git submodule status` should never show a `+` (dirty/diverged) prefix
-  from *uncommitted* changes; a deliberate fork patch is the one case
-  where the pinned commit is expected to move.
-- **Bumping the pinned commit** (whether picking up an upstream update via
-  the fork, or landing a new patch on the fork): `cd components/<name> &&
-  git fetch && git checkout <ref>`, then commit the resulting
-  `components/<name>` pointer change in the parent repo.
-- **One subdirectory per repo**, named after the repo (`components/dinomaly/`).
-- **Upstream module names may appear only in the backend's `vendor.py`.**
-  Declare the checkout as a `core.vendor.VendoredRepo` there; everywhere
-  else, go through `import_vendor()["models.uad"].ViTill`. A bare
-  `from utils import ...` in an adapter resolves to whichever vendored repo
-  loaded first. `tests/test_vendor_boundary.py` parses every source file
-  with `ast` and fails on a violation.
-- The corresponding adapter under `src/fabric_defect_hub/models/<name>/`
-  is responsible for translating between this project's
-  `Sample`/`Prediction`/`Artifact` types and whatever the vendored code
-  natively uses.
+### 开发规范
 
-Not everything that could plausibly live here does. `models/mambaad/`
-(see its own module docstring) is a clean-room reimplementation, not a
-submodule: the official repo is a plugin that only runs inside a second,
-larger framework (`ADer`) it doesn't ship, and its selective-scan core
-needs a CUDA-only compiled kernel (`mamba_ssm`) that won't install without
-a matching CUDA toolchain. Vendoring it here would mean vendoring ADer
-too — a general-purpose framework, not a single model's own code, which
-would break "one subdirectory per repo" below — and would gate the
-backend to a CUDA host exactly as hard as the CUDA-only kernel already
-does on its own. When a target repo isn't runnable on its own (needs a
-second framework present to import, needs a compiled extension with no
-portable fallback), reimplementing the published architecture directly
-against this project's contracts, the way `models/mambaad/` does, is the
-better fit than forcing it through this vendoring convention.
+1. **不可直接修改 `components/<name>**`：所有修复必须提交到 Fork 仓库（在子模块目录下 commit & push），然后更新主仓库的 submodule 指针。`git submodule status` 不应显示未经提交的 `+` 状态。
+2. **更新 Submodule 指针**：
+```bash
+cd components/<name> && git fetch && git checkout <ref>
+# 回到主项目提交指针变更
 
-Known collision risk: these repos define generic top-level module names
-(`utils`, `dataset`, `models`, `optimizers`, ...) rather than a namespaced
-package. Once one is imported, it occupies that name in `sys.modules` for
-the rest of the process — two vendored repos that both define, say,
-`utils.py` would otherwise shadow each other. This is no longer
-hypothetical: `components/dinomaly` and `components/moeclip` both ship a
-top-level `utils` and `dataset`, and the Benchmark tab runs every model
-back to back in one process.
+```
 
-The resolution is `core/vendor.py::VendoredRepo`, used by *every* vendored
-checkout — not just the later one. It imports a repo's modules inside a
-window where the checkout is `sys.path[0]` and any colliding name is
-temporarily evicted from `sys.modules`, then takes its own modules back
-out, restores what was there before, removes its `sys.path` entry, and
-keeps the imported modules in a private cache. Afterwards the two repos'
-`utils` modules are two distinct objects and neither occupies the shared
-name.
 
-Dinomaly originally used a plain permanent `sys.path` bootstrap, which
-worked only because it happened to load first. That was the last real
-hazard before the interface freeze, and it is gone: both checkouts now go
-through `VendoredRepo`, and a new one is three declarative lines
-(`owned_roots`, `entry_modules`, a not-found hint).
+3. **结构限制**：一个仓库对应一个子目录（如 `components/dinomaly/`）。
+4. **统一隔离导入**：
+* **严禁直接 import**：第三方代码的顶层模块名（如 `utils`, `dataset`）必须只在 `core/vendor.py` 中通过 `VendoredRepo` 声明。
+* **统一调用**：业务代码一律使用 `import_vendor()["models.uad"].ViTill` 方式调用。CI 脚本（`tests/test_vendor_boundary.py`）会自动检查并拦截违法导入。
 
-The mechanism relies on the vendored code not importing its own top-level
-names lazily from inside a function body — by then the name is out of
-`sys.modules`. Verified against both pinned commits (Dinomaly's only such
-imports are in `dinov2/run/*`, DINOv2's SLURM job launchers, which nothing
-here touches). Check this when bumping a pinned commit.
+
+5. **适配器翻译**：在 `src/fabric_defect_hub/models/<name>/` 下实现对应的 Adapter，负责在本项目数据结构（`Sample`/`Prediction`/`Artifact`）与第三方代码间进行转换。
+
+---
+
+### 什么时候不应该使用 Submodule？
+
+若第三方代码**无法独立运行**（如依赖外部大型框架，或依赖特定 CUDA 编译扩展如 `mamba_ssm`），应采取**重构/按接口重新实现**的方式（参考 `models/mambaad/`），而非强行 Vendor 化。
+
+---
+
+### 命名空间冲突解决方案（`VendoredRepo`）
+
+不同研究代码常包含同名顶层模块（如 `utils.py`, `dataset.py`），若直接放入 `sys.path` 会导致模块覆盖污染。
+
+本项目通过 `core/vendor.py::VendoredRepo` 动态管理导入生命周期：
+
+* 在导入时临时将目标路径置顶于 `sys.path` 并清理 `sys.modules` 冲突项；
+* 完成导入后将模块存入私有缓存并恢复原始全局环境。
+
+**注意**：此机制要求被引入的代码不能在函数内部延迟导入（Lazy Import）其顶层模块。在更新子模块指针时，请务必核验此约束。
