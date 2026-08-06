@@ -46,7 +46,7 @@ train:
     # A starting point, NOT a tuned or published fabric value: no STFPM
     # fabric result has been reproduced here yet, and this project's rule is
     # to claim a number only once it has been. Treat it as the initial point
-    # of the tuning window and override with `--set` (see docs/SDK.md).
+    # of the tuning window and override with `--set` (see docs/config.md).
     max_epochs: 100
     # accelerator unset -> Lightning "auto" (CUDA/MPS/CPU by host).
   num_workers: 0

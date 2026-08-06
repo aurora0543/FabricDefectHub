@@ -24,8 +24,7 @@ who want to compose runs themselves rather than drive a config:
     TrainConfig                        the shared hyperparameter vocabulary
 
 plus `load_dataset` / `load_model` / `run_experiment` for assembling a run
-by hand. See `docs/INTERFACE_SPEC.md` for the contracts and `docs/SDK.md`
-for both paths.
+by hand. See `docs/interface.md` for the contracts.
 """
 
 from fabric_defect_hub import recipes

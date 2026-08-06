@@ -60,8 +60,8 @@ def _public_functions() -> list[ast.FunctionDef]:
 
 
 def test_the_facade_exposes_the_documented_entry_points():
-    # If one of these disappears, `docs/SDK.md` and the package docstring are
-    # lying to whoever read them first.
+    # If one of these disappears, `docs/interface.md` and the package docstring
+    # are lying to whoever read them first.
     exposed = {node.name for node in _public_functions()}
     assert {
         "load_config", "from_pretrained", "list_pretrained",

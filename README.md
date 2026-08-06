@@ -163,14 +163,11 @@ fdh-ui
 
 Detailed technical specifications and user guides are organized under `docs/`:
 
-- 📋 **[Delivery Status](docs/DELIVERY_STATUS.md)**: one page — what is finished and verified, what is explicitly blocked, and how to check both yourself. Start here for review.
-- 📐 **[Python SDK Guide](docs/SDK.md)**: Modular SDK usage, and why the platform ships no in-house network components.
-- ⚙️ **[Model Configuration](docs/MODEL_CONFIGURATION.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, and validating on a held-out dataset.
-- 🚀 **[SDLP Loading & Testing Strategies](docs/SDLP_STRATEGIES.md)**: Sparse ratio sampling (`sparse_ratio`), 4K Sliding-Window Tiling, TTA, and BN Calibration.
-- 📊 **[Benchmark Protocols & LaTeX Generator](docs/BENCHMARK_AND_LATEX.md)**: PRO-Score, LMEI Edge Index calculation, and automated LaTeX table rendering.
-- 🌳 **[Extending FabricDefectHub](docs/EXTENDING.md)**: the dataset/backend availability decision tree (`fdh doctor`), the `--set` tuning window, and how to add a new dataset, backend, or config profile.
-- 🔁 **[Reproduction Card: PatchCore on MVTec-AD](docs/REPRODUCTION_PATCHCORE.md)**: the paper-anchored numbers each `patchcore` run is checked against.
-- ☁️ **[Cloud Training Runbook](docs/cloud_training_runbook.md)**: end-to-end steps for a fresh cloud box — env setup, dataset staging, putting the run on the GPU, smoke test, real training, watching progress, weight provenance.
+- � **[Interface Contract Spec](docs/interface.md)**: 系统契约、后端适配器接口、面向用户和 Web 层的分层规则。
+- ⚙️ **[Model Configuration](docs/config.md)**: config priority order, per-backend YAML fields, the config-profile (`recipe_id`) table, and validating on a held-out dataset.
+- 🌱 **[Add New Model / Dataset](docs/add_new.md)**: how to implement a new backend or dataset adapter, plus the `pytest -m architecture` review guard.
+- 🧾 **[Report & Result Schema](docs/report.md)**: run logging, benchmark reporting, and expected JSON schema outputs.
+- 🎥 **[Video Examples](docs/videos/)**: recorded walkthroughs and example runs for the UI and model pipelines.
 - 📓 **[Training notebook](notebooks/train_on_gpu.ipynb)**: the same `fdh.load_config`/`train`/`evaluate` path, one stage per cell, for interactive single-model work on a GPU box.
 
 ---
