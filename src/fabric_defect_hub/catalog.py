@@ -55,7 +55,7 @@ CANONICAL_MODELS: list[CanonicalModel] = [
     CanonicalModel("RD4AD", "anomalib", "RD4AD", "anomaly",
                     "anomalib_example.yaml", "RD4AD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("EfficientAD", "anomalib", "EfficientAD", "anomaly",
-                    "anomalib_example.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
+                    "anomalib_efficientad.yaml", "EfficientAD · Normal Lab trained", "Normal Lab"),
     CanonicalModel("SuperSimpleNet", "anomalib", "SuperSimpleNet", "anomaly",
                     "anomalib_example.yaml", "SuperSimpleNet · Normal Lab trained", "Normal Lab"),
     CanonicalModel("STFPM", "anomalib", "STFPM", "anomaly",
@@ -64,7 +64,7 @@ CANONICAL_MODELS: list[CanonicalModel] = [
                     "anomalib_ganomaly.yaml", "GANomaly · Normal Lab trained", "Normal Lab"),
     # -- Zero-shot & Research models --------------------------------------
     CanonicalModel("WinCLIP", "anomalib", "WinClip", "anomaly",
-                    "anomalib_example.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),
+                    "anomalib_winclip.yaml", "WinCLIP · Zero-shot", "Zero-shot CLIP"),
     CanonicalModel("Dinomaly", "dinomaly", "dinov2reg_vit_base_14", "anomaly",
                     "dinomaly_example.yaml", "Dinomaly · Normal Lab trained", "Normal Lab"),
     CanonicalModel("MoECLIP", "moeclip", "ViT-L-14-336", "anomaly",

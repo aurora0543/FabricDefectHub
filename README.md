@@ -7,7 +7,7 @@
 
 **FabricDefectHub (UTAD-Framework)** is a unified, modular Python SDK and benchmarking framework for industrial textile anomaly detection and defect segmentation. 
 
-It integrates **20 canonical model entries across 6 backend adapters** behind one interface: 3 Ultralytics detectors, 6 torchvision detection/segmentation models, 8 Anomalib anomaly models, and Dinomaly, MoECLIP, and MambaAD. Each model has a stable catalog key and published-weight slot; the catalog is the source of truth for the Web UI and batch benchmark. The project also registers **9 dataset adapters** (8 source datasets plus the `fabric-train` aggregate) for strategy-driven data loading and LaTeX table generation.
+It integrates **20 canonical model entries across 6 backend adapters** behind one interface: 3 Ultralytics detectors, 6 torchvision detection/segmentation models, 8 Anomalib anomaly models, and Dinomaly, MoECLIP, and MambaAD. Each model has a stable catalog key and published-weight slot; the catalog is the source of truth for the Web UI and batch benchmark. On the current workspace, **16 canonical slots already contain published artifacts**; the cloud completion scope is the remaining four (`EfficientAD`, `WinCLIP`, `MoECLIP`, `MambaAD`). The project also registers **9 dataset adapters** (8 source datasets plus the `fabric-train` aggregate) for strategy-driven data loading and LaTeX table generation.
 
 ---
 
@@ -15,28 +15,38 @@ It integrates **20 canonical model entries across 6 backend adapters** behind on
 
 The benchmark consolidates **20 canonical models** across supervised detection, segmentation, and anomaly detection. This is the published catalog used by the Web UI and `fdh train-all`, not the larger set of experimental variants accepted by individual backends. The **Config profile** column is the `recipe_id` that supplies each method's run settings (in the backend's real vocabulary, anchored to the paper) — it is a settings bundle, not a novel contribution:
 
-| # | Model Architecture | Backend | Paradigm | Config profile (`recipe_id`) |
-| :-: | --- | --- | --- | --- |
-| 1 | **YOLOv8n** | Ultralytics | Supervised detection | `yolov8` |
-| 2 | **YOLOv8s** | Ultralytics | Supervised detection | `yolov8` |
-| 3 | **YOLO11n** | Ultralytics | Supervised detection | `yolov8` |
-| 4 | **Faster R-CNN** | torchvision | Supervised detection | — *(baseline)* |
-| 5 | **Cascade R-CNN** | torchvision | Supervised detection | — *(baseline)* |
-| 6 | **DETR** | torchvision | Supervised detection | — *(baseline)* |
-| 7 | **Mask R-CNN** | torchvision | Instance segmentation | — *(baseline)* |
-| 8 | **UNet++** | torchvision | Semantic segmentation | — *(baseline)* |
-| 9 | **DeepLabV3+** | torchvision | Semantic segmentation | — *(baseline)* |
-| 10 | **PatchCore** | Anomalib | Feature embedding | `patchcore` |
-| 11 | **PaDiM** | Anomalib | Feature embedding | `patchcore` |
-| 12 | **RD4AD** | Anomalib | Teacher-student | `rd4ad` |
-| 13 | **EfficientAD** | Anomalib | Teacher-student | `rd4ad` |
-| 14 | **SuperSimpleNet** | Anomalib | Feature embedding | `patchcore` |
-| 15 | **STFPM** | Anomalib | Teacher-student | — *(constructor defaults)* |
-| 16 | **GANomaly** | Anomalib | Adversarial (GAN) | — *(constructor defaults)* |
-| 17 | **WinCLIP** | Anomalib | Vision-language / zero-shot | `moeclip` |
-| 18 | **Dinomaly** | Dinomaly | DINOv2 encoder-decoder | `dinomaly` |
-| 19 | **MoECLIP** | MoECLIP | Vision-language / zero-shot | `moeclip` |
-| 20 | **MambaAD** | MambaAD | State-space (SSM) | `mambaad` |
+| # | Model Architecture | Backend | Paradigm | Config profile (`recipe_id`) | Current status |
+| :-: | --- | --- | --- | --- | --- |
+| 1 | **YOLOv8n** | Ultralytics | Supervised detection | `yolov8` | ✅ covered; ZJU run path and published weight |
+| 2 | **YOLOv8s** | Ultralytics | Supervised detection | `yolov8` | ✅ covered; ZJU run path and published weight |
+| 3 | **YOLO11n** | Ultralytics | Supervised detection | `yolov8` | ✅ covered; ZJU run path and published weight |
+| 4 | **Faster R-CNN** | torchvision | Supervised detection | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 5 | **Cascade R-CNN** | torchvision | Supervised detection | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 6 | **DETR** | torchvision | Supervised detection | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 7 | **Mask R-CNN** | torchvision | Instance segmentation | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 8 | **UNet++** | torchvision | Semantic segmentation | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 9 | **DeepLabV3+** | torchvision | Semantic segmentation | — *(baseline)* | ✅ covered; ZJU run path and published weight |
+| 10 | **PatchCore** | Anomalib | Feature embedding | `patchcore` | ✅ covered; ZJU normal-only path and published weight |
+| 11 | **PaDiM** | Anomalib | Feature embedding | `patchcore` | ✅ covered; ZJU normal-only path and published weight |
+| 12 | **RD4AD** | Anomalib | Teacher-student | `rd4ad` | ✅ covered; ZJU normal-only path and published weight |
+| 13 | **EfficientAD** | Anomalib | Teacher-student | `rd4ad` | 🟡 configured, but needs an external natural-image `imagenet_dir`; not a completed ZJU run |
+| 14 | **SuperSimpleNet** | Anomalib | Feature embedding | `patchcore` | ✅ covered; ZJU path and published weight |
+| 15 | **STFPM** | Anomalib | Teacher-student | — *(constructor defaults)* | ✅ covered; ZJU normal-only path and published weight |
+| 16 | **GANomaly** | Anomalib | Adversarial (GAN) | — *(constructor defaults)* | ✅ covered; image-level anomaly output and published weight |
+| 17 | **WinCLIP** | Anomalib | Vision-language / zero-shot | `moeclip` | 🟡 configured; training-free, requires cached/downloadable OpenCLIP weights |
+| 18 | **Dinomaly** | Dinomaly | DINOv2 encoder-decoder | `dinomaly` | ✅ covered; ZJU normal-only path and published weight |
+| 19 | **MoECLIP** | MoECLIP | Vision-language / zero-shot | `moeclip` | 🟡 configured; requires `ViT-L-14-336px.pt` and MVTec AD auxiliary training |
+| 20 | **MambaAD** | MambaAD | State-space (SSM) | `mambaad` | 🟡 implemented, but high-resource and not yet an accepted completed baseline; export is unsupported |
+
+Status meaning: **✅ covered** means the adapter, configuration-driven lifecycle,
+and a project artifact/run path are present. **🟡 configured** means the model
+is represented by the same contracts and can be attempted through `fdh`, but a
+cloud prerequisite or an explicit resource limitation remains before claiming a
+completed baseline. In particular, WinCLIP is training-free (its artifact is a
+reconstructable zero-shot handle, not a learned checkpoint); MoECLIP trains its
+adapter on MVTec AD and evaluates ZJU as an unseen domain; EfficientAD requires
+an external natural-image regularization directory; and MambaAD is retained as
+an implemented high-resource model whose export path is intentionally absent.
 
 Coverage: the six `recipe_id`s supply run settings for the YOLO, PatchCore/PaDiM/SuperSimpleNet, RD4AD/EfficientAD, MambaAD, Dinomaly, and CLIP-family entries. The six torchvision detectors/segmenters (rows 4–9) run as standard baselines on torchvision's own defaults — they intentionally carry no profile. Every profile's hyperparameters are expressed in its backend's real vocabulary and pinned to the backend's upstream-verified defaults by `tests/test_recipe_reconciliation.py`.
 

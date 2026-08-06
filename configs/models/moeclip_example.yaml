@@ -83,10 +83,12 @@ model:
 # Do NOT set test_dataset to the same dataset as `dataset`: that measures
 # in-domain performance and the resulting number is not a zero-shot result.
 data:
-  dataset: visa                 # auxiliary training corpus (never fabric)
-  # dataset_root: ${VISA_ROOT}
-  test_dataset: raw-fabric      # zero-shot evaluation target: fabric the model has never seen
-  # test_dataset_root: ${RAW_FABRIC_ROOT}
+  # MVTec AD is staged on the project's external SSD and follows the
+  # mask-bearing MVTec layout MoECLIP needs for its segmentation loss.
+  dataset: mvtec-ad             # auxiliary training corpus (never fabric)
+  dataset_root: ${MVTEC_AD_ROOT}
+  test_dataset: zju-leaper      # held-out fabric target: pattern1-4
+  test_dataset_root: ${ZJU_LEAPER_ROOT}
   train_selection:          # MoECLIP learns from labelled defects -- the opposite of the one-class backends
     split: test             # VisA/MVTec-style benchmarks only put anomalies+masks in their "test" split;
                              # "train" is normal-only by definition of the benchmark, so use_defect below
@@ -98,7 +100,8 @@ data:
     seed: 0
   test_selection:           # read from test_dataset: mixed normal + defective fabric
     split: test
-    num_samples: 200
+    pattern: [pattern1, pattern2, pattern3, pattern4]
+    num_samples: 400
     use_defect: true
     defect_ratio: 0.5
     task: segmentation
@@ -121,7 +124,7 @@ train:
 # ---- Validation: predict() + AnomalyEvaluator (not upstream's pandas leaderboard) ----
 val:
   enabled: true
-  output_dir: artifacts/anomaly_maps/moeclip_zeroshot_raw_fabric   # stores pixel-level anomaly maps for pixel AUROC/AUPRO; null if not needed
+  output_dir: artifacts/anomaly_maps/moeclip_zeroshot_zju_pattern1-4   # stores pixel-level anomaly maps for pixel AUROC/AUPRO; null if not needed
   max_pixels: 1000000
   max_aupro_images: 50
   seed: 0
@@ -138,5 +141,5 @@ export:
 # ---- Checkpoint / model registry ----
 checkpoint:
   work_dir: null    # null = fresh temp dir; set to keep the raw training-run checkpoint too
-  name: moeclip_visa_zeroshot
+  name: moeclip_mvtec_ad_zeroshot_zju_pattern1-4
   registry_dir: artifacts/models   # the trained checkpoint is copied here as moeclip_<backbone>.pth
