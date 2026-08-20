@@ -155,7 +155,8 @@ class ValSpec:
     output_dir: where per-sample pixel `anomaly_map` `.npy` files are
         written. Required for pixel-level AUROC/AUPRO; omit (`None`) to
         skip that disk write and only get image-level metrics.
-    max_pixels / max_aupro_images / seed: passed straight to
+    max_pixels / max_aupro_images / seed / image_threshold / pixel_threshold:
+        passed straight to
         `AnomalyEvaluator(...)` — see its docstring for the memory-safety
         tradeoffs these control.
     """
@@ -165,6 +166,9 @@ class ValSpec:
     max_pixels: int = 1_000_000
     max_aupro_images: int = 50
     seed: int = 0
+    image_threshold: float | None = None
+    pixel_threshold: float | None = None
+    allow_oracle_threshold: bool = False
 
 
 @dataclass
@@ -328,4 +332,3 @@ def _expand_environment_variables(value):
     if isinstance(value, list):
         return [_expand_environment_variables(item) for item in value]
     return os.path.expandvars(value) if isinstance(value, str) else value
-

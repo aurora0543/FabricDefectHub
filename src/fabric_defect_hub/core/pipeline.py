@@ -205,5 +205,8 @@ class AnomalyPipeline(BasePipeline):
             max_pixels=val.max_pixels,
             max_aupro_images=val.max_aupro_images,
             seed=val.seed,
+            image_threshold=val.image_threshold,
+            pixel_threshold=val.pixel_threshold,
+            allow_oracle_threshold=val.allow_oracle_threshold,
         )
         return evaluator.evaluate(self.test_samples, predictions)

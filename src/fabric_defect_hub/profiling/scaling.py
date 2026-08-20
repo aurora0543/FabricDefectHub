@@ -74,6 +74,8 @@ def max_concurrent_streams(
 
     if frame_budget_ms <= 0:
         raise ValueError("frame_budget_ms must be positive.")
+    if max_streams_to_try < 1:
+        raise ValueError("max_streams_to_try must be at least 1.")
 
     best = 0
     for n in range(1, max_streams_to_try + 1):

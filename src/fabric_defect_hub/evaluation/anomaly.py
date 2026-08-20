@@ -1,5 +1,6 @@
-"""Anomaly `Evaluator`: image-level AUROC/F1/precision/recall (at an
-F1-optimal threshold, not a hardcoded 0.5), plus pixel-level AUROC/AUPRO/IAP
+"""Anomaly `Evaluator`: image/pixel AUROC/AUPRO/IAP plus optional
+thresholded F1/precision/recall. Thresholded metrics require a threshold
+calibrated on a validation set; same-set oracle thresholds are opt-in only.
 when `Prediction.anomaly_map` files are available (see
 `AnomalibAdapter.predict(..., output_dir=...)`).
 
@@ -30,7 +31,7 @@ DEFAULT_MAX_AUPRO_IMAGES = 50
 
 @register_evaluator
 class AnomalyEvaluator(Evaluator):
-    """Image-level (always) + pixel-level (when maps are present) anomaly metrics."""
+    """Image-level and pixel-level anomaly metrics with explicit calibration."""
 
     task = "anomaly"
 
@@ -39,10 +40,18 @@ class AnomalyEvaluator(Evaluator):
         max_pixels: int = DEFAULT_MAX_PIXELS,
         max_aupro_images: int = DEFAULT_MAX_AUPRO_IMAGES,
         seed: int = 0,
+        image_threshold: float | None = None,
+        pixel_threshold: float | None = None,
+        allow_oracle_threshold: bool = False,
     ):
+        if max_pixels < 1 or max_aupro_images < 1:
+            raise ValueError("max_pixels and max_aupro_images must be positive.")
         self.max_pixels = max_pixels
         self.max_aupro_images = max_aupro_images
         self.seed = seed
+        self.image_threshold = image_threshold
+        self.pixel_threshold = pixel_threshold
+        self.allow_oracle_threshold = allow_oracle_threshold
 
     def evaluate(self, samples: list[Sample], predictions: list[Prediction]) -> dict[str, float]:
         import numpy as np
@@ -68,11 +77,19 @@ class AnomalyEvaluator(Evaluator):
         if not y_true:
             return {}
 
-        metrics = _image_level_metrics(np.asarray(y_true), np.asarray(y_score, dtype=float))
+        metrics = _image_level_metrics(
+            np.asarray(y_true), np.asarray(y_score, dtype=float),
+            threshold=self.image_threshold,
+            allow_oracle_threshold=self.allow_oracle_threshold,
+        )
 
         if pixel_pairs:
             metrics.update(
-                _pixel_level_metrics(pixel_pairs, self.max_pixels, self.max_aupro_images, self.seed)
+                _pixel_level_metrics(
+                    pixel_pairs, self.max_pixels, self.max_aupro_images, self.seed,
+                    threshold=self.pixel_threshold,
+                    allow_oracle_threshold=self.allow_oracle_threshold,
+                )
             )
 
         return metrics
@@ -117,7 +134,8 @@ def _best_f1_threshold(y_true, y_score) -> float:
     return float(thresholds[int(f1.argmax())])
 
 
-def _image_level_metrics(y_true, y_score) -> dict[str, float]:
+def _image_level_metrics(y_true, y_score, *, threshold: float | None = None,
+                         allow_oracle_threshold: bool = False) -> dict[str, float]:
     from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 
     metrics: dict[str, float] = {}
@@ -125,7 +143,9 @@ def _image_level_metrics(y_true, y_score) -> dict[str, float]:
         float(roc_auc_score(y_true, y_score)) if len(set(y_true.tolist())) >= 2 else float("nan")
     )
 
-    threshold = _best_f1_threshold(y_true, y_score)
+    if threshold is None and not allow_oracle_threshold:
+        return metrics
+    threshold = _best_f1_threshold(y_true, y_score) if threshold is None else float(threshold)
     y_pred = (y_score >= threshold).astype(int)
     metrics["image_f1"] = float(f1_score(y_true, y_pred, zero_division=0))
     metrics["image_precision"] = float(precision_score(y_true, y_pred, zero_division=0))
@@ -135,7 +155,8 @@ def _image_level_metrics(y_true, y_score) -> dict[str, float]:
 
 
 def _pixel_level_metrics(
-    pixel_pairs: list, max_pixels: int, max_aupro_images: int, seed: int
+    pixel_pairs: list, max_pixels: int, max_aupro_images: int, seed: int,
+    *, threshold: float | None = None, allow_oracle_threshold: bool = False,
 ) -> dict[str, float]:
     import numpy as np
     from sklearn.metrics import f1_score, roc_auc_score
@@ -152,10 +173,11 @@ def _pixel_level_metrics(
     metrics["pixel_auroc"] = (
         float(roc_auc_score(flat_true, flat_score)) if len(set(flat_true.tolist())) >= 2 else float("nan")
     )
-    px_threshold = _best_f1_threshold(flat_true, flat_score)
-    metrics["pixel_f1"] = float(
-        f1_score(flat_true, (flat_score >= px_threshold).astype(int), zero_division=0)
-    )
+    if threshold is not None or allow_oracle_threshold:
+        px_threshold = _best_f1_threshold(flat_true, flat_score) if threshold is None else float(threshold)
+        metrics["pixel_f1"] = float(
+            f1_score(flat_true, (flat_score >= px_threshold).astype(int), zero_division=0)
+        )
     metrics["pixel_aupro"] = _compute_aupro(pixel_pairs, max_aupro_images, seed)
     metrics["iap"] = _compute_iap(pixel_pairs, max_aupro_images, seed)
     return metrics

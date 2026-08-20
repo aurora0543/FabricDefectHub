@@ -61,6 +61,11 @@
 
 ## 4. 验证模式
 
+异常检测的 F1、Precision、Recall 需要使用独立验证集校准阈值。默认验证只报告
+AUROC/AUPRO 等阈值无关指标；不要在测试集上搜索最佳阈值。若配置了
+`val.image_threshold` 或 `val.pixel_threshold`，这些固定阈值会应用到测试集；
+`val.allow_oracle_threshold: true` 仅用于探索性分析，结果不能作为正式测试结论。
+
 大多数后端支持通过 `model.weights` + `train.enabled: false` 加载已有 checkpoint 进行验证或导出。
 
 示例：

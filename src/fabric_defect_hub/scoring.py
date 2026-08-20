@@ -24,15 +24,15 @@ from typing import Any, Literal
 
 MetricDirection = Literal["higher", "lower"]
 
-# Ordered (substring, direction) rules -- the first match wins, so more
-# specific patterns (fps_std/fps_cv, jitter measures where *lower* is
-# better) must precede the general "fps" rule they'd otherwise also match.
+# Ordered (substring, direction) rules -- the first match wins. Specific
+# lower-is-better jitter patterns must precede the general "fps" rule.
 _DIRECTION_RULES: tuple[tuple[str, MetricDirection], ...] = (
-    ("fps_std", "lower"),
-    ("fps_cv", "lower"),
+    ("instantaneous_fps_std", "lower"),
+    ("instantaneous_fps_cv", "lower"),
+    ("latency_ms_std", "lower"),
+    ("latency_ms_cv", "lower"),
     ("fps", "higher"),
     ("latency", "lower"),
-    ("memory_mb", "lower"),
     ("model_size_mb", "lower"),
     ("runtime_s", "lower"),
     ("alarms_per_unit_length", "lower"),
@@ -50,7 +50,10 @@ _DIRECTION_RULES: tuple[tuple[str, MetricDirection], ...] = (
 
 # Metrics matched by these substrings count toward the "overhead" (runtime
 # cost) group; every other classified metric is "technical" (accuracy).
-_OVERHEAD_KEYWORDS = ("fps", "latency", "memory_mb", "model_size_mb", "runtime_s")
+# Raw memory is intentionally excluded: PyTorch allocator bytes, process RSS,
+# and TensorRT I/O-buffer lower bounds are different quantities. They remain
+# visible in reports but cannot influence a cross-engine composite score.
+_OVERHEAD_KEYWORDS = ("fps", "latency", "model_size_mb", "runtime_s")
 
 SCORE_PRESETS: dict[str, tuple[float, float]] = {
     "accuracy_first": (0.85, 0.15),

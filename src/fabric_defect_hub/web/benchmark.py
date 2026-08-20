@@ -113,6 +113,7 @@ def _profile_setup(model: Any, device: str):
     config = ProfileConfig(
         device=device, engine=engine, precision="fp32", input_size=(640, 640),
         input_style=capabilities.export_input_style, warmup_runs=5, measured_runs=20,
+        power_mode="disabled",
     )
     return profiler, config, export_target
 
@@ -147,6 +148,12 @@ def _profile_model(model: Any, artifact: Any, device: str) -> dict[str, float]:
     if not export_path.is_file():
         raise FileNotFoundError(f"exported model does not exist: {export_path}")
     metrics = profiler.profile(exported, config)
+    memory_context = getattr(profiler, "last_instrumentation", {}).get("memory", {})
+    metrics["memory_measurement_kind"] = memory_context.get("kind", "unknown")
+    metrics["memory_measurement_scope"] = memory_context.get("scope", "unknown")
+    metrics["memory_cross_engine_comparable"] = bool(
+        memory_context.get("cross_engine_comparable", False)
+    )
     metrics["model_size_mb"] = export_path.stat().st_size / (1024 * 1024)
     return metrics
 
@@ -182,7 +189,8 @@ def _resolution_sweep(model: Any, artifact: Any, device: str) -> dict[str, float
 
 
 def _flops_and_lmei(
-    model: Any, model_spec: dict[str, Any], device: str, fps: float | None, vram_mb: float | None,
+    model: Any, model_spec: dict[str, Any], device: str, fps: float | None,
+    vram_mb: float | None, memory_kind: str | None,
 ) -> dict[str, float]:
     """FLOPs + parameter count from the adapter's live model (`ModelAdapter
     .raw_module()`), then the LMEI edge-deployment trade-off score those
@@ -212,11 +220,15 @@ def _flops_and_lmei(
         input_style=model.capabilities().export_input_style, device=device,
     )
     params_m = parameter_counts(raw_module).get("parameter_count", 0) / 1e6
-    return {
+    metrics = {
         "flops_g": round(flops_g, 4),
         "params_m": round(params_m, 4),
-        "lmei": calculate_lmei(fps=fps, vram_mb=vram_mb, flops_g=flops_g, params_m=params_m),
     }
+    if memory_kind == "device_allocator":
+        metrics["lmei"] = calculate_lmei(
+            fps=fps, vram_mb=vram_mb, flops_g=flops_g, params_m=params_m
+        )
+    return metrics
 
 
 def _cross_domain_probe(
@@ -396,6 +408,7 @@ def run_benchmark(
                 try:
                     row.update(_flops_and_lmei(
                         model, model_spec, device, fps=row.get("fps"), vram_mb=row.get("peak_memory_mb"),
+                        memory_kind=row.get("memory_measurement_kind"),
                     ))
                 except Exception as exc:
                     errors.append(f"{model_label}: FLOPs/LMEI skipped ({type(exc).__name__}: {exc})")

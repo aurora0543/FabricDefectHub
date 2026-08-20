@@ -95,7 +95,38 @@ The commands intentionally do not use `fdh train-all`: that command would
 re-run all 20 catalog entries, including the 16 models already completed
 locally. Run MambaAD even if it fails; preserve its log for the project record.
 
-## 4. What is created and what to download
+## 4. Run the complete benchmark on cloud
+
+Run the accuracy sweep with anomaly-map persistence enabled. The sweep now
+uses `artifacts/runtime/anomaly_maps` automatically when the flag is omitted,
+but keeping the option explicit makes the cloud bundle self-documenting:
+
+```bash
+python tools/run_metric_sweep.py \
+  --dataset zju-leaper \
+  --pattern 1,2,3,4 \
+  --num-samples 400 \
+  --groups accuracy,cross_domain,runtime,scaling,concurrency \
+  --cross-domain-patterns 5,6,7,8 \
+  --anomaly-map-dir artifacts/runtime/anomaly_maps \
+  --output artifacts/runtime/full_sweep.jsonl \
+  --device cuda:0
+```
+
+Detection models produce box/instance metrics only. Segmentation and anomaly
+models that expose masks or anomaly maps produce both image-level and
+pixel-level metrics. GANomaly is image-level only because its model output has
+no spatial anomaly map. Every unsupported export or profiling measurement is
+written as a `skipped` row with its reason; it must not be interpreted as a
+zero score.
+
+The `cross_domain` group is not enabled unless `--cross-domain-patterns` is
+provided. It reports degradation of the task headline metric on held-out
+patterns. Runtime, scaling, and concurrency are the overhead groups; they are
+independent of accuracy and may be skipped when a backend cannot export or
+profile its model.
+
+## 5. What is created and what to download
 
 Each successful `fdh train` writes a registered weight under
 `artifacts/models/`, publishes the four missing canonical slots when applicable,

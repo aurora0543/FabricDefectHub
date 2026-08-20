@@ -33,6 +33,7 @@ owns turning rows into a document.
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
@@ -42,7 +43,9 @@ from typing import Any, Callable, Iterable, Sequence
 from fabric_defect_hub.core.provenance import collect_provenance
 from fabric_defect_hub.weight_registry import read_weight_manifest
 
-METRIC_GROUPS: tuple[str, ...] = ("accuracy", "cross_domain", "runtime", "scaling", "concurrency")
+METRIC_GROUPS: tuple[str, ...] = (
+    "accuracy", "cross_domain", "runtime", "scaling", "concurrency", "communication",
+)
 
 # Groups that need an exported artifact rather than a raw checkpoint. Kept
 # here so `plan_sweep` can report "would export once" instead of each group
@@ -116,6 +119,8 @@ class SweepRequest:
     max_streams_to_try: int = 8
     measured_runs: int = 50
     warmup_runs: int = 5
+    power_mode: str = "disabled"
+    overwrite: bool = False
 
     def __post_init__(self) -> None:
         unknown = sorted(set(self.groups) - set(METRIC_GROUPS))
@@ -123,6 +128,20 @@ class SweepRequest:
             raise ValueError(f"unknown metric group(s) {unknown}; expected {list(METRIC_GROUPS)}")
         self.project_root = Path(self.project_root)
         self.output_path = Path(self.output_path)
+        if self.num_samples is not None and self.num_samples < 1:
+            raise ValueError("num_samples must be positive or None")
+        if self.cross_domain_k < 1:
+            raise ValueError("cross_domain_k must be at least 1")
+        if self.frame_budget_ms <= 0:
+            raise ValueError("frame_budget_ms must be positive")
+        if self.max_streams_to_try < 1:
+            raise ValueError("max_streams_to_try must be at least 1")
+        if self.measured_runs < 1:
+            raise ValueError("measured_runs must be at least 1")
+        if self.warmup_runs < 0:
+            raise ValueError("warmup_runs cannot be negative")
+        if self.power_mode not in {"required", "disabled"}:
+            raise ValueError("formal sweeps require power_mode='required' or 'disabled'")
 
 
 @dataclass(frozen=True)
@@ -138,6 +157,7 @@ class SweepRow:
     reason: str | None = None
     duration_s: float = 0.0
     weights: str | None = None
+    instrumentation: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -264,7 +284,8 @@ def run_sweep(
 
     request.output_path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[SweepRow] = []
-    with request.output_path.open("w", encoding="utf-8") as handle:
+    mode = "w" if request.overwrite else "x"
+    with request.output_path.open(mode, encoding="utf-8") as handle:
         header = {
             "kind": "sweep_header",
             "dataset": request.dataset,
@@ -273,7 +294,19 @@ def run_sweep(
             "groups": list(request.groups),
             "model_count": len(models),
             "num_samples": request.num_samples,
-            "provenance": collect_provenance(),
+            "pattern": request.pattern,
+            "category": request.category,
+            "seed": request.seed,
+            "cross_domain_patterns": list(request.cross_domain_patterns),
+            "cross_domain_k": request.cross_domain_k,
+            "cross_domain_mode": request.cross_domain_mode,
+            "frame_budget_ms": request.frame_budget_ms,
+            "max_streams_to_try": request.max_streams_to_try,
+            "measured_runs": request.measured_runs,
+            "warmup_runs": request.warmup_runs,
+            "power_mode": request.power_mode,
+            "models": [_model_manifest_entry(model, request.project_root) for model in models],
+            "provenance": collect_provenance(request.project_root),
         }
         handle.write(json.dumps(header, ensure_ascii=False, sort_keys=True) + "\n")
         handle.flush()
@@ -330,6 +363,8 @@ def _measure(
             metrics = _scaling(exported, request)
         elif group == "concurrency":
             metrics = _concurrency(exported, request)
+        elif group == "communication":
+            metrics = _communication(model, exported)
         else:  # unreachable: SweepRequest validates the vocabulary
             return SweepRow(**base, status="skipped", reason=f"unknown group {group}")
     except NotImplementedError as exc:
@@ -343,19 +378,20 @@ def _measure(
             metrics={"traceback_tail": traceback.format_exc(limit=3)[-500:]},
         )
 
+    instrumentation = metrics.pop("__instrumentation__", {})
     # `sample_count` and friends say the run happened, not that anything was
     # measured. Counting them as metrics is how an evaluator/model task
     # mismatch first showed up as a green `ok` row carrying nothing at all.
     if not set(metrics) - _BOOKKEEPING_KEYS:
         return SweepRow(
-            **base, status="skipped", metrics=metrics,
+            **base, status="skipped", metrics=metrics, instrumentation=instrumentation,
             reason=(
                 "no metrics produced — nothing this group measures applies to this model "
                 "(e.g. an evaluator with no matching ground truth, or a fixed-shape export "
                 "that cannot be swept across resolutions)"
             ),
         )
-    return SweepRow(**base, status="ok", metrics=metrics)
+    return SweepRow(**base, status="ok", metrics=metrics, instrumentation=instrumentation)
 
 
 # --------------------------------------------------------------------------- #
@@ -394,11 +430,14 @@ def _coerce_pattern(pattern: str | int | None) -> str | int | None:
 def _accuracy(model: TrainedModel, request: SweepRequest) -> dict[str, Any]:
     from fabric_defect_hub.inference.runner import run_evaluate
 
-    output_dir = None
-    if request.anomaly_map_dir is not None:
-        # Pixel-level metrics (pixel_auroc / pixel_aupro / iap) only exist if
-        # the adapter was given somewhere to persist each anomaly map.
-        output_dir = str(Path(request.anomaly_map_dir) / model.backend / model.variant)
+    # Accuracy sweeps persist anomaly maps by default. This is required for
+    # pixel-level metrics; detection/segmentation adapters ignore the output
+    # directory unless they declare an anomaly map capability. A caller can
+    # still provide an explicit directory to control where maps are stored.
+    map_root = request.anomaly_map_dir or (
+        request.project_root / "artifacts" / "runtime" / "anomaly_maps"
+    )
+    output_dir = str(Path(map_root) / model.backend / model.variant)
 
     task = _evaluation_task(model)
     run = run_evaluate(
@@ -468,8 +507,15 @@ def _cross_domain(model: TrainedModel, request: SweepRequest) -> dict[str, Any]:
                 source=_predict_source(request, pattern=pattern, task=task),
                 backend=model.backend, variant=model.variant, task=task,
             )
-        except Exception:  # noqa: BLE001 -- a missing pattern is not a failed sweep
+        except (FileNotFoundError, KeyError) as exc:
+            # A missing directory/pattern is a data-availability skip. Other
+            # exceptions must escape so _measure records a real failure.
             return None
+        except ValueError as exc:
+            message = str(exc).lower()
+            if any(token in message for token in ("no samples", "not found", "unknown pattern", "does not exist")):
+                return None
+            raise
         value = run.metrics.get(metric_key)
         return float(value) if isinstance(value, (int, float)) else None
 
@@ -483,13 +529,39 @@ def _cross_domain(model: TrainedModel, request: SweepRequest) -> dict[str, Any]:
     return {"metric": metric_key, **result}
 
 
-def _profile_config(request: SweepRequest, input_style: str = "batched", engine: str = "pytorch"):
+def _model_manifest_entry(model: TrainedModel, project_root: Path) -> dict[str, Any]:
+    config_path = Path(model.config) if model.config else None
+    if config_path is not None and not config_path.is_file():
+        local = project_root / "configs" / "models" / config_path.name
+        config_path = local if local.is_file() else None
+    config_sha256 = None
+    if config_path is not None:
+        config_sha256 = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    stat = model.weights.stat()
+    return {
+        "label": model.label,
+        "backend": model.backend,
+        "variant": model.variant,
+        "weights": str(model.weights),
+        "weights_size_bytes": stat.st_size,
+        "weights_mtime_ns": stat.st_mtime_ns,
+        "config": str(config_path) if config_path else model.config,
+        "config_sha256": config_sha256,
+    }
+
+
+def _profile_config(
+    request: SweepRequest,
+    input_style: str = "batched",
+    engine: str = "pytorch",
+    power_mode: str | None = None,
+):
     from fabric_defect_hub.profiling.base import ProfileConfig
 
     return ProfileConfig(
         device=request.device, engine=engine,
         measured_runs=request.measured_runs, warmup_runs=request.warmup_runs,
-        input_style=input_style, power_mode="auto",
+        input_style=input_style, power_mode=power_mode or request.power_mode,
     )
 
 
@@ -512,29 +584,111 @@ def _profiler_for(artifact: Any):
 
 
 def _runtime(exported: Any, request: SweepRequest) -> dict[str, Any]:
-    artifact, input_style = exported
+    artifact, input_style, adapter = _export_parts(exported)
     profiler, engine = _profiler_for(artifact)
-    return profiler.profile(artifact, _profile_config(request, input_style, engine))
+    timing_config = _profile_config(request, input_style, engine, power_mode="disabled")
+    metrics = profiler.profile(artifact, timing_config)
+    instrumentation = dict(getattr(profiler, "last_instrumentation", {}))
+    instrumentation["performance_pass_instrumented_for_power"] = False
+    if request.power_mode == "required":
+        power_profiler, _ = _profiler_for(artifact)
+        power_config = _profile_config(request, input_style, engine, power_mode="required")
+        power_metrics = power_profiler.profile(artifact, power_config)
+        metrics.update({
+            key: value for key, value in power_metrics.items()
+            if key.startswith("power_") or key == "energy_j"
+        })
+        power_context = getattr(power_profiler, "last_instrumentation", {}).get("power", {})
+        instrumentation["power"] = {**power_context, "separate_measurement_pass": True}
+    metrics["model_size_mb"] = Path(artifact.path).stat().st_size / (1024 * 1024)
+    if adapter is not None:
+        metrics.update(_model_complexity(adapter, request))
+        memory_kind = instrumentation.get("memory", {}).get("kind")
+        if (
+            metrics.get("fps", 0) > 0
+            and metrics.get("peak_memory_mb", 0) > 0
+            and memory_kind == "device_allocator"
+        ):
+            try:
+                from fabric_defect_hub.evaluation.lmei_profiler import calculate_lmei
+
+                if "flops_g" in metrics and "params_m" in metrics:
+                    metrics["lmei"] = calculate_lmei(
+                        fps=metrics["fps"],
+                        vram_mb=metrics["peak_memory_mb"],
+                        flops_g=metrics["flops_g"],
+                        params_m=metrics["params_m"],
+                    )
+            except (ImportError, TypeError, ValueError):
+                pass
+    if "flops_g" in metrics:
+        instrumentation["flops"] = {
+            "kind": "static_hook_estimate",
+            "scope": "eager_model_forward_at_configured_input_size",
+            "convention": "two_flops_per_mac",
+            "cross_backend_comparable": False,
+        }
+    instrumentation["derived_metric_policy"] = {
+        "lmei_requires_memory_kind": "device_allocator",
+        "cross_scope_memory_ranking_allowed": False,
+    }
+    metrics["__instrumentation__"] = instrumentation
+    return metrics
 
 
 def _scaling(exported: Any, request: SweepRequest) -> dict[str, Any]:
     from fabric_defect_hub.profiling.sweeps import resolution_scaling
 
-    artifact, input_style = exported
+    artifact, input_style, _ = _export_parts(exported)
     profiler, engine = _profiler_for(artifact)
-    return resolution_scaling(profiler, artifact, _profile_config(request, input_style, engine))
+    config = _profile_config(request, input_style, engine, power_mode="disabled")
+    metrics = resolution_scaling(profiler, artifact, config)
+    metrics["__instrumentation__"] = {
+        **profiler.instrumentation_context(config),
+        "performance_pass_instrumented_for_power": False,
+    }
+    return metrics
 
 
 def _concurrency(exported: Any, request: SweepRequest) -> dict[str, Any]:
     from fabric_defect_hub.profiling.sweeps import concurrency_capacity
 
-    artifact, input_style = exported
+    artifact, input_style, _ = _export_parts(exported)
     profiler, engine = _profiler_for(artifact)
-    return concurrency_capacity(
-        profiler, artifact, _profile_config(request, input_style, engine),
+    config = _profile_config(request, input_style, engine, power_mode="disabled")
+    metrics = concurrency_capacity(
+        profiler, artifact, config,
         frame_budget_ms=request.frame_budget_ms,
         max_streams_to_try=request.max_streams_to_try,
     )
+    metrics["__instrumentation__"] = {
+        **profiler.instrumentation_context(config),
+        "performance_pass_instrumented_for_power": False,
+        "power": {"mode": "disabled", "status": "not_measured_for_concurrency"},
+    }
+    return metrics
+
+
+def _communication(model: TrainedModel, exported: Any | None) -> dict[str, float]:
+    """Measure transferable artifact sizes as a communication proxy.
+
+    This is deliberately not called network bandwidth: no network endpoint is
+    involved. It quantifies the bytes that must cross a deployment boundary
+    for model distribution, while real link throughput remains environment-
+    specific and must be measured separately at deployment time.
+    """
+
+    metrics = {
+        "model_transfer_mb": model.weights.stat().st_size / (1024 * 1024),
+        "model_transfer_bytes": float(model.weights.stat().st_size),
+    }
+    if exported is not None:
+        artifact, _, _ = _export_parts(exported)
+        path = Path(artifact.path)
+        if path.is_file():
+            metrics["export_transfer_mb"] = path.stat().st_size / (1024 * 1024)
+            metrics["export_transfer_bytes"] = float(path.stat().st_size)
+    return metrics
 
 
 def _try_export(model: TrainedModel, request: SweepRequest) -> tuple[Any, str | None]:
@@ -570,7 +724,7 @@ def _try_export(model: TrainedModel, request: SweepRequest) -> tuple[Any, str | 
         # define), so the sweep passes nothing and takes each backend's
         # default destination.
         exported = adapter.export(artifact, target)
-        return (exported, caps.export_input_style), None
+        return (exported, caps.export_input_style, adapter), None
     except Exception as exc:  # noqa: BLE001 -- export failure skips profiling, not the sweep
         return None, f"export failed ({type(exc).__name__}: {str(exc)[:200]})"
 
@@ -584,10 +738,41 @@ def _accepts_arg(func: Any, parameter: str) -> bool:
         return False
 
 
+def _export_parts(exported: Any) -> tuple[Any, str, Any | None]:
+    """Unpack current and legacy export tuples for compatibility."""
+
+    if len(exported) == 2:
+        return exported[0], exported[1], None
+    return exported[0], exported[1], exported[2]
+
+
+def _model_complexity(adapter: Any, request: SweepRequest) -> dict[str, float]:
+    """Measure optional FLOPs/parameters/LMEI from the live adapter module."""
+
+    raw_module = adapter.raw_module() if hasattr(adapter, "raw_module") else None
+    if raw_module is None:
+        return {}
+    try:
+        from fabric_defect_hub.model_statistics import parameter_counts
+        from fabric_defect_hub.profiling.flops import compute_model_flops
+
+        flops_g = compute_model_flops(
+            raw_module, input_size=(640, 640),
+            input_style=adapter.capabilities().export_input_style,
+            device=request.device,
+        )
+        params_m = parameter_counts(raw_module).get("parameter_count", 0) / 1e6
+        return {"flops_g": float(flops_g), "params_m": float(params_m)}
+    except (ImportError, NotImplementedError, RuntimeError, TypeError, ValueError):
+        # FLOPs is an optional dependency and some backends expose no
+        # instrumentable eager module. Runtime metrics remain valid.
+        return {}
+
+
 def _headline_metric(metrics: dict[str, Any]) -> str | None:
     """The metric a degradation is computed over, in task priority order."""
 
-    for key in ("map_50", "map", "image_auroc", "auroc", "f1", "iou"):
+    for key in ("map_50", "map", "image_auroc", "auroc", "miou", "dice", "f1", "iou"):
         value = metrics.get(key)
         if isinstance(value, (int, float)) and value > 0:
             return key

@@ -38,6 +38,7 @@ from fabric_defect_hub.metric_sweep import (  # noqa: E402
     run_sweep,
     summarize,
 )
+from fabric_defect_hub.runtime_device import resolve_torch_device  # noqa: E402
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,10 +77,16 @@ def main() -> int:
     parser.add_argument("--pattern", help="ZJU-Leaper source pattern filter, e.g. '1,2,3,4'")
     parser.add_argument("--category", help="MVTec-AD category filter")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--device", default="auto",
+        help="auto (CUDA > MPS > CPU), cpu, mps, cuda, or cuda:<index>",
+    )
     parser.add_argument(
         "--anomaly-map-dir",
-        help="persist anomaly maps here; required for pixel_auroc / pixel_aupro / iap",
+        help=(
+            "persist anomaly maps here (default: artifacts/runtime/anomaly_maps); "
+            "required for pixel_auroc / pixel_aupro / iap on anomaly models"
+        ),
     )
     parser.add_argument("--cross-domain-patterns", help="held-out patterns, e.g. '5,6,7,8'")
     parser.add_argument("--cross-domain-k", type=int, default=3)
@@ -88,8 +95,21 @@ def main() -> int:
     parser.add_argument("--max-streams", type=int, default=8)
     parser.add_argument("--measured-runs", type=int, default=50)
     parser.add_argument("--warmup-runs", type=int, default=5)
+    parser.add_argument(
+        "--power-mode", choices=("required", "disabled"),
+        help="required for profiling groups: fail without a valid sensor, or explicitly disable power",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="replace an existing JSONL file; by default an existing path is rejected",
+    )
     parser.add_argument("--list", action="store_true", help="show what would be swept and exit")
     args = parser.parse_args()
+
+    requested_groups = tuple(g.strip() for g in args.groups.split(",") if g.strip())
+    profiling_groups = {"runtime", "scaling", "concurrency"}
+    if not args.list and profiling_groups.intersection(requested_groups) and args.power_mode is None:
+        parser.error("profiling groups require explicit --power-mode required or --power-mode disabled")
 
     models = discover_trained_models(args.project_root)
     broken = broken_published_links(args.project_root)
@@ -107,20 +127,25 @@ def main() -> int:
         return 0
     _warn_broken(broken)
 
+    try:
+        device = resolve_torch_device(args.device)
+    except (RuntimeError, ValueError) as exc:
+        parser.error(str(exc))
+
     request = SweepRequest(
         project_root=Path(args.project_root),
         dataset=args.dataset,
         dataset_root=args.dataset_root,
         output_path=Path(args.output) if args.output
         else Path(args.project_root) / "artifacts" / "runtime" / "metric_sweep.jsonl",
-        groups=tuple(g.strip() for g in args.groups.split(",") if g.strip()),
+        groups=requested_groups,
         models=tuple(m.strip() for m in args.models.split(",")) if args.models else None,
         split=args.split,
         num_samples=args.num_samples,
         pattern=args.pattern,
         category=args.category,
         seed=args.seed,
-        device=args.device,
+        device=device,
         anomaly_map_dir=Path(args.anomaly_map_dir) if args.anomaly_map_dir else None,
         cross_domain_patterns=tuple(
             p.strip() for p in args.cross_domain_patterns.split(",")
@@ -131,6 +156,8 @@ def main() -> int:
         max_streams_to_try=args.max_streams,
         measured_runs=args.measured_runs,
         warmup_runs=args.warmup_runs,
+        power_mode=args.power_mode or "disabled",
+        overwrite=args.overwrite,
     )
 
     def report(row: SweepRow) -> None:
@@ -138,7 +165,10 @@ def main() -> int:
         detail = "" if row.status == "ok" else f"  ({row.reason})"
         print(f"  [{mark}] {row.model:26s} {row.group:12s} {row.duration_s:6.1f}s{detail}", flush=True)
 
-    print(f"Sweeping {len(models)} model(s) x {len(request.groups)} group(s) -> {request.output_path}\n")
+    print(
+        f"Sweeping {len(models)} model(s) x {len(request.groups)} group(s) "
+        f"on {device} -> {request.output_path}\n"
+    )
     rows = run_sweep(request, on_row=report)
     print("\n" + json.dumps(summarize(row.to_json() for row in rows), indent=2))
     print(f"\nJSONL: {request.output_path}")

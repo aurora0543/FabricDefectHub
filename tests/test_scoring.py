@@ -26,8 +26,8 @@ def test_metric_direction_classifies_known_metrics():
 
 
 def test_fps_jitter_metrics_take_precedence_over_generic_fps_rule():
-    assert metric_direction("fps_std") == "lower"
-    assert metric_direction("fps_cv") == "lower"
+    assert metric_direction("instantaneous_fps_std") == "lower"
+    assert metric_direction("instantaneous_fps_cv") == "lower"
 
 
 def test_unrecognized_metric_is_ignored_not_errored():
