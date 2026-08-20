@@ -1,5 +1,22 @@
 # FabricDefectHub Academic Benchmark Report: Multi-Dimensional & Cross-Domain Evaluation
 
+## Measurement contract
+
+- `fps` is aggregate throughput: total frames divided by total measured inference time.
+  `instantaneous_fps_*` describes the distribution of reciprocal per-iteration latency;
+  it is deliberately reported separately because its arithmetic mean is not aggregate FPS.
+- Formal profiling requires an explicit power policy. Set `FDH_POWER_MODE=required` to
+  fail when a valid sensor is unavailable, or `FDH_POWER_MODE=disabled` to record that
+  power was intentionally not measured. Performance and power use separate passes, so
+  sensor sampling does not contaminate latency/FPS measurements.
+- Every runtime sweep row contains an `instrumentation` object describing timing,
+  memory, power, and FLOPs scope. PyTorch allocator memory, process RSS, and TensorRT
+  I/O-buffer lower bounds are not cross-engine comparable. Raw memory is excluded from
+  composite rankings, and LMEI is only produced for device-allocator memory.
+- FLOPs are a THOP hook-based static estimate using two FLOPs per MAC. They are retained
+  for inspection but are not treated as directly comparable across unsupported/custom
+  operators or different eager backend implementations.
+
 This report presents a comprehensive academic benchmark evaluation of anomaly detection, object detection, and semantic segmentation models on the **ZJU-Leaper** industrial fabric defect dataset. All experiments were conducted under identical protocol configurations across two primary domain settings:
 
 1. **In-Domain Evaluation (域内测试 - Pattern 1~4)**: Models were trained on 4 specific fabric background patterns (`pattern1`–`pattern4`) and evaluated on test samples featuring the same 4 background textures.

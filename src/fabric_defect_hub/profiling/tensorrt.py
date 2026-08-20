@@ -61,6 +61,12 @@ class TensorRTProfiler(BackendProfiler):
 
     engine = "tensorrt"
 
+    def memory_context(self, config: ProfileConfig) -> dict[str, object]:
+        return {
+            "kind": "io_buffer_lower_bound", "scope": "allocated_input_output_device_buffers_only",
+            "cross_engine_comparable": False,
+        }
+
     def profile(self, artifact: ExportedArtifact, config: ProfileConfig) -> dict[str, float]:
         # Validate before importing tensorrt/pycuda: this branch stays
         # testable (and correctly ordered — see the module docstring) even
@@ -103,6 +109,7 @@ class TensorRTProfiler(BackendProfiler):
             metrics = summarize_latencies(latencies_ms, config.batch_size, peak_memory_bytes)
             self.finish_power_monitor(monitor, metrics)
 
+        self.last_instrumentation = self.instrumentation_context(config)
         return metrics
 
 

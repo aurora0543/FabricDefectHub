@@ -194,13 +194,27 @@ def metadata_for(model: CanonicalModel) -> dict:
     """Return runtime metadata dictionary for a published model."""
 
     if model.backend == "anomalib":
-        from fabric_defect_hub.models.anomalib.presets import resolve_model_class_name
+        from fabric_defect_hub.models.anomalib.presets import (
+            default_model_kwargs,
+            resolve_model_class_name,
+        )
 
-        return {
+        model_class = resolve_model_class_name(model.variant)
+        metadata = {
             "trusted": True,
             "source": model.source,
-            "model_class": resolve_model_class_name(model.variant),
+            "model_class": model_class,
         }
+        # WinCLIP's canonical artifact is a metadata handle, not a serialized
+        # Lightning checkpoint: k_shot=0 has no learned state to restore.
+        # Carry the reconstruction metadata into the UI session so the
+        # adapter can instantiate WinClip instead of calling torch.load().
+        if model_class == "WinClip":
+            metadata.update({
+                "zero_shot": True,
+                "model_kwargs": default_model_kwargs(model.variant),
+            })
+        return metadata
     if model.backend == "dinomaly":
         from fabric_defect_hub.models.dinomaly.presets import DEFAULT_TRAIN_KWARGS, encoder_preset
 

@@ -398,6 +398,7 @@ class AnomalibAdapter(ModelAdapter):
         if isinstance(artifact_or_path, Artifact):
             if not artifact_or_path.metadata.get("trusted", False):
                 raise ValueError("Anomalib artifact is not marked as trusted.")
+            _restore_zero_shot_metadata(artifact_or_path, self.resolved_class_name, path)
             self._load_artifact(artifact_or_path)
             return artifact_or_path
         if not allow_unsafe_checkpoint:
@@ -409,6 +410,7 @@ class AnomalibAdapter(ModelAdapter):
             path=str(path), backend=self.backend,
             metadata={"model_class": self.resolved_class_name, "trusted": True},
         )
+        _restore_zero_shot_metadata(artifact, self.resolved_class_name, path)
         self._load_artifact(artifact)
         return artifact
 
@@ -441,3 +443,27 @@ def _load_checkpoint(model_cls, path: str):
     """
 
     return model_cls.load_from_checkpoint(path, weights_only=False)
+
+
+def _restore_zero_shot_metadata(artifact: Artifact, model_class: str, path: str) -> None:
+    """Rebuild metadata-only WinCLIP artifacts created by zero-shot training.
+
+    Zero-shot WinCLIP has no learned checkpoint. The published slot contains
+    a small text marker so the registry can still hold a stable artifact path;
+    loading that marker as a Lightning checkpoint would produce an opaque
+    ``UnpicklingError`` beginning with the letter ``W``.
+    """
+
+    if model_class != "WinClip" or artifact.metadata.get("zero_shot"):
+        return
+    try:
+        marker = Path(path).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return
+    if not marker.startswith("WinCLIP zero-shot artifact;"):
+        return
+    artifact.metadata.update({
+        "model_class": "WinClip",
+        "model_kwargs": default_model_kwargs("WinClip"),
+        "zero_shot": True,
+    })

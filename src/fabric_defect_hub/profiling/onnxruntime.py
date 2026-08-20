@@ -27,6 +27,12 @@ class ONNXRuntimeProfiler(BackendProfiler):
 
     engine = "onnxruntime"
 
+    def memory_context(self, config: ProfileConfig) -> dict[str, object]:
+        return {
+            "kind": "process_rss", "scope": "whole_process_resident_set",
+            "cross_engine_comparable": False,
+        }
+
     def profile(self, artifact: ExportedArtifact, config: ProfileConfig) -> dict[str, float]:
         if artifact.target != "onnx":
             raise ValueError(
@@ -69,6 +75,7 @@ class ONNXRuntimeProfiler(BackendProfiler):
             )
             self.finish_power_monitor(monitor, metrics)
 
+        self.last_instrumentation = self.instrumentation_context(config)
         return metrics
 
 

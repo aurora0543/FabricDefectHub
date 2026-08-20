@@ -75,7 +75,7 @@ def test_communication_is_declared_unimplemented_rather_than_omitted():
     ("map_50", "instance_level"),
     ("recall_small", "instance_level"),
     ("top_k_mean_degradation_pct", "cross_domain"),
-    ("fps_cv", "compute"),
+    ("instantaneous_fps_cv", "compute"),
     ("max_concurrent_streams", "compute"),
     ("peak_memory_mb", "memory"),
     ("avg_memory_mb", "memory"),
@@ -110,7 +110,8 @@ def test_every_metric_this_project_measures_has_a_home():
         "precision_at_threshold", "recall_at_threshold", "f1_at_threshold",
         "true_positives", "false_positives", "false_negatives",
         # runtime / scaling / concurrency
-        "fps", "fps_std", "fps_cv", "latency_ms_mean", "latency_ms_p50",
+        "fps", "instantaneous_fps_mean", "instantaneous_fps_std", "instantaneous_fps_cv",
+        "latency_ms_mean", "latency_ms_std", "latency_ms_cv", "latency_ms_p50",
         "latency_ms_p95", "latency_ms_p99", "peak_memory_mb", "avg_memory_mb",
         "resolution_slope_beta", "max_concurrent_streams", "single_stream_latency_ms",
         # cross domain

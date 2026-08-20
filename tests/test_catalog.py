@@ -155,6 +155,9 @@ def test_metadata_for_winclip_resolves_model_class():
     metadata = metadata_for(model)
     assert metadata["trusted"] is True
     assert metadata["model_class"] == "WinClip"
+    assert metadata["zero_shot"] is True
+    assert metadata["model_kwargs"]["k_shot"] == 0
+    assert metadata["model_kwargs"]["class_name"] == "fabric"
 
 
 def test_metadata_for_dinomaly_resolves_architecture_fields():

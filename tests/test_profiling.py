@@ -50,8 +50,9 @@ def test_summarize_latencies_exact_values():
     # instantaneous fps = 2000/latency for each of the 10 latencies above;
     # hand-computed population stddev/mean of that series.
     instantaneous_fps = [2000.0 / latency for latency in latencies]
-    assert result["fps_std"] == pytest.approx(statistics.pstdev(instantaneous_fps))
-    assert result["fps_cv"] == pytest.approx(statistics.pstdev(instantaneous_fps) / statistics.fmean(instantaneous_fps))
+    assert result["instantaneous_fps_mean"] == pytest.approx(statistics.fmean(instantaneous_fps))
+    assert result["instantaneous_fps_std"] == pytest.approx(statistics.pstdev(instantaneous_fps))
+    assert result["instantaneous_fps_cv"] == pytest.approx(statistics.pstdev(instantaneous_fps) / statistics.fmean(instantaneous_fps))
 
 
 def test_summarize_latencies_averages_memory_samples():
@@ -67,8 +68,8 @@ def test_summarize_latencies_empty_zero_fps():
     result = summarize_latencies([], batch_size=1, peak_memory_bytes=0)
     assert result["fps"] == 0.0
     assert result["latency_ms_p50"] == 0.0
-    assert result["fps_std"] == 0.0
-    assert result["fps_cv"] == 0.0
+    assert result["instantaneous_fps_std"] == 0.0
+    assert result["instantaneous_fps_cv"] == 0.0
 
 
 class _StubProfiler(BackendProfiler):
@@ -103,14 +104,15 @@ def test_pytorch_profiler_batched_input(tmp_path):
 
     assert set(metrics) == {
         "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps",
-        "fps_std", "fps_cv", "peak_memory_mb", "avg_memory_mb",
+        "latency_ms_std", "latency_ms_cv", "instantaneous_fps_mean",
+        "instantaneous_fps_std", "instantaneous_fps_cv", "peak_memory_mb", "avg_memory_mb",
     }
     assert metrics["latency_ms_p50"] <= metrics["latency_ms_p95"] <= metrics["latency_ms_p99"]
     assert metrics["fps"] == pytest.approx((1000.0 / metrics["latency_ms_mean"]) * config.batch_size)
     assert metrics["peak_memory_mb"] >= 0
     assert metrics["avg_memory_mb"] >= 0
-    assert metrics["fps_std"] >= 0
-    assert metrics["fps_cv"] >= 0
+    assert metrics["instantaneous_fps_std"] >= 0
+    assert metrics["instantaneous_fps_cv"] >= 0
 
 
 def test_pytorch_profiler_list_style_input(tmp_path):
@@ -182,7 +184,8 @@ def test_onnxruntime_profiler_dynamic_batch(tmp_path):
 
     assert set(metrics) == {
         "latency_ms_mean", "latency_ms_p50", "latency_ms_p95", "latency_ms_p99", "fps",
-        "fps_std", "fps_cv", "peak_memory_mb", "avg_memory_mb",
+        "latency_ms_std", "latency_ms_cv", "instantaneous_fps_mean",
+        "instantaneous_fps_std", "instantaneous_fps_cv", "peak_memory_mb", "avg_memory_mb",
     }
     assert metrics["latency_ms_p50"] <= metrics["latency_ms_p95"] <= metrics["latency_ms_p99"]
     assert metrics["peak_memory_mb"] > 0

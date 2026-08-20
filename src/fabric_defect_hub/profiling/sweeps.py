@@ -17,6 +17,8 @@ into what should be a pure runtime measurement.
 from __future__ import annotations
 
 import statistics
+import threading
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any, Sequence
@@ -137,10 +139,21 @@ def concurrency_capacity(
         if streams in measured:
             return measured[streams]
         per_stream = replace(config, measured_runs=max(5, config.measured_runs // 10))
+        start_barrier = threading.Barrier(streams)
+
+        def profile_one(_index: int) -> dict[str, float]:
+            # BackendProfiler stores its last power report, and concrete
+            # runtimes own sessions/models. Each stream therefore gets an
+            # independent profiler instance rather than racing on one object.
+            try:
+                stream_profiler = copy.deepcopy(profiler)
+            except Exception:  # noqa: BLE001 -- fallback for non-copyable runtimes
+                stream_profiler = type(profiler)()
+            start_barrier.wait()
+            return stream_profiler.profile(artifact, per_stream)
+
         with ThreadPoolExecutor(max_workers=streams) as pool:
-            results = list(pool.map(
-                lambda _: profiler.profile(artifact, per_stream), range(streams)
-            ))
+            results = list(pool.map(profile_one, range(streams)))
         # The budget applies to every stream, so the worst stream is what
         # decides whether N fits -- an average would let one starved stream
         # hide behind the others.

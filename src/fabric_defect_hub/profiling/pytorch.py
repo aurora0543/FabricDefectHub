@@ -25,6 +25,23 @@ class PyTorchProfiler(BackendProfiler):
 
     engine = "pytorch"
 
+    def memory_context(self, config: ProfileConfig) -> dict[str, object]:
+        device_type = config.device.split(":", 1)[0]
+        if device_type == "cuda":
+            return {
+                "kind": "device_allocator", "scope": "torch_cuda_allocated_tensors",
+                "cross_engine_comparable": False,
+            }
+        if device_type == "mps":
+            return {
+                "kind": "device_allocator", "scope": "torch_mps_current_allocated_memory",
+                "cross_engine_comparable": False,
+            }
+        return {
+            "kind": "process_rss", "scope": "whole_process_resident_set",
+            "cross_engine_comparable": False,
+        }
+
     def profile(self, artifact: ExportedArtifact, config: ProfileConfig) -> dict[str, float]:
         if artifact.target not in {"torchscript", "exported_program"}:
             raise ValueError(
@@ -72,6 +89,7 @@ class PyTorchProfiler(BackendProfiler):
                 )
                 self.finish_power_monitor(monitor, metrics)
 
+        self.last_instrumentation = self.instrumentation_context(config)
         return metrics
 
 

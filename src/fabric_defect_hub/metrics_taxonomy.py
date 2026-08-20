@@ -81,9 +81,9 @@ EMPTY_HINTS: dict[str, str] = {
 
 UNIMPLEMENTED: dict[str, str] = {
     "communication": (
-        "Not implemented. Bandwidth saving (S_bw = 1 - D_event/D_cont) needs an "
-        "event-triggered transport to compare against a continuous one, which only "
-        "exists once the pipeline is deployed across machines."
+        "Bandwidth saving is not measured without a deployed transport. "
+        "The sweep records model/export transfer size as a communication proxy; "
+        "actual link throughput requires a configured network endpoint."
     ),
 }
 
@@ -169,26 +169,37 @@ METRIC_SPECS: tuple[MetricSpec, ...] = (
     _spec("k_effective", "k used", "technical", "cross_domain", precision=0),
     _spec("scored_pattern_count", "Patterns scored", "technical", "cross_domain", precision=0),
     # -- overhead / compute ------------------------------------------------
-    _spec("fps", "FPS", "overhead", "compute", "higher", precision=2),
-    _spec("fps_std", "FPS stdev", "overhead", "compute", "lower", precision=3),
-    _spec("fps_cv", "FPS CV", "overhead", "compute", "lower", precision=4),
+    _spec("fps", "FPS (aggregate)", "overhead", "compute", "higher", precision=2),
+    _spec("instantaneous_fps_mean", "Instantaneous FPS mean", "overhead", "compute", "higher", precision=2),
+    _spec("instantaneous_fps_std", "Instantaneous FPS stdev", "overhead", "compute", "lower", precision=3),
+    _spec("instantaneous_fps_cv", "Instantaneous FPS CV", "overhead", "compute", "lower", precision=4),
     _spec("latency_ms_mean", "Latency mean", "overhead", "compute", "lower", "ms", 2),
+    _spec("latency_ms_std", "Latency stdev", "overhead", "compute", "lower", "ms", 2),
+    _spec("latency_ms_cv", "Latency CV", "overhead", "compute", "lower", precision=4),
     _spec("latency_ms_p50", "Latency p50", "overhead", "compute", "lower", "ms", 2),
     _spec("latency_ms_p95", "Latency p95", "overhead", "compute", "lower", "ms", 2),
     _spec("latency_ms_p99", "Latency p99", "overhead", "compute", "lower", "ms", 2),
     _spec("flops", "FLOPs", "overhead", "compute", "lower", precision=0),
+    _spec("flops_g", "FLOPs (G)", "overhead", "compute", "lower", precision=4),
+    _spec("params_m", "Parameters (M)", "overhead", "memory", "lower", precision=4),
+    _spec("lmei", "LMEI", "overhead", "compute", "higher", precision=4),
     _spec("max_concurrent_streams", "Max streams @budget", "overhead", "compute", "higher", precision=0),
     _spec("single_stream_latency_ms", "1-stream latency", "overhead", "compute", "lower", "ms", 2),
     _spec("resolution_slope_beta", "Throughput-resolution slope", "overhead", "compute", "higher", precision=8),
     _spec("delta_beta", "Slope difference", "overhead", "compute", precision=8),
-    _spec("power_mean_w", "Power mean", "overhead", "compute", "lower", "W", 2),
-    _spec("power_peak_w", "Power peak", "overhead", "compute", "lower", "W", 2),
+    _spec("power_w_mean", "Power mean", "overhead", "compute", "lower", "W", 2),
+    _spec("power_w_peak", "Power peak", "overhead", "compute", "lower", "W", 2),
     _spec("energy_j", "Energy", "overhead", "compute", "lower", "J", 2),
     _spec("runtime_s", "Wall time", "overhead", "compute", "lower", "s", 2),
     # -- overhead / memory -------------------------------------------------
     _spec("peak_memory_mb", "Memory peak", "overhead", "memory", "lower", "MB", 1),
     _spec("avg_memory_mb", "Memory average", "overhead", "memory", "lower", "MB", 1),
     _spec("model_size_mb", "Model size", "overhead", "memory", "lower", "MB", 2),
+    _spec("power_sample_count", "Power samples", "overhead", "compute", precision=0),
+    _spec("model_transfer_mb", "Model transfer", "overhead", "compute", "lower", "MB", 2),
+    _spec("model_transfer_bytes", "Model transfer bytes", "overhead", "compute", "lower", "B", 0),
+    _spec("export_transfer_mb", "Export transfer", "overhead", "compute", "lower", "MB", 2),
+    _spec("export_transfer_bytes", "Export transfer bytes", "overhead", "compute", "lower", "B", 0),
 )
 
 _BY_KEY: dict[str, MetricSpec] = {spec.key: spec for spec in METRIC_SPECS}
@@ -202,6 +213,7 @@ BOOKKEEPING_KEYS: frozenset[str] = frozenset({
     "resolution_sweep_points", "resolution_slope_alpha", "concurrency_probe_points",
     "metric", "mode", "source_value", "k", "selected_patterns", "skipped_patterns",
     "per_pattern_degradation_pct", "traceback_tail",
+    "memory_measurement_kind", "memory_measurement_scope", "memory_cross_engine_comparable",
     # `scoring.py`'s blended rankings. Derived *from* the metrics below
     # rather than measured, so they belong to a summary rather than to any
     # one table — listing them here keeps them out of the tables without
